@@ -1,0 +1,21 @@
+# Secrets
+auth.json
+.env
+.env.*
+
+# Local runtime
+sessions/
+logs/
+tmp/
+.cache/
+
+# Local settings
+settings.json
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+
+# macOS
+.DS_Store

@@ -1,0 +1,6 @@
+{
+  "name": "bash-guard",
+  "version": "1.0.0",
+  "description": "Confirmation layer for dangerous bash commands in pi",
+  "private": true
+}

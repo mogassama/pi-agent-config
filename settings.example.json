@@ -1,0 +1,6 @@
+{
+  "default_model": "model-name",
+  "workspace_path": "/path/to/workspace",
+  "auth_file": "./auth.json"
+}
+
