@@ -4,7 +4,7 @@ Use this exact pattern (adjust `--model` if Mo specified one):
 
 ```bash
 pi -p \
-  --model haiku \
+  --model google/gemini-3-flash \
   --tools read,grep,find,ls \
   --no-extensions \
   "Review @{{file}} for {{focus|bugs, style violations, and obvious performance issues}}. Output a numbered list, max 10 items, one line each. No preamble."

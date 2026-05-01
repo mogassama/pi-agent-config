@@ -1,0 +1,8 @@
+{
+  "lastChangelogVersion": "0.71.0",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-haiku-4-5",
+  "packages": [
+    "npm:pi-subagents"
+  ]
+}

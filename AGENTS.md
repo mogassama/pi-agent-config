@@ -64,7 +64,7 @@ Pi has no native sub-agents. When you (the agent) think a task genuinely needs a
 1. **In-process delegation via skill** — load the relevant skill and continue. Default choice. Same model, same context, additive instructions.
 2. **`pi -p` print mode subprocess** — spawn an isolated pi run from `bash`:
    ```bash
-   pi -p --model haiku --tools read,grep,find,ls "Review @path/to/file.sql for unused CTEs only. One-line answer."
+   pi -p --model google/gemini-3-flash --tools read,grep,find,ls "Review @path/to/file.sql for unused CTEs only. One-line answer."
    ```
    Use when: the subtask is well-scoped, read-only or producing pure text, and you want to keep the main context lean (e.g. reviewing a 2k-line file). Always pass explicit `--tools` to keep it bounded.
 3. **Tell Mo to open another tmux pane with `pi`** — when the task is open-ended exploration that would derail the main session.
@@ -76,3 +76,123 @@ Never invent a "Task" or "Agent" tool — pi doesn't have one.
 - After a change, output: (a) what changed, (b) what was run to verify (or "not verified, here's why"), (c) what's still open. Bullets, no prose padding.
 - Never paste back the full file Mo just gave you. Diffs or surgical excerpts only.
 - Don't apologize. State the situation and the next action.
+
+## Delegation with pi-subagents
+
+This section governs delegation to subagents (extension `pi-subagents`). It supersedes the older "Working with multiple 'agents' in pi" section above when the extension is installed and configured.
+
+### Available subagents (builtin)
+
+These are loaded automatically by the extension. Their model and skills are pinned via `~/.pi/agent/settings.json` under `subagents.agentOverrides`. To inspect or change: `/agents` in pi.
+
+- **`scout`** — codebase recon, file discovery, data flow tracing. Cheap (Haiku), read-only.
+- **`planner`** — produces implementation plans from existing context. Reads and plans, never edits.
+- **`worker`** — implements approved plans. Edits files, runs validation, escalates ambiguity.
+- **`reviewer`** — code review against task/plan/tests/edge cases/simplicity.
+- **`oracle`** — second opinion before risky decisions. Challenges assumptions, never edits.
+- **`scout`/`researcher`/`context-builder`/`delegate`** — also available, less common in data eng workflows.
+
+### When to delegate
+
+Use this decision tree before responding to any non-trivial request:
+
+**Delegate to `reviewer` when:**
+- Reviewing code over 50 lines
+- The file to review is currently in the orchestrator context (delegation preserves it)
+- Reviewing pull requests or diffs
+- Multi-angle review needed (run in parallel with different focus areas)
+
+**Delegate to `scout` when:**
+- "How does X work in this codebase?" before any code change
+- Finding all usages of a function/class/pattern
+- Understanding cross-file data flow
+- Cheap discovery work that would otherwise pollute the orchestrator context
+
+**Delegate to `planner` when:**
+- Multi-file implementation
+- Changes touching 3+ services (e.g. DAG + transform + table schema)
+- Refactors with non-trivial impact
+- Always followed by orchestrator review of the plan, then `worker` for execution
+
+**Delegate to `worker` when:**
+- After `planner` produced a plan the orchestrator approved
+- Mechanical implementation of a clear spec
+- Bulk operations (rename across files, apply same change to N files)
+
+**Delegate to `oracle` when:**
+- Architectural fork in the road ("Dataflow vs BigQuery for this?")
+- Before destructive operations (schema migrations, data deletions, IAM changes)
+- When the cost of being wrong is high
+- Oracle never edits — it analyzes and recommends
+
+**Delegate to `researcher` when:**
+- Need current best practice with web sources
+- Comparing libraries / tools / GCP services with up-to-date data
+- Requires `pi-web-access` extension (install separately if needed)
+
+### Handle inline (do NOT delegate)
+
+- Conversational answers, explanations, decisions
+- Single-line edits, typos, format fixes
+- Reading a file to answer a quick question
+- Switching modes (`/model`, `/skill:`, etc.)
+- Coordinating between subagent results — the orchestrator's job
+- The decision to delegate itself
+
+### Never delegate
+
+- Sensitive operations: secret rotation, prod credentials, IAM grants on production projects, `terraform apply` on prod
+- Anything touching production data without explicit operator confirmation
+- Decisions where the user has not yet been consulted on a fork in the road
+
+### Parallel delegation
+
+Use `/parallel` for:
+- Reviewing one diff from multiple angles (correctness + tests + perf + cost)
+- Auditing multiple unrelated parts of a codebase
+- Exploring alternative implementations in worktrees (`worktree: true`)
+
+Hard limit: never run more than 4 parallel subagents at once. Cost and cognitive load explode beyond that.
+
+### Decision rule of thumb
+
+Delegate if the task requires:
+- More than 20% of remaining context window, OR
+- More than 10 minutes of focused agent work, OR
+- A model/skill combination different from the orchestrator's current one
+
+Otherwise handle inline.
+
+### Default invocation patterns
+
+For a new feature implementation:
+```
+1. scout → understand existing structure
+2. planner → produce plan
+3. (operator validates plan)
+4. worker → implement
+5. reviewer → verify
+```
+
+For a risky decision:
+```
+1. oracle → analyze and recommend
+2. (operator validates direction)
+3. worker → execute
+```
+
+For a bug investigation:
+```
+1. scout → find the relevant code
+2. oracle → propose ranked hypotheses
+3. (operator picks one)
+4. worker → investigate and fix
+```
+
+### What stays in the orchestrator
+
+- All operator-facing communication
+- All decision points
+- Final synthesis of subagent outputs
+- Skill loading for inline work that doesn't warrant delegation
+- The conversation history and journal

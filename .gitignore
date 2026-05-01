@@ -8,6 +8,7 @@ sessions/
 logs/
 tmp/
 .cache/
+run-history.jsonl
 
 # Local settings
 settings.json
