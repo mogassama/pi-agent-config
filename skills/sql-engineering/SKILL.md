@@ -1,62 +1,45 @@
 ---
 name: sql-engineering
-description: Use when authoring, reviewing, or optimizing SQL — especially BigQuery and PostgreSQL. Covers query writing style, performance tuning (partitioning, clustering, join order, predicate pushdown), schema design, dry-run cost estimation, EXPLAIN plan reading, and sqlfluff linting. Trigger on any task involving .sql files, BigQuery queries, schema migrations, or SQL performance investigation.
+description: Expert SQL authoring & optimization (BigQuery & Postgres). Focus on cost-efficiency, performance (partitioning/clustering), and modern syntax. Trigger on .sql files, schema design, or BQ performance tasks.
 ---
 
-# SQL Engineering
+# SQL Engineering (2026 Edition)
 
-## When this skill is active
+## Execution Rules
+- **Language:** Column names and SQL comments must be in **English**.
+- **Dialect:** Default to BigQuery Standard SQL.
+- **Formatting:** Lowercase keywords, trailing commas, CTEs for readability.
 
-You are reviewing, writing, or optimizing SQL. Default dialect: BigQuery Standard SQL. Secondary: PostgreSQL 14+.
+## BigQuery: The "Cost-First" Approach
+Before executing any query, provide:
+1. **Dry-Run Estimate:** "Estimated cost: X MB/GB".
+2. **Partition Check:** Ensure `WHERE` clauses target partitioning columns (e.g., `_PARTITIONDATE`).
+3. **Clustering Check:** Ensure `WHERE` filters follow the order of clustered columns.
 
-## Style (defaults — match the project if it differs)
+### High-Performance Patterns
+- **Deduplication:** Always use `QUALIFY ROW_NUMBER() OVER(PARTITION BY id ORDER BY ts DESC) = 1`. Avoid subqueries for this.
+- **JSON Handling:** Use the native `JSON` type for semi-structured data. Use `JSON_VALUE` or `JSON_QUERY` with `lax` keyword for robustness.
+- **Search Optimization:** Suggest `SEARCH INDEX` on large text columns for needle-in-haystack queries.
+- **Materialized Views:** Propose a Materialized View if the same aggregation is run frequently on a large table.
 
-- Lowercase keywords. Trailing commas. One column per line in `select` lists with 3+ columns.
-- Always alias tables in joins (`t1`, `t2` are fine for short queries; meaningful aliases for long ones).
-- CTEs over nested subqueries. Name them after what they contain (`active_users`, not `cte1`).
-- Never `select *` in code that ships. Enumerate columns.
-- Project-qualify on cross-project BigQuery (`` `proj.dataset.table` ``).
+## Schema Design (BigQuery 2026)
+- **Partitioning:** Mandatory for tables > 1GB. Prefer `DATE` or `TIMESTAMP` columns.
+- **Clustering:** Add up to 4 columns (ordered by selectivity). Essential for cost reduction.
+- **BigLake:** Use for data sitting in GCS (Parquet/Avro) to query without ingestion.
+- **Policy Tags:** Suggest for PII data (column-level security).
 
-## BigQuery — performance & cost
+## Postgres Specifics
+- **Index:** Check for GIST/GIN indexes on JSONB/Geo columns.
+- **Upsert:** Use `INSERT ... ON CONFLICT (...) DO UPDATE`.
+- **Explain:** Always analyze with `EXPLAIN (ANALYZE, BUFFERS)`.
 
-Before writing or accepting a non-trivial BigQuery query:
+## Review Checklist (The "Veto")
+- [ ] **No `SELECT *`:** Only explicit columns.
+- [ ] **Full Scan Alert:** Flag any query on a partitioned table missing a filter on the partition key.
+- [ ] **Cross-Join Alert:** Flag joins without an `ON` clause or with non-selective predicates.
+- [ ] **Legacy Alert:** Flag old-school `EXTRACT(DAY FROM ...)`; suggest `DATE_TRUNC`.
+- [ ] **Loguru/English:** Ensure SQL logic aligns with English-only naming from `python-engineering`.
 
-1. **Dry-run it.** `bq query --use_legacy_sql=false --dry_run "SELECT ..."` returns bytes processed without running. Report the estimate.
-2. **Check partitioning.** If the source table is partitioned (usually on a `_PARTITIONTIME` or date column), the `WHERE` clause must filter on it, otherwise full scan. Confirm with `bq show --format=prettyjson <table> | grep -A2 partitioning`.
-3. **Clustering.** Filtering or aggregating on cluster keys is much cheaper. Order of cluster keys matters (left-to-right prefix).
-4. **Avoid:** `SELECT *`, untyped `STRUCT`/`ARRAY` flattening on huge tables, cross-joins without filters, `ORDER BY` in subqueries (BQ optimizer handles it).
-5. **Prefer:** approximate aggregations (`APPROX_COUNT_DISTINCT`, `APPROX_QUANTILES`) when exactness isn't required, `QUALIFY` over self-joins for window-filter patterns.
-
-## Schema design (BigQuery)
-
-- Partition by ingestion date (`_PARTITIONDATE`) or a business date column. Pick one and document it.
-- Cluster on the columns most often used in `WHERE`/`GROUP BY` (max 4, ordered by selectivity).
-- Use `STRUCT` for tightly-coupled fields (address, geo). Use `ARRAY<STRUCT>` for one-to-many you query together.
-- Avoid premature denormalization on raw layer; do it in mart layer.
-
-## Postgres specifics
-
-- `EXPLAIN (ANALYZE, BUFFERS)` for real plans. Just `EXPLAIN` for guessed plans.
-- Index hygiene: `pg_stat_user_indexes` to find unused indexes; `pg_stat_statements` for slow queries.
-- `ON CONFLICT DO UPDATE` for upserts. Avoid SELECT-then-INSERT race conditions.
-
-## Tooling
-
-- `sqlfluff lint --dialect bigquery file.sql` (or `postgres`). Use the project's `.sqlfluff` if present.
-- For ad-hoc query work, Mo uses DataGrip — formatting suggestions should match DataGrip defaults.
-
-## Review checklist
-
-When asked to review SQL:
-- [ ] No `SELECT *` in non-exploratory code
-- [ ] Partition/cluster keys used in `WHERE` (BigQuery)
-- [ ] Joins have explicit `ON`, not implicit cross-join
-- [ ] Window functions don't shadow table columns
-- [ ] Date/timezone handling explicit (`TIMESTAMP` vs `DATETIME` in BQ — they differ)
-- [ ] No string-concat into `WHERE` (injection risk in app code)
-
-## TODO (flesh out as patterns emerge)
-
-- Project-specific naming conventions for staging/mart layers
-- dbt-specific patterns if Mo adopts dbt
-- Common BQ → Postgres translation gotchas Mo hits
+## Tooling Integration
+- **Linting:** Use `sqlfluff lint --dialect bigquery`.
+- **Pre-commit:** SQL files must pass `sqlfluff fix` before being considered for review.

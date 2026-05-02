@@ -11,7 +11,6 @@ tmp/
 run-history.jsonl
 
 # Local settings
-settings.json
 
 # Node / TypeScript
 node_modules/

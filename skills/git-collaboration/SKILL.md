@@ -1,45 +1,42 @@
 ---
 name: git-collaboration
-description: Use for Git repository version control management — safe staging, automated secret protection (.env, keys), diff analysis, Conventional Commits generation, and remote pushing. Trigger on the /git-collaboration command or any task requesting a repository commit, push, or git review.
+description: Complete Git management with built-in security auditing. Use /audit for a deep repo scan, or /git-collaboration for safe staging and committing.
 ---
 
-# Skill: Git Collaboration Protocol
+# Skill: Git Collaboration & Audit Protocol
 
-## Trigger: /git-collaboration
-Invoke this protocol using **Gemini 3.1 Pro**. 
-**NOTE:** ALL commit messages MUST be written exclusively in **ENGLISH**.
+## Trigger 1: /audit (Deep Security Scan)
+Invoke this to scan the entire repository for "forgotten" secrets before starting work.
+1. **Scout Recon:** Execute a broad search for sensitive patterns:
+   - `find . -maxdepth 4 -not -path '*/.*' -not -path '*node_modules*'` (Structure mapping).
+   - `grep -rE "AIza|key|secret|password|token|SESSION|SECRET_KEY|PRIVATE KEY" . --exclude-dir={.git,node_modules,venv,__pycache__}`.
+2. **Analysis:** Gemini 3.1 Pro evaluates findings. 
+3. **Report:** Display a table of "Risk Level | File | Reason".
+4. **Fix:** Ask: *"Should I add these to .gitignore and wipe them from the current staging? (y/n)"*
 
-## Phase 1: Pre-flight & Staging (Interactive)
-1. **Status Check:** Execute `git status -s`. If there are no changes, abort the protocol.
-2. **Initial Add:** Execute `git add .` to stage all current changes.
-3. **Automated Secret Protection (CRITICAL):** Scan the staged files. If any potentially sensitive files are detected (e.g., `.env`, `*.key`, `.pem`, `secrets.json`, or files containing API keys/passwords), AUTOMATICALLY:
-   - Append them to `.gitignore`.
-   - Execute `git rm -r --cached <sensitive_files>` to unstage them.
-   - Execute `git add .gitignore`.
-   - Notify the user with: *"🛡️ Security Shield: Auto-excluded [list of files] to prevent leaking secrets."*
-4. **Review Stage:** Concisely list the files currently remaining in the Staging Area.
-5. **User Feedback:** Explicitly ask the user: 
-   *"Are there any OTHER files or folders you want to EXCLUDE and add to .gitignore? (List them, or type 'y' / 'none' to proceed)."*
-6. **Exclusion Logic (If requested):**
-   - Append the requested exclusions to the `.gitignore` file.
-   - Execute `git rm -r --cached <files>` to unstage them.
-   - Execute `git add .gitignore` to ensure the new exclusion rules are tracked.
-   - Display the updated staged files list.
+## Trigger 2: /git-collaboration (Standard Workflow)
+**NOTE:** ALL commit messages MUST be written in **ENGLISH**.
 
-## Phase 2: Smart Context & Generation
-1. **Diff Analysis:** Execute `git diff --cached`. 
-   *(Golden Rule: Ignore the contents of `.lock` files, `.csv` data files, or minified assets to avoid context overflow. Focus strictly on source code and logic changes).*
-2. **Drafting:** Draft a commit message following the **Conventional Commits** format:
-   - `<type>(<scope>): <summary>`
-   - Use a bulleted list in the body to detail the technical achievements and architectural decisions.
+## Phase 1: Pre-flight & Staging
+1. **Status:** Execute `git status -s` and `git branch --show-current`.
+2. **Auto-Scan:** Briefly check the current `git diff` for obvious secrets.
+3. **Security Shield:** If sensitive files are detected:
+   - Append to `.gitignore`.
+   - `git rm -r --cached <files>`.
+   - `git add .gitignore`.
+   - Notify: *"🛡️ Security Shield: Auto-excluded [files]."*
+4. **Validation:** List staged files and ask: *"Any other exclusions or type 'y' to proceed?"*
 
-## Phase 3: Review & Refine (Human in the Loop)
-1. Display the proposed commit message.
-2. Ask the exact question: **"Validate this commit? (Type 'y' to push, 'n' to abort, or type your modifications to adjust the message)."**
-3. *If the user requests a modification, regenerate the message based on their feedback and repeat the validation question.*
+## Phase 2: Context & Drafting
+1. **Smart Diff:** Execute `git diff --cached`. 
+   - **IGNORE:** `.lock`, `.csv`, `.parquet`, `.json` data files, `vendor/`.
+2. **Generation:** Draft a **Conventional Commit** message.
+   - Format: `<type>(<scope>): <summary>` + bullet points for logic.
 
-## Phase 4: Bulletproof Execution
-If the user approves by typing "y":
-1. Execute `git commit -m "<generated_message>"`
-2. Execute `git push -u origin HEAD` *(This ensures the upstream branch is set if it is a newly created local branch).*
-3. Confirm success to the user and provide the generated commit hash.
+## Phase 3: Review & Execution
+1. Display the commit message.
+2. Ask: **"Validate this commit? (Type 'y' to push, 'n' to abort, or edit message)."**
+3. If 'y':
+   - `git commit -m "<msg>"`
+   - `git push -u origin HEAD`
+   - Return: ✅ [hash] pushed to [branch].
