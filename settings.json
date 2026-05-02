@@ -47,7 +47,7 @@
         "skills": ["dataeng-architecture", "iac-terraform"]
       },
       "scout": {
-        "model": "anthropic/claude-haiku-4-5-20251001",
+        "model": "anthropic/claude-haiku-4-5",
         "skills": ["python-engineering"]
       }
     }
