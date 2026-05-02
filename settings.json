@@ -1,14 +1,12 @@
 {
   "lastChangelogVersion": "0.72.1",
-  "defaultProvider": "google",
-  "defaultModel": "gemini-3.1-pro-preview",
-  "packages": [
-    "npm:pi-subagents"
-  ],
-    "subagents": {
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-sonnet-4-6",
+  "packages": ["npm:pi-subagents"],
+  "subagents": {
     "agentOverrides": {
       "planner": {
-        "model": "google/gemini-3.1-pro-preview",
+        "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -19,20 +17,19 @@
         "inheritProjectContext": true
       },
       "worker": {
-        "model": "google/gemini-3.1-pro-preview",
-        "thinking": "high",
+        "model": "anthropic/claude-sonnet-4-6",
+        "thinking": "medium",
         "skills": [
           "python-engineering",
           "airflow-engineering",
           "dbt-engineering",
           "data-quality",
-          "iac-terraform",
-          "technical-writing"
+          "iac-terraform"
         ],
         "inheritProjectContext": true
       },
       "reviewer": {
-        "model": "google/gemini-3.1-pro-preview",
+        "model": "anthropic/claude-sonnet-4-6",
         "thinking": "medium",
         "skills": [
           "code-review",
@@ -45,18 +42,13 @@
         "inheritProjectContext": true
       },
       "oracle": {
-        "model": "google/gemini-3.1-pro-preview",
+        "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
-        "skills": [
-          "dataeng-architecture",
-          "iac-terraform"
-        ]
+        "skills": ["dataeng-architecture", "iac-terraform"]
       },
       "scout": {
-        "model": "google/gemini-3-flash-preview",
-        "skills": [
-          "python-engineering"
-        ]
+        "model": "anthropic/claude-haiku-4-5-20251001",
+        "skills": ["python-engineering"]
       }
     }
   }

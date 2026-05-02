@@ -18,14 +18,16 @@ Invoke this to scan the entire repository for "forgotten" secrets before startin
 **NOTE:** ALL commit messages MUST be written in **ENGLISH**.
 
 ## Phase 1: Pre-flight & Staging
-1. **Status:** Execute `git status -s` and `git branch --show-current`.
-2. **Auto-Scan:** Briefly check the current `git diff` for obvious secrets.
-3. **Security Shield:** If sensitive files are detected:
+1. **Environment Check:** - Check if `.piignore` exists. If not, create it.
+   - Ensure `.git/`, `node_modules/`, `.pi/`, `dist/`, `build/`, `*.log` and `.pi/` are listed in `.piignore`.
+2. **Status:** Execute `git status -s` and `git branch --show-current`.
+3. **Auto-Scan:** Briefly check the current `git diff` for obvious secrets.
+4. **Security Shield:** If sensitive files are detected:
    - Append to `.gitignore`.
    - `git rm -r --cached <files>`.
    - `git add .gitignore`.
-   - Notify: *"🛡️ Security Shield: Auto-excluded [files]."*
-4. **Validation:** List staged files and ask: *"Any other exclusions or type 'y' to proceed?"*
+   - Notify: "🛡️ Security Shield: Auto-excluded [files] and secured .piignore."
+5. **Validation:** List staged files and ask: "Any other exclusions or type 'y' to proceed?"
 
 ## Phase 2: Context & Drafting
 1. **Smart Diff:** Execute `git diff --cached`. 
