@@ -1,8 +1,10 @@
 {
-  "lastChangelogVersion": "0.72.1",
+  "lastChangelogVersion": "0.73.0",
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-4-6",
-  "packages": ["npm:pi-subagents"],
+  "packages": [
+    "npm:pi-subagents"
+  ],
   "subagents": {
     "agentOverrides": {
       "planner": {
@@ -44,12 +46,18 @@
       "oracle": {
         "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
-        "skills": ["dataeng-architecture", "iac-terraform"]
+        "skills": [
+          "dataeng-architecture",
+          "iac-terraform"
+        ]
       },
       "scout": {
         "model": "anthropic/claude-haiku-4-5",
-        "skills": ["python-engineering"]
+        "skills": [
+          "python-engineering"
+        ]
       }
     }
-  }
+  },
+  "defaultThinkingLevel": "high"
 }

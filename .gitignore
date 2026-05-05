@@ -19,3 +19,7 @@ build/
 
 # macOS
 .DS_Store
+
+# Graphify runtime
+graphify-out/manifest.json
+graphify-out/cost.json
