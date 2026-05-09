@@ -1,9 +1,15 @@
 ---
 name: git-collaboration
-description: Complete Git management with built-in security auditing. Use /audit for a deep repo scan, or /git-collaboration for safe staging and committing.
+description: "Full Git workflow: security audit, extension drift check, then safe staging and commit. Invoke with /skill:git-collaboration to run all three phases in sequence."
 ---
 
 # Skill: Git Collaboration & Audit Protocol
+
+## Execution Order
+When invoked as `/skill:git-collaboration`, run the following sequence automatically without prompting for selection:
+1. Execute Trigger 1 (/audit)
+2. Execute Trigger 3 (/check-extensions)
+3. Execute Trigger 2 (/git-collaboration)
 
 ## Trigger 1: /audit (Deep Security Scan)
 Invoke this to scan the entire repository for "forgotten" secrets before starting work.
