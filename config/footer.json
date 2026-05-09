@@ -15,7 +15,15 @@
       "type": "usage",
       "options": {
         "show_cache": true,
-        "detailed": true
+        "detailed": true,
+        "show_costs": true,
+        "breakdown_costs": true,
+        "shorten_numbers": true,
+        "labels": {
+          "input": "󰌒 ",
+          "output": "󰌓 ",
+          "cache": " "
+        }
       }
     },
     {
