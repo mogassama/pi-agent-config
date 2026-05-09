@@ -3,7 +3,8 @@
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-4-6",
   "packages": [
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "npm:pi-powerline-footer"
   ],
   "subagents": {
     "agentOverrides": {

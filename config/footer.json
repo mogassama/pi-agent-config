@@ -1,0 +1,25 @@
+{
+  "variant": "powerline",
+  "theme": {
+    "background": "#24283b",
+    "accent": "#7aa2f7",
+    "text": "#c0caf5",
+    "success": "#9ece6a"
+  },
+  "segments": [
+    {
+      "type": "model",
+      "style": "slant_right"
+    },
+    {
+      "type": "usage",
+      "options": {
+        "show_cache": true,
+        "detailed": true
+      }
+    },
+    {
+      "type": "git_info"
+    }
+  ]
+}
