@@ -3,39 +3,10 @@
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-4-6",
   "activeFooter": "pi-powerline-footer",
-  "packages": ["npm:pi-subagents", "npm:pi-powerline-footer"],
-  "ui": {
-    "footer": {
-      "variant": "powerline",
-      "theme": {
-        "background": "#24283b",
-        "accent": "#7aa2f7",
-        "text": "#c0caf5",
-        "success": "#9ece6a"
-      },
-      "segments": [
-        { "type": "model", "style": "slant_right" },
-        { "type": "thinking" },
-        { "type": "project" },
-        { "type": "git" },
-        {
-          "type": "usage",
-          "options": {
-            "show_cache": true,
-            "detailed": true,
-            "show_costs": true,
-            "breakdown_costs": true,
-            "shorten_numbers": true,
-            "labels": {
-              "input": "󰌒 ",
-              "output": "󰌓 ",
-              "cache": " "
-            }
-          }
-        }
-      ]
-    }
-  },
+  "packages": [
+    "npm:pi-subagents",
+    "npm:pi-powerline-footer"
+  ],
   "subagents": {
     "agentOverrides": {
       "planner": {
@@ -77,13 +48,19 @@
       "oracle": {
         "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
-        "skills": ["dataeng-architecture", "iac-terraform"]
+        "skills": [
+          "dataeng-architecture",
+          "iac-terraform"
+        ]
       },
       "scout": {
         "model": "anthropic/claude-haiku-4-5",
-        "skills": ["python-engineering"]
+        "skills": [
+          "python-engineering"
+        ]
       }
     }
   },
-  "defaultThinkingLevel": "medium"
+  "defaultThinkingLevel": "medium",
+  "powerline": "custom"
 }
