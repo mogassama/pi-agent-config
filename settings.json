@@ -5,7 +5,8 @@
   "activeFooter": "pi-powerline-footer",
   "packages": [
     "npm:pi-subagents",
-    "npm:pi-powerline-footer"
+    "npm:pi-powerline-footer",
+    "npm:@tmustier/pi-raw-paste"
   ],
   "subagents": {
     "agentOverrides": {
