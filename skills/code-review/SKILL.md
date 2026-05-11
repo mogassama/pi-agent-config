@@ -1,74 +1,117 @@
 ---
-name: "code-review"
-description: "Critical audit of existing code (Python, SQL, Terraform, GCP). Focus on security, performance, and readability."
+name: code-review
+description: Load for auditing existing code — Python, SQL, Terraform, GCP configs. Produces structured findings with severity, line references, and verdict. Auto-load on review requests, PR analysis, or "check this" tasks over existing files.
 ---
 
-# Code Review (Skeptical Auditor Mode)
+# Code Review
 
-## Core Mindset
+## Mindset
 
-You are a **hostile auditor**. Your goal is to find reasons to **reject** the code.
-- Silence = Clean. No praise.
-- Prioritize **Impact** over **Style**.
-- **Cite line numbers** for every finding.
+Hostile auditor. Goal: find reasons to reject. Silence = clean.
 
-## 1. Automated Pre-check (Verbatim Output)
+- Every finding cites a line number or range.
+- Prioritize impact over style. Style nits that ruff/sqlfluff can auto-fix are not findings.
+- No "Consider..." or "Maybe...". Definitive statements only.
+- Do not paraphrase the code. Do not refactor outside the scope of the reviewed diff.
+- Do not praise. Report findings and verdict.
 
-Before manual review, simulate/run these via `uv` or CLI:
+## Step 1 — Automated pre-check
 
-- **Python:** `uv run ruff check {file}` and `uv run mypy {file}`
-- **SQL:** `sqlfluff lint --dialect bigquery {file}`
-- **GCP:** `bq query --dry_run < {file}` (for cost/syntax)
-- **Check logs:** Ensure all logs/comments are in **English**.
+Run before manual review. Report verbatim output or "unavailable + reason".
 
-## 2. Severity Matrix
+```bash
+# Python
+uv run ruff check {file}
+uv run mypy {file}
 
-| Level | Impact | Examples |
+# SQL
+sqlfluff lint --dialect bigquery {file}
+
+# BigQuery dry-run (correct invocation)
+bq query --dry_run --use_legacy_sql=false "$(cat {file})"
+```
+
+## Step 2 — Severity matrix
+
+| Level | Criteria | Examples |
 |---|---|---|
-| **High** | Risk/Cost | SQL injection, missing BQ partition filter, hardcoded secrets, `except: pass`. |
-| **Medium** | Maintenance | Standard `logging` used instead of `Loguru`, missing types, non-idempotent task. |
-| **Low** | Nits | Poor naming, missing docstring (only if public API). |
+| **HIGH** | Data loss, security breach, cost explosion, or correctness failure | Hardcoded secret, missing BQ partition filter on a >1TB table, `except: pass`, SQL injection via f-string, non-idempotent write |
+| **MEDIUM** | Silent failure risk, maintainability debt, or policy violation | `print()` or `logging` instead of Loguru, missing type hints on public functions, `WRITE_APPEND` without dedup, `SELECT *` |
+| **LOW** | Naming, structure, or minor clarity issues ruff/sqlfluff cannot auto-fix | Missing docstring on non-obvious public function, CTE that should be extracted |
 
-## 3. High-Impact Checklists
+## Step 3 — Checklists by domain
 
-### Security & Identity (GCP Focused)
+### Security & identity
 
-- **Secrets:** Look for keys, tokens, or `service-account.json` references.
-- **IAM:** Flag `roles/owner` or `roles/editor`. Demand least privilege.
-- **Injection:** Check for f-strings in SQL or `os.system` calls.
+- Hardcoded secrets, tokens, passwords, or `service-account.json` references → **HIGH**
+- `roles/owner` or `roles/editor` granted → **HIGH** — flag and demand least-privilege alternative
+- f-string interpolation in SQL queries → **HIGH** — SQL injection vector
+- `os.system()` or `subprocess.call()` with unsanitized input → **HIGH**
+- ADC not used in GCP code → **MEDIUM** — flag service account JSON key usage
 
-### Data Engineering & Costs
+### Data engineering & costs
 
-- **BigQuery:** Flag `SELECT *`. Ensure partition/cluster columns are in `WHERE` clauses.
-- **Idempotency:** Can this script run twice without doubling data? (Check for `WRITE_TRUNCATE` vs `APPEND`).
-- **Memory:** Are large datasets loaded into lists instead of using Generators?
+- `SELECT *` in production or pipeline SQL → **MEDIUM**
+- Partitioned table queried without partition filter → **HIGH** (cost explosion risk)
+- `WHERE DATE(timestamp_col)` on a partition column → **HIGH** (bypasses pruning)
+- `WRITE_APPEND` without dedup strategy → **HIGH** (idempotence failure)
+- Large dataset loaded into a list instead of streamed via generator → **MEDIUM**
+- `download_as_bytes()` on large GCS object → **MEDIUM**
+- Missing `MERGE` unique key → **HIGH**
 
-### Python Engineering (Synergy)
+### Python engineering
 
-- **Logging:** Flag any use of `print` or standard `logging`. Force `Loguru`.
-- **Modernity:** Check for Python 3.13 `type` aliases and `uv` patterns.
-- **Exceptions:** Ensure `logger.catch` or `logger.exception` is used. No silent failures.
+- `print()` or `logging.getLogger` anywhere in library/pipeline code → **MEDIUM**
+- Missing type hints on any public function or method → **MEDIUM**
+- Bare `except:` or `except Exception: pass` → **HIGH**
+- No `logger.catch` or explicit exception handling on entry point → **MEDIUM**
+- Mutable default argument → **MEDIUM**
+- `os.path` instead of `pathlib` → **LOW**
+- `import *` → **MEDIUM**
+- Global config object imported across modules → **MEDIUM**
 
-## 4. Output Format
+### Terraform / IaC
+
+- `terraform plan` output not reviewed before apply reference → flag if evidence of blind apply
+- Hardcoded project IDs or credentials in `.tf` files → **HIGH**
+- Missing `lifecycle { prevent_destroy = true }` on stateful resources (BQ datasets, GCS buckets) → **MEDIUM**
+- Overly broad IAM bindings (`allUsers`, `allAuthenticatedUsers`) → **HIGH**
+- No remote backend configured → **MEDIUM**
+- Resources not tagged/labeled for cost attribution → **LOW**
+
+### GCP configs
+
+- Pub/Sub subscription without dead-letter topic → **MEDIUM**
+- Cloud Function with no max-instances limit → **MEDIUM** (runaway cost risk)
+- BigQuery dataset with no expiration on staging tables → **LOW**
+
+## Step 4 — Output format
 
 ```markdown
 ## Review: {file_path}
 
-**Tooling Output:**
-> [Fenced output or "Tooling unavailable"]
+**Tooling output:**
+> [Verbatim ruff/mypy/sqlfluff/bq dry-run output, or "unavailable: {reason}"]
 
-**Critical Findings:**
+**Findings:**
+
 | Sev | Location | Issue | Fix |
-|:--- |:--- |:--- |:--- |
-| high | L42 | [Issue] | [Code snippet] |
+|:---|:---|:---|:---|
+| HIGH | L42 | Hardcoded API key in plain string | Move to Secret Manager + pydantic-settings |
+| MEDIUM | L87 | `logging.getLogger` used | Replace with `from loguru import logger` |
 
-**Verdict:** [Mergeable | Needs Rework | Blocked]
-**Top Priority:** [The one thing to fix first]
+**Verdict:** Mergeable | Needs Rework | Blocked
+
+**Top priority:** [Single most critical fix before anything else]
 ```
 
-## Anti-Patterns to Avoid in Review
+**Verdict definitions:**
+- **Mergeable** — no HIGH findings, MEDIUM findings documented and accepted
+- **Needs Rework** — one or more MEDIUM findings that must be resolved
+- **Blocked** — any HIGH finding present
 
-- Don't paraphrase the code.
-- Don't use "Consider..." or "Maybe...". Be definitive.
-- Don't list style nits that ruff can fix automatically.
+## Scope rules
 
+- Review only what is in the diff or the file passed. Do not refactor unrelated code.
+- If a finding is outside scope, note it as "Out of scope — recommend follow-up" rather than blocking.
+- Do not upgrade syntax versions (e.g. forcing `type` keyword on 3.10 code) — flag missing type hints instead.

@@ -2,8 +2,8 @@ Review the code in @{{file}} (or the files passed below).
 
 Load the `code-review` skill and follow its full process: identify scope, load supporting authoring skills, run available tooling, walk the checklists, output the structured table.
 
-If reviewing multiple files, do them one at a time. Don't batch into a single mega-table — each file gets its own header and verdict.
+**Multi-file reviews:** do them one at a time, each file gets its own header and verdict. Order: dependencies before dependents (e.g. staging model before the mart that consumes it, utility module before the DAG that imports it). If the dependency order is unclear, state the order you chose and why before starting.
 
-If a tooling command isn't available locally (e.g. `sqlfluff` not installed, `bq` not configured), note it explicitly in the tooling output and continue with the manual review. Don't skip the file.
+**Tooling unavailability:** if a tooling command isn't available locally (`sqlfluff` not installed, `bq` not configured, `mypy` missing), note it explicitly in the tooling output section and continue with the manual review. Don't skip the file.
 
-Don't commit any fixes from this review — output only. If I want a fix, I'll ask afterward, possibly with `/skill:python-engineering` or another authoring skill loaded.
+**No fixes:** output only. Don't apply changes from this review. If a fix is needed, it will be requested separately — possibly with `/skill:python-engineering` or another authoring skill loaded.

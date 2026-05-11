@@ -10,7 +10,8 @@ Add Google-style docstrings to every function and method in the file(s) at @{{fi
    - Longer description if needed
    - `Args:` — one entry per parameter, with type
    - `Returns:` — type and meaning. Mandatory unless function returns `None`.
-   - `Raises:` — exception types and when. Only document exceptions you intentionally raise or let propagate.
+   - `Yields:` — for generators, use `Yields:` instead of `Returns:`. Type and meaning of each yielded value.
+   - `Raises:` — exception types and when. Only document exceptions you intentionally raise or let propagate. Do NOT document `NotImplementedError` on abstract methods — it's noise.
    - `Example:` — only for non-obvious public APIs, not for internal helpers.
 
 3. **Types in docstrings must match the type hints.** If the signature says `-> dict[str, int]`, the `Returns:` says `dict[str, int]`, not `dict` or `a dictionary`. If type hints are missing on the signature, ADD them — don't document untyped code.
@@ -19,9 +20,11 @@ Add Google-style docstrings to every function and method in the file(s) at @{{fi
 
 5. **Private functions (`_leading_underscore`):** docstring only if the function is non-trivial. Trivial private helpers can skip it.
 
-6. **Don't change behavior.** No refactoring, no renaming, no formatting changes. Docstrings only. If you spot something that should change, list it at the end as a separate suggestion — don't act on it.
+6. **Abstract methods and Protocol methods:** one-line summary only. No `Args:`, no `Returns:`, no `Raises:` — implementations document those.
 
-7. **For pydantic models:** add a class-level docstring describing the model's purpose. Field-level descriptions go in `Field(..., description="...")` rather than in the class docstring.
+7. **Don't change behavior.** No refactoring, no renaming, no formatting changes. Docstrings only. If you spot something that should change, list it at the end as a separate suggestion — don't act on it.
+
+8. **For pydantic models:** add a class-level docstring describing the model's purpose. Field-level descriptions go in `Field(..., description="...")` rather than in the class docstring.
 
 **Example of expected output:**
 
@@ -45,6 +48,17 @@ def fetch_active_users(
     Raises:
         BigQueryError: If the underlying query fails or times out.
     """
+
+
+def iter_rows(path: Path) -> Iterator[RowData]:
+    """Stream rows from a newline-delimited JSON file.
+
+    Args:
+        path: Path to the .ndjson file.
+
+    Yields:
+        RowData: One parsed row per line.
+    """
 ```
 
 **Process:**
@@ -52,4 +66,4 @@ def fetch_active_users(
 1. Read the file(s) entirely.
 2. List the functions/methods you'll touch (just names, one per line) before starting.
 3. Apply the docstrings via `edit` calls, one function at a time for clarity in the diff.
-4. At the end, output a one-line summary: "Documented N functions in M files. K functions skipped (trivial private)."
+4. At the end, output a one-line summary: "Documented N functions in M files. K functions skipped (trivial private / abstract)."

@@ -1,10 +1,29 @@
-On va switch de modèle. Avant le switch, produis UN SEUL message contenant :
+On va switch de modèle. Avant le switch, produis UN SEUL message contenant les sections suivantes.
 
-1. **Décisions actées** — bullet list, une ligne chacune, sans rationale
-2. **Plan d'exécution** — étapes numérotées, chaque étape exécutable indépendamment
-3. **Contraintes à respecter** — ce qui ne doit PAS bouger
-4. **Points d'attention** — pièges où le prochain modèle pourrait se tromper
-5. **Fichiers concernés** — chemins absolus ou relatifs au cwd, un par ligne
+Format dense, pas de prose explicative. Pas de récap de la discussion. Ce message est le brief unique au prochain modèle après `/compact`.
 
-Format dense, pas de prose explicative. Pas de récap de la discussion.
-Ce message va servir de brief unique au prochain modèle après /compact.
+---
+
+## 1. Décisions actées
+Bullet list, une ligne par décision, sans rationale.
+
+## 2. Plan d'exécution
+Étapes numérotées. Chaque étape doit être exécutable indépendamment par le prochain modèle sans contexte additionnel.
+
+## 3. Contraintes à respecter
+Ce qui ne doit PAS bouger. Inclure les contraintes techniques, les choix d'architecture figés, et les règles de style actives dans cette session.
+
+## 4. Points d'attention
+Pièges concrets où le prochain modèle pourrait se tromper. Formuler comme : "Ne pas X — risque de Y."
+
+## 5. Fichiers concernés
+Un fichier par ligne avec son état :
+- `path/to/file.py` — modifié, continuer à l'étape N
+- `path/to/new_file.py` — à créer, spec dans la section 2
+- `path/to/ref.md` — référence uniquement, ne pas modifier
+
+## 6. Commande de reprise
+La commande exacte à taper après le switch pour reprendre sans ambiguïté :
+```
+pi "..."
+```

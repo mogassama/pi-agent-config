@@ -5,6 +5,7 @@ Debug the issue described below (or in @{{file}} if a file is provided).
 ## 1. Reproduce
 
 State what you understand the problem to be, in your own words. Then identify the smallest reliable reproduction:
+
 - Exact command(s) that trigger it
 - Exact input that triggers it
 - Exact error / wrong behavior observed
@@ -15,6 +16,7 @@ If you can't reproduce it (or the error is intermittent), say so and stop here. 
 ## 2. Hypotheses (ranked)
 
 List 2-4 hypotheses for the root cause, ordered from most to least likely. For each:
+
 - One-sentence statement of the hypothesis
 - One concrete check that would confirm or refute it (a command to run, a value to inspect, a log line to find)
 
@@ -27,7 +29,10 @@ Run the checks for hypothesis #1. Use `bash` for commands, `read` for code inspe
 If hypothesis #1 is confirmed → go to step 4.
 If refuted → move to hypothesis #2. Don't skip ahead, don't combine.
 
+**Escalate if all hypotheses are refuted.** Stop after exhausting the ranked list. Don't invent new hypotheses on the fly — report what was ruled out and ask the operator for additional context or access before continuing.
+
 For data eng issues specifically, check in this order before coding hypotheses:
+
 - Schema mismatch (column types, nullability, presence)
 - Time/timezone handling (UTC vs local, naive vs aware, partition boundaries)
 - Data volume (was the test on 10 rows but prod has 10M?)
@@ -39,6 +44,7 @@ For data eng issues specifically, check in this order before coding hypotheses:
 The smallest change that addresses the confirmed root cause. Not adjacent improvements, not refactors, not "while we're here". Just the fix.
 
 State explicitly:
+
 - What you're changing
 - Why this fixes the root cause (one sentence linking back to the confirmed hypothesis)
 - What you're NOT changing (visible related issues you noticed but are leaving alone)
@@ -55,9 +61,10 @@ One paragraph: root cause in plain language, what you changed, what you verified
 
 ---
 
-**Anti-patterns to avoid:**
+**Anti-patterns — never do these:**
 
 - Wrapping the failing call in `try/except` to "fix" it. That hides the bug.
 - Adding `print` / `logger.debug` everywhere then calling it "investigation". One targeted check beats five scattered prints.
 - Refactoring "for clarity" while debugging. Two changes simultaneously means you can't tell which fixed it (or broke it more).
 - Suggesting a fix without having confirmed the hypothesis. "Try changing X" is for forums, not for here.
+- Inventing a fifth hypothesis after the first four are refuted — escalate instead.

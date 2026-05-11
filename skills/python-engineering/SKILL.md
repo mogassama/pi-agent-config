@@ -1,85 +1,125 @@
 ---
 name: python-engineering
-description: Expert Python engineering for 2026. Focus on uv, pytest, and Loguru. Optimized for Data Engineering (GCP/ETL), strict type hinting (3.13+), and high-performance patterns. Use for authoring, refactoring, and packaging.
+description: Load for Python authoring, refactoring, packaging, or testing. Covers uv project setup, strict type hints, Loguru logging, pytest patterns, and data engineering idioms (streaming, chunking, GCP clients). Auto-load when the task involves .py files, pyproject.toml, test writing, or Python package structure.
 ---
 
-# Python Engineering (Power User Edition)
+# Python Engineering
 
-## Execution Rules
-- **Language:** Code comments and LOGS must be in **English** only.
-- **Python Version:** 3.13+ (Default).
-- **Environment:** Always assume a `uv` managed project.
+## Environment
 
-## Project Layout (Modern Src-Layout)
+- Python 3.12+ unless project `.python-version` pins otherwise.
+- All projects managed with `uv`. Never suggest `pip install` directly.
+- Formatter: `ruff format`. Linter: `ruff check --fix`. Type checker: `mypy` or `pyright` per project config.
 
-```text
+## Project layout (src-layout, canonical)
+
+```
 project/
-├── .python-version       # managed by uv
-├── pyproject.toml        # tools (ruff, mypy, pytest) + deps
-├── uv.lock               # deterministic builds
-├── src/<package>/        # code lives here
+├── .python-version        # managed by uv
+├── pyproject.toml         # single source of truth for tools + deps
+├── uv.lock                # committed, deterministic builds
+├── src/<package>/
 │   ├── __init__.py
-│   └── main.py
-└── tests/                # mirrored structure
+│   └── ...
+└── tests/                 # mirrors src/<package>/ structure
 ```
 
-## Dependency & Tooling (uv First)
+## pyproject.toml — minimal scaffold
 
-- **Management:** Use uv for everything (uv init, uv add, uv run).
-- **Lint/Format:** ruff (all-in-one). Use ruff check --fix and ruff format.
-- **Type Checking:** mypy or pyright.
-- **Migration:** If a project has requirements.txt, suggest uv pip compile to modernize.
+```toml
+[project]
+name = "<package>"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
 
-## Type Hints (Python 3.13+)
+[tool.ruff]
+line-length = 100
+target-version = "py312"
 
-- **New Syntax:** Use the type keyword for aliases:
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+```
+
+## Type hints
+
+- Type hints on **all** public functions and methods — no exceptions.
+- Use `type` keyword for aliases (3.12+):
   ```python
   type UserID = int | str
   type RowData = dict[str, Any]
   ```
-- **Protocols:** Prefer typing.Protocol for structural subtyping (duck typing).
-- **Validation:**
-  - pydantic.BaseModel for I/O and API boundaries.
-  - pydantic-settings for environment variable management.
-  - @dataclass(slots=True, frozen=True) for internal data structures.
+- `typing.Protocol` for structural subtyping — prefer over ABC for duck-typed interfaces.
+- `pydantic.BaseModel` for I/O boundaries and external data validation.
+- `pydantic-settings` for environment variable management in all non-trivial projects.
+- `@dataclass(slots=True, frozen=True)` for internal immutable data structures.
 
-## Logging (Loguru)
+## Logging (Loguru — mandatory)
 
-- **Standard:** Use `from loguru import logger`. No `logging.getLogger(__name__)`.
-- **English Only:** All log messages must be in English.
-- **Cloud/GCP Integration:** To ensure logs are structured (JSON) for Cloud Logging, use a sink:
+- `from loguru import logger` everywhere. Never `logging.getLogger(__name__)`.
+- All log messages in English.
+- Production / GCP sink (structured JSON for Cloud Logging):
   ```python
   import sys
   from loguru import logger
-  
-  # Clear default and add structured sink for production
+
   logger.remove()
   logger.add(sys.stderr, format="{message}", serialize=True, level="INFO")
   ```
-- **Context:** Use `logger.contextualize(user_id=123)` for adding metadata to a block of logs.
-- **Error Capture:** Use `@logger.catch` on main entry points to log full stack traces with variable values.
+- Contextual metadata: `logger.contextualize(run_id=run_id, source=source)`.
+- Entry point decoration: `@logger.catch` on `main()` to capture full stack traces with variable values.
+- Never use `print()` in library or pipeline code. CLI one-shot scripts only.
 
 ## Testing (pytest)
 
-- **Framework:** pytest only.
-- **Mocking:** Use pytest-mock (the mocker fixture).
-- **Async Tests:** Use pytest-asyncio.
-- **Patterns:**
-  - One logical assertion per test.
-  - Use tmp_path for filesystem tests.
-  - @pytest.mark.parametrize to reduce boilerplate.
+- `pytest` only. No unittest.
+- Mocking: `pytest-mock` (`mocker` fixture). Never `unittest.mock` directly.
+- Async: `pytest-asyncio` with `asyncio_mode = "auto"` in pyproject.toml.
+- One logical assertion cluster per test function.
+- `tmp_path` fixture for any filesystem interaction.
+- `@pytest.mark.parametrize` to eliminate repetitive test bodies.
+- Test file mirrors source path: `src/package/etl/loader.py` → `tests/etl/test_loader.py`.
 
-## Data Engineering Patterns
+## Data engineering patterns
 
-- **Generators:** Always use Yield for large data streams to keep memory footprint low.
-- **Chunking:** Use itertools.batched (3.12+) for batching records.
-- **Resource Management:** Use contextlib.contextmanager or asynccontextmanager.
-- **Cloud Storage:** Prefer streaming (blob.open("rb")) over download_as_bytes().
-- **BigQuery:** Use bigframes (BigQuery DataFrames) for heavy analysis when possible.
+- **Generators for large streams.** Never load a full dataset into memory when a generator suffices.
+  ```python
+  def iter_rows(path: Path) -> Iterator[RowData]:
+      with path.open() as f:
+          for line in f:
+              yield json.loads(line)
+  ```
+- **Batching.** `itertools.batched(iterable, n)` (3.12+) for chunked processing. No manual slice loops.
+- **Resource management.** `contextlib.contextmanager` or `asynccontextmanager` for any resource with open/close lifecycle.
+- **GCS streaming.** `blob.open("rb")` over `download_as_bytes()` for large objects — avoids full in-memory load.
+- **BigQuery writes.** Use `WRITE_TRUNCATE` on partition target or `MERGE` with explicit unique key. Never blind `WRITE_APPEND` without dedup strategy.
+- **bigframes.** Use for exploratory analysis and heavy aggregations where BigQuery execution is preferable to local compute. Do not use in production pipeline code where explicit SQL or the BQ Storage API gives more control and predictability.
 
-## Refactoring Philosophy
+## Architecture rules
 
-1. **Readability > Brevity:** Code is read 10x more than it is written.
-2. **Type Safety:** 100% type hint coverage on all new functions.
-3. **Immutability:** Favor frozen=True for data objects to avoid side effects.
+- **Pure/impure separation.** Transform functions are pure and testable without mocks. Side-effects (BQ writes, GCS uploads, API calls) are isolated in dedicated modules.
+- **Configuration by injection.** `def run(project_id: str, dataset: str, ...)` — never `import config` or global state. Every entry point receives its config explicitly.
+- **Idempotence.** Every storage operation must be safe to run twice. No silent partial writes.
+- **Fail-Fast.** Raise an explicit exception at the first unexpected state. No silent returns, no bare `except`.
+- **Modules ≤ ~200 lines.** Split beyond that. One clear responsibility per module.
+- **`pathlib` over `os.path`** — without exception.
 
+## Anti-patterns — never do these
+
+- `except Exception: pass` or bare `except:` — always catch narrow and re-raise with context.
+- `import *` — ever.
+- `requirements.txt` in new projects — use `uv` and `pyproject.toml`.
+- Mutable default arguments: `def f(items=[])` — use `None` and initialize inside.
+- `os.path.join` — use `Path(...) / "subdir"`.
+- `logging.getLogger` — Loguru only.
+- `print()` in library code — use `logger`.
+- `download_as_bytes()` on large GCS objects — stream instead.
+- Global config objects imported across modules — inject via function arguments.

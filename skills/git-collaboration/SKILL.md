@@ -1,33 +1,123 @@
 ---
 name: git-collaboration
-description: "Full Git workflow: security audit, extension drift check, then safe staging and commit. Invoke with /skill:git-collaboration to run all three phases in sequence."
+description: Load for git workflow tasks — security audit, staging, commit drafting, branch management, and dotfiles extension drift check. Auto-load on git status/commit/push tasks or when invoked with /skill:git-collaboration.
 ---
 
-# Skill: Git Collaboration & Audit Protocol
+# Git Collaboration & Audit Protocol
 
-## Execution Order
-When invoked as `/skill:git-collaboration`, run the following sequence automatically without prompting for selection:
-1. Execute Trigger 1 (/audit)
-2. Execute Trigger 3 (/check-extensions)
-3. Execute Trigger 2 (/git-collaboration)
+## Conventional Commits — enforced format
 
-## Trigger 1: /audit (Deep Security Scan)
-Invoke this to scan the entire repository for "forgotten" secrets before starting work.
-1. **Scout Recon:** Execute a broad search for sensitive patterns:
-   - `find . -maxdepth 4 -not -path '*/.*' -not -path '*node_modules*'` (Structure mapping).
-   - `grep -rE "AIza|key|secret|password|token|SESSION|SECRET_KEY|PRIVATE KEY" . --exclude-dir={.git,node_modules,venv,__pycache__}`.
-2. **Analysis:** Gemini 3.1 Pro evaluates findings. 
-3. **Report:** Display a table of "Risk Level | File | Reason".
-4. **Fix:** Ask: *"Should I add these to .gitignore and wipe them from the current staging? (y/n)"*
+```
+<type>(<scope>): <subject>
 
-## Trigger 2: /git-collaboration (Standard Workflow)
-**NOTE:** ALL commit messages MUST be written in **ENGLISH**.
+<body — optional>
 
-## Phase 0: Init Detection (runs before Phase 1)
-Run `git log --oneline -1 2>&1`. If the output contains `does not have any commits` or the command fails:
+<footer — optional>
+```
 
-1. **Repo check:** Run `git rev-parse --is-inside-work-tree 2>/dev/null`. If it fails, run `git init`.
-2. **Bootstrap `.gitignore`:** If `.gitignore` is absent or missing the following entries, create/append them:
+**Types:**
+
+| Type | Use |
+|---|---|
+| `feat` | New feature or capability |
+| `fix` | Bug fix |
+| `refactor` | Code change with no behavior change |
+| `perf` | Performance improvement |
+| `docs` | Documentation only |
+| `test` | Add or modify tests |
+| `chore` | Maintenance — deps, config, tooling |
+| `ci` | CI/CD pipeline changes |
+| `build` | Build system, scripts, packaging |
+
+**Scope** (optional but recommended): module or subsystem — `dag`, `bq`, `pipeline`, `dbt`, `infra`, `auth`.
+
+**Subject rules:**
+- Imperative present tense: `add`, `fix`, `update` — not `added`, `fixes`, `updated`
+- Lowercase first letter
+- No trailing period
+- ≤72 characters
+
+**Body:** explain *why*, not *what* — the diff already shows what changed.
+
+**Footer:** `BREAKING CHANGE:`, `Refs: TICKET-123`, `Co-authored-by:`.
+
+**Examples:**
+```
+feat(dag): add daily revenue aggregation pipeline
+fix(bq): handle null partition values in stg_orders
+refactor(pipeline): extract retry logic into decorator
+perf(dbt): add clustering to fct_user_events
+chore(deps): bump apache-beam from 2.55 to 2.57
+ci(composer): add dbt source freshness check to DAG CI step
+```
+
+## Branching — trunk-based
+
+- **Model:** trunk-based. Branches live <3 days. `main` is always deployable.
+- **Branch naming:** `<type>/<short-description>`
+  - `feat/revenue-pipeline`
+  - `fix/null-partition-handling`
+  - `refactor/extract-bq-client`
+- Never commit directly to `main` for non-trivial changes.
+
+## Merge strategy
+
+- **Squash and merge** by default → clean, linear `main` history. Each commit tells a complete story.
+- **Rebase and merge** when the branch contains multiple logically distinct commits worth preserving.
+- **No merge commits** on `main` unless explicitly justified.
+
+## PR discipline
+
+- One PR = one logical change. No mixing feat + unrelated fix.
+- PR title = Conventional Commit subject of the squash commit.
+- PR description answers: *what*, *why*, *how to test*, *risks*.
+- Self-review the diff before requesting human review.
+- Tests passing before review is requested.
+
+---
+
+## Execution sequence
+
+When invoked as `/skill:git-collaboration`, run in order without prompting for selection:
+
+1. `/audit` — security scan
+2. `/check-extensions` — dotfiles drift (if in dotfiles repo)
+3. `/git-collaboration` — standard commit workflow
+
+---
+
+## /audit — Deep security scan
+
+Scan the entire repo for forgotten secrets before starting work.
+
+```bash
+# Structure mapping
+find . -maxdepth 4 -not -path '*/.*' -not -path '*node_modules*'
+
+# Secret pattern scan
+grep -rE "AIza|key|secret|password|token|SESSION|SECRET_KEY|PRIVATE KEY" . \
+  --exclude-dir={.git,node_modules,venv,__pycache__}
+```
+
+Evaluate findings. Report as table: `Risk Level | File | Pattern matched`.
+
+If sensitive files found:
+- Append to `.gitignore`
+- `git rm -r --cached <files>`
+- Ask: "Add these to .gitignore and remove from staging? (y/n)"
+
+---
+
+## /git-collaboration — Standard commit workflow
+
+**All commit messages in English.**
+
+### Phase 0 — Init detection
+
+Run `git log --oneline -1 2>&1`. If no commits exist:
+
+1. Run `git rev-parse --is-inside-work-tree 2>/dev/null`. If fails, run `git init`.
+2. Bootstrap `.gitignore` if missing entries:
    ```
    .pi/
    node_modules/
@@ -37,77 +127,79 @@ Run `git log --oneline -1 2>&1`. If the output contains `does not have any commi
    graphify-out/manifest.json
    graphify-out/cost.json
    ```
-3. **Stage everything:** `git add -A`
-4. **Propose init commit message:** `chore: initial commit`
-5. **Ask for validation** before running `git commit`. If confirmed, commit — then continue to Phase 1 normally for any remaining unstaged changes. If declined, abort and leave the index as-is.
+3. Stage everything: `git add -A`
+4. Propose: `chore: initial commit`
+5. Ask for confirmation before committing. If declined, abort and leave index as-is.
 
-## Phase 1: Pre-flight & Staging
-1. **Environment Check:**
-   - Check if `.piignore` exists. If not, create it.
-   - Ensure `.git/`, `node_modules/`, `.pi/`, `dist/`, `build/`, `*.log` and `.pi/` are listed in `.piignore`.
-   - **Graphify guard:** Confirm that `graphify-out/manifest.json` and `graphify-out/cost.json` are present in `.gitignore`. If missing, append them. `graphify-out/` itself must **not** be ignored — the directory and its other contents (e.g. `GRAPH_REPORT.md`, `wiki/`) are committed.
-   - If `graphify-out/GRAPH_REPORT.md` exists and shows as untracked in `git status -s`, include it in staging automatically.
-   - **Dotfiles repo check:** If the current repo is the dotfiles repo (detected by: `git remote get-url origin` contains `dotfiles` OR the repo root is `~/.pi` or `~/dotfiles`), auto-trigger `/check-extensions` before proceeding to staging.
-2. **Status:** Execute `git status -s` and `git branch --show-current`.
-3. **Auto-Scan:** Briefly check the current `git diff` for obvious secrets.
-4. **Security Shield:** If sensitive files are detected:
-   - Append to `.gitignore`.
-   - `git rm -r --cached <files>`.
-   - `git add .gitignore`.
-   - Notify: "🛡️ Security Shield: Auto-excluded [files] and secured .piignore."
-5. **Validation:** List staged files and ask: "Any other exclusions or type 'y' to proceed?"
+### Phase 1 — Pre-flight & staging
 
-## Phase 2: Context & Drafting
-1. **Smart Diff:** Execute `git diff --cached`. 
-   - **IGNORE:** `.lock`, `.csv`, `.parquet`, `.json` data files, `vendor/`.
-2. **Generation:** Draft a **Conventional Commit** message.
-   - Format: `<type>(<scope>): <summary>` + bullet points for logic.
+1. **Environment check:**
+   - Ensure `.piignore` exists. Create if missing.
+   - Entries in `.piignore`: `.git/`, `node_modules/`, `.pi/`, `dist/`, `build/`, `*.log`
+   - `.gitignore` must include `graphify-out/manifest.json` and `graphify-out/cost.json`. Append if missing.
+   - `graphify-out/` directory itself must NOT be ignored — `GRAPH_REPORT.md` and `wiki/` are committed.
+   - If in dotfiles repo (detected by `git remote get-url origin` containing `dotfiles` OR repo root is `~/.pi` or `~/dotfiles`): auto-trigger `/check-extensions` before staging.
 
-## Phase 3: Review & Execution
-1. Display the commit message.
-2. Ask: **"Validate this commit? (Type 'y' to push, 'n' to abort, or edit message)."**
-3. If 'y':
-   - `git commit -m "<msg>"`
-   - `git push -u origin HEAD`
-   - Return: ✅ [hash] pushed to [branch].
+2. Run `git status -s` and `git branch --show-current`.
+
+3. **Secret scan:** Quick `git diff` scan for obvious secrets before staging.
+
+4. **Security shield:** If sensitive files detected:
+   - Append to `.gitignore`
+   - `git rm -r --cached <files>`
+   - `git add .gitignore`
+   - Report: "Security Shield: auto-excluded [files]."
+
+5. **Staged files review:** List files. Ask: "Any exclusions, or 'y' to proceed?"
+
+### Phase 2 — Context & drafting
+
+1. Run `git diff --cached`. Ignore: `.lock`, `.csv`, `.parquet`, `.json` data files, `vendor/`.
+2. Draft Conventional Commit message following the format above:
+   - Correct type from the enforced list
+   - Scope if relevant
+   - Subject: imperative, lowercase, ≤72 chars, no trailing period
+   - Body if the change is non-obvious: *why*, not *what*
+
+### Phase 3 — Review & execution
+
+1. Display commit message.
+2. Ask: "Validate this commit? ('y' to commit and push, 'n' to abort, or edit message)"
+3. If confirmed:
+   ```bash
+   git commit -m "<msg>"
+   git push -u origin HEAD
+   ```
+4. Return: `[hash] pushed to [branch]`.
 
 ---
 
-## Trigger 3: /check-extensions (Dotfiles Repo Only)
+## /check-extensions — Dotfiles drift (dotfiles repo only)
+
 Compares live `~/.pi/agent/extensions/` against what the dotfiles repo tracks.
 
-### Steps
-1. **Enumerate local extensions:**
-   ```bash
-   find ~/.pi/agent/extensions -maxdepth 2 -type f | sort
-   ```
-2. **Enumerate tracked extensions** in the repo:
-   ```bash
-   git ls-files -- 'extensions/' | sort   # adjust prefix to repo layout
-   ```
-3. **Render drift table:**
+```bash
+# Local extensions
+find ~/.pi/agent/extensions -maxdepth 2 -type f | sort
 
-   | Extension | Tracked in repo | Drift |
-   |-----------|----------------|-------|
-   | `my-ext/index.js` | ✅ Yes | None |
-   | `new-ext/index.js` | ❌ No | Untracked |
-   | `old-ext/index.js` | ✅ Yes | Modified |
+# Repo-tracked extensions
+git ls-files -- 'extensions/' | sort
+```
 
-4. **Untracked files:** If any local extension file has no tracked counterpart, propose:
-   > "Add `<file>` to dotfiles? (y/n)"
+Render drift table:
 
-   Stage and include in the upcoming commit if confirmed.
+| Extension | Tracked in repo | Status |
+|---|---|---|
+| `bash-guard/index.ts` | ✅ Yes | Clean |
+| `new-ext/index.ts` | ❌ No | Untracked |
+| `graphify-context.ts` | ✅ Yes | Modified |
 
-5. **Modified files (drift):** Show a `diff` between the local file and the repo's tracked version:
-   ```bash
-   diff ~/.pi/agent/extensions/<file> <repo-path>/<file>
-   ```
-   Then ask:
-   > "Which version to keep? [L]ocal (default) / [R]epo / [S]kip"
+**Untracked files:** propose adding to dotfiles. Stage and include in commit if confirmed.
 
-   - **Local wins by default.** Never overwrite `~/.pi/agent/extensions/` with the repo version without explicit `R` confirmation.
-   - If Local: copy local → repo path, stage the change.
-   - If Repo: copy repo → local path (requires explicit confirmation).
-   - If Skip: leave both as-is, note in commit message if other changes are staged.
+**Modified files:** show diff, then ask: "Keep [L]ocal (default) / [R]epo / [S]kip?"
+- Local wins by default. Never overwrite `~/.pi/agent/extensions/` with repo version without explicit `R`.
+- Local → copy to repo path, stage.
+- Repo → copy to local path, requires explicit confirmation.
+- Skip → note in commit message if other changes staged.
 
-6. Return control to Phase 1 staging.
+Return control to Phase 1 staging.

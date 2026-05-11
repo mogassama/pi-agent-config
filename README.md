@@ -6,156 +6,171 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 
 ```
 ~/.pi/agent/
-├── AGENTS.md              # Global instructions (loaded every session)
-├── APPEND_SYSTEM.md       # Appended to pi's default system prompt
-├── README.md              # This file
+├── AGENTS.md                        # Global instructions (loaded every session)
+├── APPEND_SYSTEM.md                 # Appended to pi's default system prompt
+├── README.md                        # This file
+├── settings.json                    # Provider, model, subagent overrides
+├── extensions/
+│   ├── bash-guard/                  # Confirmation on destructive commands
+│   └── graphify-context.ts          # Injects GRAPH_REPORT.md at session start
 ├── skills/
-│   ├── sql-engineering/SKILL.md
 │   ├── python-engineering/SKILL.md
-│   ├── airflow-engineering/SKILL.md
+│   ├── sql-engineering/SKILL.md
+│   ├── code-review/SKILL.md
+│   ├── data-quality/SKILL.md
 │   ├── gcp-engineering/SKILL.md
-│   └── dataeng-architecture/SKILL.md
+│   ├── dataeng-architecture/SKILL.md
+│   ├── dbt-engineering/SKILL.md
+│   ├── airflow-engineering/SKILL.md
+│   ├── iac-terraform/SKILL.md
+│   ├── git-collaboration/SKILL.md
+│   ├── technical-writing/SKILL.md
+│   └── graphify/SKILL.md
 └── prompts/
-    ├── review-sql.md          # /review-sql
-    ├── new-dag.md             # /new-dag
-    ├── bq-triage.md           # /bq-triage
-    └── subagent-review.md     # /subagent-review
+    ├── bq-triage.md                 # /bq-triage
+    ├── debug.md                     # /debug
+    ├── docstrings.md                # /docstrings
+    ├── handoff.md                   # /handoff
+    ├── new-dag.md                   # /new-dag
+    ├── review.md                    # /review
+    ├── review-sql.md                # /review-sql
+    └── subagent-review.md           # /subagent-review
 ```
 
-## How the pieces fit (and the honest limits)
+## How the pieces fit
 
-Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP, **no native sub-agents**, no plan mode. The "subagent" concept from OpenCode / Claude Code does not exist as such in pi.
-
-This config simulates a similar workflow in three layers, in order of weight:
+Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (v0.21.1, Nicobailon).
 
 | Layer | What it is | Cost | When to use |
 |---|---|---|---|
-| **AGENTS.md** | Always-loaded global rules | High (in every context) | Things true for every session |
-| **Skills** | Auto-loaded on description match, or `/skill:name` | Zero until loaded | Domain-focused instruction sets (SQL, Airflow, etc.) |
-| **Prompt templates** | Manual via `/name` | Zero until invoked | Repeatable workflows you trigger |
-| **`pi -p` subprocess** | Spawn isolated pi from `bash` | Separate run + cost | True context isolation or different model |
+| **AGENTS.md** | Always-loaded global rules | In every context | Things true for every session |
+| **APPEND_SYSTEM.md** | Appended to pi's system prompt | In every context | Behavioural defaults, terse framing |
+| **Skills** | Loaded on description match or `/skill:name` | Zero until loaded | Domain-focused rules (SQL, Airflow, etc.) |
+| **Prompt templates** | Manual via `/<name>` | Zero until invoked | Repeatable workflows |
+| **Subagents** | Isolated pi runs via pi-subagents extension | Separate token budget | Context isolation, parallel review, cheap recon |
 
-**Key thing to internalize:** a skill does *not* spawn a separate model run. It injects instructions into the current agent's context. Same model, same conversation. If you genuinely need an isolated context or a different model (e.g. cheap Haiku for a code review while the main session runs Sonnet), use the `pi -p` pattern (see `prompts/subagent-review.md` for the canonical form).
+## Subagents
 
-## What's loaded when
+Configured in `settings.json` under `subagents.agentOverrides`:
 
-Pi reads at startup:
-- `~/.pi/agent/AGENTS.md` (always)
-- `~/.pi/agent/APPEND_SYSTEM.md` (always, appended to default system prompt)
-- Any `AGENTS.md` walking up from `cwd` to `/` (always)
-- `./AGENTS.md` in current dir (always)
-- All skills are *registered* (descriptions go into the system prompt) but their bodies are loaded on demand.
-- Prompt templates appear in `/` autocomplete; bodies expand only when invoked.
+| Agent | Model | Thinking | Skills |
+|---|---|---|---|
+| `planner` | claude-sonnet-4-6 | high | dataeng-architecture, gcp-engineering, dbt-engineering |
+| `worker` | claude-sonnet-4-6 | medium | python-engineering, airflow-engineering, dbt-engineering |
+| `reviewer` | claude-sonnet-4-6 | medium | code-review, python-engineering, sql-engineering, airflow-engineering, dbt-engineering |
+| `oracle` | claude-sonnet-4-6 | high | dataeng-architecture |
+| `scout` | claude-haiku-4-5 | — | — |
 
-Project-level overrides go in `<project>/.pi/`:
-- `<project>/.pi/SYSTEM.md` — replace global system prompt entirely
-- `<project>/.pi/APPEND_SYSTEM.md` — append after global
-- `<project>/AGENTS.md` — project-specific rules (concatenated, project wins on conflict)
-- `<project>/.pi/skills/` — project-only skills
-- `<project>/.pi/prompts/` — project-only templates
+Scout calibration: called 50-200x per session — never upgrade its model.
+
+## Extensions
+
+| Extension | Role |
+|---|---|
+| `bash-guard/` | Interactive confirmation on destructive commands (`rm -rf`, `bq rm`, `DROP TABLE`, `DELETE` without WHERE, `gsutil rm -r`) |
+| `graphify-context.ts` | Injects `graphify-out/GRAPH_REPORT.md` into session context at startup if present |
+
+## Skills — load triggers
+
+Skills are registered at startup (descriptions in system prompt). Bodies load on demand.
+
+| Skill | Auto-load triggers |
+|---|---|
+| `python-engineering` | `.py` files, `pyproject.toml`, test writing, package structure |
+| `sql-engineering` | `.sql` files, schema design, BQ cost/performance |
+| `code-review` | Review requests, PR analysis, "check this" tasks |
+| `data-quality` | dbt model creation, ingestion pipelines, BQ table validation |
+| `gcp-engineering` | `gcloud`/`bq` CLI, IAM, GCP service configuration |
+| `dataeng-architecture` | Architecture questions, service comparisons, pipeline design |
+| `dbt-engineering` | `.sql` dbt models, `schema.yml`, `dbt_project.yml`, dbt commands |
+| `airflow-engineering` | `dags/` folder, DAG design, scheduling, Composer |
+| `iac-terraform` | `.tf` files, terraform commands, GCP infrastructure provisioning |
+| `git-collaboration` | Git workflow, commit, push, dotfiles drift check |
+| `technical-writing` | README, ADR, runbook, API docs, inline comments |
+| `graphify` | Codebase analysis, knowledge graph, dependency mapping |
+
+Skills > ~300 lines risk slowing context load. Current heaviest: `dbt-engineering`. Review if it grows further.
+
+## Prompt templates
+
+| Template | When to invoke |
+|---|---|
+| `/bq-triage` | Dry-run + cost analysis + rewrite of a BQ query |
+| `/debug` | Structured 6-step debug workflow |
+| `/docstrings` | Add Google-style docstrings to a file |
+| `/handoff` | Produce a model-switch brief before `/compact` |
+| `/new-dag` | Scaffold a new Airflow DAG |
+| `/review` | Full code review via `code-review` skill |
+| `/review-sql` | SQL-focused review + sqlfluff lint |
+| `/subagent-review` | Isolated review via `pi -p` subprocess (Haiku, read-only) |
 
 ## Daily usage
 
 ```bash
-pi                                    # interactive, all global config loaded
-pi "review @dags/billing_dag.py"     # interactive with initial prompt
-pi -c                                 # continue last session in this dir
-pi -r                                 # browse and resume sessions
-pi -p "..."                           # one-shot, prints and exits
-pi --model sonnet:high "..."         # override model + thinking
-pi --tools read,grep,find,ls "..."   # read-only mode (planning / review)
-pi /skill:sql-engineering             # force-load a skill at startup
-pi /review-sql                        # invoke a prompt template
+pi                                          # interactive, all global config loaded
+pi "review @dags/billing_dag.py"           # interactive with initial prompt
+pi -c                                       # continue last session in this dir
+pi -r                                       # browse and resume sessions
+pi -p "..."                                 # one-shot, prints and exits
+pi --model sonnet:high "..."               # override model + thinking level
+pi --tools read,grep,find,ls "..."         # read-only mode
+pi /skill:sql-engineering                   # force-load a skill
+pi /bq-triage                              # invoke a prompt template
 ```
 
 In-session:
-- `/skill:<name>` to force-load a skill the agent didn't pick up
-- `/<template-name>` to expand a prompt template
-- `/reload` after editing this config — picks up changes without restart
-- `/tree` to branch off any prior message
+- `/skill:<name>` — force-load a skill the agent didn't auto-pick
+- `/<template>` — expand a prompt template
+- `/reload` — pick up config changes without restart
+- `/compact` — summarize older context to free up window
+- `/agents` — inspect subagent config
+- `/tree` — branch off any prior message
 
-## Extending
-
-### Add a new skill
+## Adding a skill
 
 ```bash
-mkdir -p ~/.pi/agent/skills/<new-skill>
-cat > ~/.pi/agent/skills/<new-skill>/SKILL.md <<'EOF'
+mkdir -p ~/.pi/agent/skills/<name>
+cat > ~/.pi/agent/skills/<name>/SKILL.md <<'EOF'
 ---
-name: <new-skill>
-description: One sentence on when the agent should auto-load this. Be specific — vague descriptions trigger badly. Max 1024 chars.
+name: <name>
+description: One precise sentence on when to auto-load this skill. Vague descriptions trigger badly. Max 1024 chars.
 ---
 
-# <New Skill>
+# <Name>
 
 ## When this skill is active
 ...
 
-## Rules / patterns
+## Rules
+...
+
+## Anti-patterns
 ...
 EOF
 ```
 
-Then `/reload` in any open pi session (or restart) and verify in the startup banner that pi sees it.
+Then `/reload` in any open pi session. Verify in the startup banner.
 
-`name` must be lowercase a-z + digits + hyphens, ≤64 chars, and **match the parent directory name**. `description` is the only field pi uses for auto-loading — invest in it.
+Rules:
+- `name`: lowercase, a-z + digits + hyphens, ≤64 chars, matches parent directory name
+- `description`: the only field pi uses for auto-loading — make it specific
+- Body > ~300 lines: consider splitting
 
-### Add a new prompt template
-
-```bash
-cat > ~/.pi/agent/prompts/<name>.md <<'EOF'
-Body of the prompt. Use {{var}} for placeholders Mo fills at invocation.
-EOF
-```
-
-`/<name>` in interactive mode will expand it.
-
-### Add a project-specific override
-
-In any project root:
-```bash
-mkdir -p .pi
-cat > AGENTS.md <<'EOF'
-## Project conventions
-- Python 3.12, ruff line length 120, ...
-- BigQuery dataset prefix: `bil_` for billing domain, ...
-EOF
-```
-
-Project AGENTS.md is concatenated *after* the global one — same key, project wins.
-
-## Iteration plan
-
-The skills here are **stubs** — solid scaffolding, not exhaustive content. Expected evolution:
-
-1. **Use the config for 1-2 weeks** on real data engineering work.
-2. **When the agent does something dumb** (suggests a deprecated operator, misses a partition filter, picks the wrong service), the *fix* lives in the relevant skill — append a rule to its `## Review checklist` or `## Anti-patterns`.
-3. **When you find yourself re-typing the same prompt** more than 3x, promote it to a template under `prompts/`.
-4. **When a skill's body grows past ~300 lines**, consider splitting it. Skills are cheap to add; large skills are slow to load.
-5. **Periodically prune.** Stale rules are worse than no rules.
-
-## Maintenance commands
+## Maintenance
 
 ```bash
-# What's loaded right now
+# List all loaded skills and prompts
 pi -p "list every loaded skill and prompt template by name"
 
-# Sanity-check a skill's frontmatter
-head -10 ~/.pi/agent/skills/sql-engineering/SKILL.md
+# Check skill frontmatter
+head -10 ~/.pi/agent/skills/<name>/SKILL.md
 
-# Reset a session if config changes seem cached
-pi --no-session "test message"
+# Verify no import errors
+pi --no-session "test"
 ```
 
-## Limits worth knowing
+**When to update a skill:** when the agent does something wrong that a rule would have prevented. Append to the relevant `## Anti-patterns` section. Don't add speculative rules.
 
-- Skill descriptions go in the system prompt always — too many skills will inflate context. Mo's 5 should be fine; revisit at 10+.
-- AGENTS.md grows monotonically across sessions in long contexts. Keep the global one terse; details go in skills.
-- Prompt templates do not chain. A `/template` expands once and that's it.
-- `pi -p` subprocesses are independent runs — they re-read AGENTS.md and re-register skills, which costs tokens. Worth it for isolation, expensive for tight loops.
+**When to add a prompt:** when you've typed the same setup more than 3 times in a session.
 
-## References
-
-- Pi docs: https://pi.dev
-- Skills format reference: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md
-- Pi philosophy (why no sub-agents): https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
+**When to split a skill:** when the body exceeds ~300 lines and covers two distinct concerns.
