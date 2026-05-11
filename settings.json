@@ -29,7 +29,8 @@
           "airflow-engineering",
           "dbt-engineering",
           "data-quality",
-          "iac-terraform"
+          "iac-terraform",
+          "sql-engineering"
         ],
         "inheritProjectContext": true
       },
@@ -42,23 +43,18 @@
           "sql-engineering",
           "data-quality",
           "iac-terraform",
-          "technical-writing"
+          "technical-writing",
+          "airflow-engineering"
         ],
         "inheritProjectContext": true
       },
       "oracle": {
         "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
-        "skills": [
-          "dataeng-architecture",
-          "iac-terraform"
-        ]
+        "skills": ["dataeng-architecture", "iac-terraform", "gcp-engineering"]
       },
       "scout": {
-        "model": "anthropic/claude-haiku-4-5",
-        "skills": [
-          "python-engineering"
-        ]
+        "model": "anthropic/claude-haiku-4-5"
       }
     }
   },
