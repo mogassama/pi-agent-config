@@ -30,7 +30,8 @@
           "dbt-engineering",
           "data-quality",
           "iac-terraform",
-          "sql-engineering"
+          "sql-engineering",
+          "gcp-engineering"
         ],
         "inheritProjectContext": true
       },
@@ -44,14 +45,16 @@
           "data-quality",
           "iac-terraform",
           "technical-writing",
-          "airflow-engineering"
+          "airflow-engineering",
+          "gcp-engineering"
         ],
         "inheritProjectContext": true
       },
       "oracle": {
         "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
-        "skills": ["dataeng-architecture", "iac-terraform", "gcp-engineering"]
+        "skills": ["dataeng-architecture", "iac-terraform", "gcp-engineering"],
+        "inheritProjectContext": false
       },
       "scout": {
         "model": "anthropic/claude-haiku-4-5"

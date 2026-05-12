@@ -23,5 +23,8 @@ build/
 # Graphify runtime
 graphify-out/manifest.json
 graphify-out/cost.json
+graphify-out/cache/
+graphify-out/.graphify_analysis.json
+graphify-out/.graphify_root
 *.log
 *.bak

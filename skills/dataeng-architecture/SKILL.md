@@ -50,32 +50,11 @@ These three answers determine the right tool. Document them before recommending 
 
 ## Ingestion patterns
 
-### Pattern 1 — Serverless (default, low cost)
-
-```
-Source → Pub/Sub → BQ Subscription → BQ Raw → BQ SQL Transform
-```
-
-When: no in-flight transformation needed, source pushes events, cost sensitivity high.
-Trade-off: no transformation before BQ write, schema must be stable.
-
-### Pattern 2 — High-scale streaming (Beam)
-
-```
-Source → Pub/Sub → Dataflow (Python/Beam) → BQ (Storage Write API)
-```
-
-When: windowing, sessionization, complex enrichment, or multi-source join before landing.
-Trade-off: higher operational complexity, Dataflow cost per worker-hour.
-
-### Pattern 3 — Scheduled batch (standard)
-
-```
-GCS / API → Cloud Run Job → BQ (WRITE_TRUNCATE / MERGE) → dbt transform
-```
-
-When: T+1 batch, source doesn't push, transformation is significant.
-Trade-off: requires orchestration (Cloud Scheduler or Composer).
+| Pattern | Pipeline | When | Trade-off |
+|:---|:---|:---|:---|
+| **1 — Serverless (default)** | `Source → Pub/Sub → BQ Subscription → BQ Raw → BQ SQL Transform` | No in-flight transformation needed; source pushes events; cost sensitivity high | No transformation before BQ write; schema must be stable |
+| **2 — High-scale streaming** | `Source → Pub/Sub → Dataflow (Python/Beam) → BQ (Storage Write API)` | Windowing, sessionization, complex enrichment, or multi-source join before landing | Higher operational complexity; Dataflow cost per worker-hour |
+| **3 — Scheduled batch** | `GCS / API → Cloud Run Job → BQ (WRITE_TRUNCATE / MERGE) → dbt transform` | T+1 batch; source doesn't push; transformation is significant | Requires orchestration (Cloud Scheduler or Composer) |
 
 ## Idempotency — non-negotiable
 

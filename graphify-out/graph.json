@@ -1,0 +1,174 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "graphify-context.ts",
+      "file_type": "code",
+      "source_file": "graphify-context.ts",
+      "source_location": "L1",
+      "id": "graphify_context_ts",
+      "community": 2,
+      "norm_label": "graphify-context.ts"
+    },
+    {
+      "label": "graphifyContext()",
+      "file_type": "code",
+      "source_file": "graphify-context.ts",
+      "source_location": "L16",
+      "id": "extensions_graphify_context_graphifycontext",
+      "community": 2,
+      "norm_label": "graphifycontext()"
+    },
+    {
+      "label": "index.ts",
+      "file_type": "code",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L1",
+      "id": "bash_guard_index_ts",
+      "community": 0,
+      "norm_label": "index.ts"
+    },
+    {
+      "label": "loadSettings()",
+      "file_type": "code",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L33",
+      "id": "bash_guard_index_loadsettings",
+      "community": 0,
+      "norm_label": "loadsettings()"
+    },
+    {
+      "label": "expandHome()",
+      "file_type": "code",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L43",
+      "id": "bash_guard_index_expandhome",
+      "community": 0,
+      "norm_label": "expandhome()"
+    },
+    {
+      "label": "appendLog()",
+      "file_type": "code",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L53",
+      "id": "bash_guard_index_appendlog",
+      "community": 0,
+      "norm_label": "appendlog()"
+    },
+    {
+      "label": "patterns.ts",
+      "file_type": "code",
+      "source_file": "bash-guard/patterns.ts",
+      "source_location": "L1",
+      "id": "bash_guard_patterns_ts",
+      "community": 1,
+      "norm_label": "patterns.ts"
+    },
+    {
+      "label": "compilePatterns()",
+      "file_type": "code",
+      "source_file": "bash-guard/patterns.ts",
+      "source_location": "L48",
+      "id": "bash_guard_patterns_compilepatterns",
+      "community": 1,
+      "norm_label": "compilepatterns()"
+    },
+    {
+      "label": "findMatch()",
+      "file_type": "code",
+      "source_file": "bash-guard/patterns.ts",
+      "source_location": "L75",
+      "id": "bash_guard_patterns_findmatch",
+      "community": 1,
+      "norm_label": "findmatch()"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "graphify-context.ts",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "graphify_context_ts",
+      "target": "extensions_graphify_context_graphifycontext",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L19",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_index_ts",
+      "target": "bash_guard_patterns_compilepatterns"
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L19",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_index_ts",
+      "target": "bash_guard_patterns_findmatch"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L33",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_index_ts",
+      "target": "bash_guard_index_loadsettings"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L43",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_index_ts",
+      "target": "bash_guard_index_expandhome"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/index.ts",
+      "source_location": "L53",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_index_ts",
+      "target": "bash_guard_index_appendlog"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/patterns.ts",
+      "source_location": "L48",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_patterns_ts",
+      "target": "bash_guard_patterns_compilepatterns"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "bash-guard/patterns.ts",
+      "source_location": "L75",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "bash_guard_patterns_ts",
+      "target": "bash_guard_patterns_findmatch"
+    }
+  ],
+  "hyperedges": [],
+  "built_at_commit": "3af2ac47f56692bd4f66ce2058b05d58ba20e30e"
+}

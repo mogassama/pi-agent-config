@@ -14,7 +14,8 @@ Notes:
 - `--no-extensions` disables bash-guard — intentional here, subprocess is read-only
 - `--tools read,grep,find,ls` — no write or edit access in the subprocess
 - Haiku is the right model for this: cheap, fast, bounded scope
+- Note: pi -p calls are not tracked in the orchestrator token tally. Check pi session cost separately after use.
 
 Run it via the `bash` tool, then summarize the top 3 findings in your own words. If the subprocess found nothing notable, say so in one line.
 
-This is the canonical pi-native subagent pattern: isolated context, explicit tool subset, cheap model, structured output.
+Note: use pi-subagents (delegate to reviewer) when orchestrator context must be inherited. Use this prompt only for lightweight standalone review without session context.

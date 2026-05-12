@@ -43,23 +43,29 @@ bq query --dry_run --use_legacy_sql=false "$(cat {file})"
 
 ### Security & identity
 
+Rules: see gcp-engineering skill. Severity assignment:
+
 - Hardcoded secrets, tokens, passwords, or `service-account.json` references → **HIGH**
-- `roles/owner` or `roles/editor` granted → **HIGH** — flag and demand least-privilege alternative
-- f-string interpolation in SQL queries → **HIGH** — SQL injection vector
+- `roles/owner` or `roles/editor` granted → **HIGH**
+- f-string interpolation in SQL queries → **HIGH**
 - `os.system()` or `subprocess.call()` with unsanitized input → **HIGH**
-- ADC not used in GCP code → **MEDIUM** — flag service account JSON key usage
+- ADC not used in GCP code → **MEDIUM**
 
 ### Data engineering & costs
 
+Rules: see sql-engineering skill. Severity assignment:
+
 - `SELECT *` in production or pipeline SQL → **MEDIUM**
-- Partitioned table queried without partition filter → **HIGH** (cost explosion risk)
-- `WHERE DATE(timestamp_col)` on a partition column → **HIGH** (bypasses pruning)
-- `WRITE_APPEND` without dedup strategy → **HIGH** (idempotence failure)
+- Partitioned table queried without partition filter → **HIGH**
+- `WHERE DATE(timestamp_col)` on a partition column → **HIGH**
+- `WRITE_APPEND` without dedup strategy → **HIGH**
 - Large dataset loaded into a list instead of streamed via generator → **MEDIUM**
 - `download_as_bytes()` on large GCS object → **MEDIUM**
 - Missing `MERGE` unique key → **HIGH**
 
 ### Python engineering
+
+Rules: see python-engineering skill. Severity assignment:
 
 - `print()` or `logging.getLogger` anywhere in library/pipeline code → **MEDIUM**
 - Missing type hints on any public function or method → **MEDIUM**
@@ -72,7 +78,8 @@ bq query --dry_run --use_legacy_sql=false "$(cat {file})"
 
 ### Terraform / IaC
 
-- `terraform plan` output not reviewed before apply reference → flag if evidence of blind apply
+Rules: see iac-terraform skill. Severity assignment:
+
 - Hardcoded project IDs or credentials in `.tf` files → **HIGH**
 - Missing `lifecycle { prevent_destroy = true }` on stateful resources (BQ datasets, GCS buckets) → **MEDIUM**
 - Overly broad IAM bindings (`allUsers`, `allAuthenticatedUsers`) → **HIGH**
@@ -81,8 +88,10 @@ bq query --dry_run --use_legacy_sql=false "$(cat {file})"
 
 ### GCP configs
 
+Rules: see gcp-engineering skill. Severity assignment:
+
 - Pub/Sub subscription without dead-letter topic → **MEDIUM**
-- Cloud Function with no max-instances limit → **MEDIUM** (runaway cost risk)
+- Cloud Function with no max-instances limit → **MEDIUM**
 - BigQuery dataset with no expiration on staging tables → **LOW**
 
 ## Step 4 — Output format

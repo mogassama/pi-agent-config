@@ -4,17 +4,9 @@ Add Google-style docstrings to every function and method in the file(s) at @{{fi
 
 1. **Language: English.** Even if the surrounding code uses French identifiers, docstrings stay English (compatibility with pydantic, sphinx, IDE tooling).
 
-2. **Format: Google-style.** Sections in this order, only when applicable:
-   - Short summary (one line, imperative mood: "Compute X" not "Computes X")
-   - Blank line
-   - Longer description if needed
-   - `Args:` — one entry per parameter, with type
-   - `Returns:` — type and meaning. Mandatory unless function returns `None`.
-   - `Yields:` — for generators, use `Yields:` instead of `Returns:`. Type and meaning of each yielded value.
-   - `Raises:` — exception types and when. Only document exceptions you intentionally raise or let propagate. Do NOT document `NotImplementedError` on abstract methods — it's noise.
-   - `Example:` — only for non-obvious public APIs, not for internal helpers.
+2. **Format: Google-style** — include sections only when applicable; omit `Example:` on internal helpers. Ordering and field style: see example below.
 
-3. **Types in docstrings must match the type hints.** If the signature says `-> dict[str, int]`, the `Returns:` says `dict[str, int]`, not `dict` or `a dictionary`. If type hints are missing on the signature, ADD them — don't document untyped code.
+3. **Types:** must match the signature exactly. If hints are missing, add them first — do not document untyped code.
 
 4. **Don't document the obvious.** A function `def get_user_id(user: User) -> int` doesn't need 4 lines of "Returns the user ID". One-liner summary is enough. The docstring earns its space.
 
