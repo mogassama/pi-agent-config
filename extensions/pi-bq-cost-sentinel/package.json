@@ -1,0 +1,6 @@
+{
+  "name": "pi-bq-cost-sentinel",
+  "version": "1.0.0",
+  "description": "BigQuery dry-run cost sentinel for pi — /bq-cost command",
+  "private": true
+}

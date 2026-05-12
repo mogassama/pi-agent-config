@@ -31,7 +31,8 @@
           "data-quality",
           "iac-terraform",
           "sql-engineering",
-          "gcp-engineering"
+          "gcp-engineering",
+          "bigquery-engineering"
         ],
         "inheritProjectContext": true
       },
@@ -42,6 +43,7 @@
           "code-review",
           "python-engineering",
           "sql-engineering",
+          "bigquery-engineering",
           "data-quality",
           "iac-terraform",
           "technical-writing",
@@ -53,7 +55,11 @@
       "oracle": {
         "model": "anthropic/claude-sonnet-4-6",
         "thinking": "high",
-        "skills": ["dataeng-architecture", "iac-terraform", "gcp-engineering"],
+        "skills": [
+          "dataeng-architecture",
+          "iac-terraform",
+          "gcp-engineering"
+        ],
         "inheritProjectContext": false
       },
       "scout": {

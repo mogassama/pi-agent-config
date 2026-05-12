@@ -1,6 +1,6 @@
 ---
 name: gcp-engineering
-description: Load for GCP infrastructure tasks — IAM, BigQuery, Cloud Run, Cloud Functions, Pub/Sub, Cloud Composer, GCS, Secret Manager. Auto-load on gcloud/bq CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
+description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Pub/Sub, Cloud Composer, GCS, Secret Manager. For BigQuery, load bigquery-engineering instead. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
 ---
 
 # GCP Engineering
@@ -64,28 +64,6 @@ def get_secret(project_id: str, secret_id: str, version: str = "latest") -> str:
 - Never log secret values — log only `secret_id` and `version`.
 - Access secrets at startup, not inline in hot paths.
 - Rotate via `gcloud secrets versions add SECRET_ID --data-file=-`.
-
-## BigQuery
-
-```bash
-# Dry-run before any non-trivial query
-bq query --use_legacy_sql=false --dry_run "$(cat query.sql)"
-
-# Create partitioned + clustered table
-bq mk \
-  --table \
-  --time_partitioning_field=event_date \
-  --time_partitioning_type=DAY \
-  --clustering_fields=country,product_id \
-  --schema=schema.json \
-  project:dataset.table
-```
-
-- Partitioning mandatory on tables >1 GB.
-- Clustering mandatory when partition alone is insufficient for cost control.
-- BigLake for GCS-resident Parquet/Avro — avoids ingestion costs when full BQ storage isn't needed.
-- `SEARCH INDEX` on large text columns for log/event needle queries.
-- `JSON` native type for dynamic payloads — not `STRING` with JSON content.
 
 ## Cloud Run — containerization with uv
 
@@ -198,5 +176,4 @@ gcloud storage buckets update gs://bucket \
 - [ ] `gsutil` commands replaced with `gcloud storage`
 - [ ] Docker images use multi-stage build with uv export
 - [ ] Artifact Registry used — not Container Registry
-- [ ] BQ dry-run run and cost accepted before production query
 - [ ] Secrets via Secret Manager — not env vars with raw values

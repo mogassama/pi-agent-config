@@ -1,0 +1,6 @@
+{
+  "name": "pi-diff-review",
+  "version": "1.0.0",
+  "description": "Send the current git diff to the agent for code review",
+  "private": true
+}

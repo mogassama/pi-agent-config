@@ -45,6 +45,7 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 - `python-engineering`
 - `airflow-engineering`
 - `gcp-engineering`
+- `bigquery-engineering`
 - `dataeng-architecture`
 - `dbt-engineering`
 - `code-review`
@@ -88,7 +89,7 @@ Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when
 | **scout** | Pre-change recon ("how does X work?"); finding all usages; cross-file data flow. Haiku model — never upgrade (50-200 calls/session, 60-80% of cost if misconfigured). Read-only. | Writing/editing files; decisions; operator-facing answers |
 | **planner** | Multi-file impl; 3+ services; non-trivial refactors. Reads and plans — never edits. One-step-per-pass granularity. Always followed by orchestrator review before worker handoff. | Executing plans; operator confirmation steps |
 | **worker** | Implementing planner-approved plans; mechanical spec; bulk file operations. Runs validation, escalates ambiguity to orchestrator. | Before a planner plan exists |
-| **reviewer** | Code >50 lines; PRs/diffs; multi-angle review (run in parallel with different focus areas). Reviews against task, plan, tests, edge cases, simplicity. | Single-line edits; conversational answers |
+| **reviewer** | Code >50 lines; PRs/diffs; multi-angle review (run in parallel with different focus areas). Reviews against task, plan, tests, edge cases, simplicity. Run `/diff-review` for code review on commits and PRs. Run `/bq-cost` before approving any SQL query touching a partitioned table or returning an unbounded result set. | Single-line edits; conversational answers |
 | **oracle** | Architectural forks; before destructive ops (schema migration, data deletion, IAM changes); high cost-of-wrong. Challenges assumptions, never edits. Max 1-3 calls/session. | Inheriting project context (`inheritProjectContext: false`); routine implementation |
 
 **Handle inline — never delegate:** conversational answers, single-line edits, reading one file, coordinating subagent results (orchestrator's job), the decision to delegate itself.
