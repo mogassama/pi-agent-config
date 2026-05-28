@@ -37,7 +37,7 @@ description: Load for git workflow tasks — security audit, staging, commit dra
 - No trailing period
 - ≤72 characters
 
-**Body:** explain *why*, not *what* — the diff already shows what changed.
+**Body:** explain *why*, not *what* — the diff already shows what changed. Use bullet points.
 
 **Footer:** `BREAKING CHANGE:`, `Refs: TICKET-123`, `Co-authored-by:`.
 
@@ -159,18 +159,27 @@ Run `git log --oneline -1 2>&1`. If no commits exist:
    - Correct type from the enforced list
    - Scope if relevant
    - Subject: imperative, lowercase, ≤72 chars, no trailing period
-   - Body if the change is non-obvious: *why*, not *what*
+   - Body if the change is non-obvious: bullet points explaining *why*, not *what*
+3. Display using **exactly** this format — no preamble, no explanation, no alternatives:
+
+```
+feat(dag): add daily revenue aggregation pipeline
+
+- extract retry logic into decorator
+- add partition filter on stg_orders
+
+y/n/edit?
+```
 
 ### Phase 3 — Review & execution
 
-1. Display commit message.
-2. Ask: "Validate this commit? ('y' to commit and push, 'n' to abort, or edit message)"
-3. If confirmed:
+1. Prompt is exactly `y/n/edit?` — one line, nothing else.
+2. If confirmed:
    ```bash
    git commit -m "<msg>"
    git push -u origin HEAD
    ```
-4. Return: `[hash] pushed to [branch]`.
+3. Return: `[hash] pushed to [branch]` — one line, nothing else.
 
 ---
 
