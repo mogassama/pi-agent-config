@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.76.0",
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-sonnet-4-6",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
   "activeFooter": "pi-powerline-footer",
   "packages": [
     "npm:pi-subagents",
