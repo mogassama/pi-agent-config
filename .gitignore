@@ -9,6 +9,8 @@ logs/
 tmp/
 .cache/
 run-history.jsonl
+extensions/pi-session-journal/
+journal.md
 
 # Local settings
 
@@ -28,3 +30,5 @@ graphify-out/.graphify_analysis.json
 graphify-out/.graphify_root
 *.log
 *.bak
+
+

@@ -54,6 +54,10 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 - `git-collaboration`
 - `technical-writing`
 - `graphify`
+- `grill-me`
+- `diagnose`
+- `tdd`
+- `improve-codebase-architecture`
 
 If multiple are relevant, load them all — they're additive.
 

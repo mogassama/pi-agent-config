@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.74.0",
+  "lastChangelogVersion": "0.76.0",
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-4-6",
   "activeFooter": "pi-powerline-footer",
@@ -11,18 +11,19 @@
   "subagents": {
     "agentOverrides": {
       "planner": {
-        "model": "anthropic/claude-sonnet-4-6",
+        "model": "openai-codex/gpt-5.5",
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
           "gcp-engineering",
           "dbt-engineering",
-          "iac-terraform"
+          "iac-terraform",
+          "improve-codebase-architecture"
         ],
         "inheritProjectContext": true
       },
       "worker": {
-        "model": "anthropic/claude-sonnet-4-6",
+        "model": "openai-codex/gpt-5.5",
         "thinking": "medium",
         "skills": [
           "python-engineering",
@@ -32,12 +33,14 @@
           "iac-terraform",
           "sql-engineering",
           "gcp-engineering",
-          "bigquery-engineering"
+          "bigquery-engineering",
+          "tdd",
+          "diagnose"
         ],
         "inheritProjectContext": true
       },
       "reviewer": {
-        "model": "anthropic/claude-sonnet-4-6",
+        "model": "openai-codex/gpt-5.5",
         "thinking": "medium",
         "skills": [
           "code-review",
@@ -48,12 +51,13 @@
           "iac-terraform",
           "technical-writing",
           "airflow-engineering",
-          "gcp-engineering"
+          "gcp-engineering",
+          "diagnose"
         ],
         "inheritProjectContext": true
       },
       "oracle": {
-        "model": "anthropic/claude-sonnet-4-6",
+        "model": "openai-codex/gpt-5.5",
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -63,7 +67,8 @@
         "inheritProjectContext": false
       },
       "scout": {
-        "model": "anthropic/claude-haiku-4-5"
+        "model": "openai-codex/gpt-5.5",
+        "thinking": "low"
       }
     }
   },
