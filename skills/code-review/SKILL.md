@@ -1,6 +1,10 @@
 ---
 name: code-review
-description: Load for auditing existing code — Python, SQL, Terraform, GCP configs. Produces structured findings with severity, line references, and verdict. Auto-load on review requests, PR analysis, or "check this" tasks over existing files.
+description: >-
+  Load for auditing existing code — Python, SQL, Terraform, GCP configs.
+  Produces structured findings with severity, line references, and verdict.
+  Auto-load on review requests, PR analysis, or "check this" tasks over
+  existing files.
 ---
 
 # Code Review
@@ -31,7 +35,20 @@ sqlfluff lint --dialect bigquery {file}
 bq query --dry_run --use_legacy_sql=false "$(cat {file})"
 ```
 
-## Step 2 — Severity matrix
+## Step 2 — Context map (unfamiliar code only)
+
+If the file or module is unfamiliar, map it before reviewing. Skip if the
+scope is already clear.
+
+Go up a layer of abstraction. Using the project's domain vocabulary, produce:
+
+- A map of all modules that call or are called by this file
+- The role this module plays in the broader pipeline or system
+- Any non-obvious invariants or contracts visible from callers
+
+One paragraph max. This is orientation, not documentation.
+
+## Step 3 — Severity matrix
 
 | Level | Criteria | Examples |
 |---|---|---|
@@ -39,7 +56,7 @@ bq query --dry_run --use_legacy_sql=false "$(cat {file})"
 | **MEDIUM** | Silent failure risk, maintainability debt, or policy violation | `print()` or `logging` instead of Loguru, missing type hints on public functions, `WRITE_APPEND` without dedup, `SELECT *` |
 | **LOW** | Naming, structure, or minor clarity issues ruff/sqlfluff cannot auto-fix | Missing docstring on non-obvious public function, CTE that should be extracted |
 
-## Step 3 — Checklists by domain
+## Step 4 — Checklists by domain
 
 ### Security & identity
 
@@ -94,7 +111,7 @@ Rules: see gcp-engineering skill. Severity assignment:
 - Cloud Function with no max-instances limit → **MEDIUM**
 - BigQuery dataset with no expiration on staging tables → **LOW**
 
-## Step 4 — Output format
+## Step 5 — Output format
 
 ```markdown
 ## Review: {file_path}
