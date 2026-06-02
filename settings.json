@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.76.0",
+  "lastChangelogVersion": "0.78.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "activeFooter": "pi-powerline-footer",
@@ -40,7 +40,7 @@
         "inheritProjectContext": true
       },
       "reviewer": {
-        "model": "openai-codex/gpt-5.5",
+        "model": "anthropic/claude-sonnet-4-6",
         "thinking": "medium",
         "skills": [
           "code-review",
@@ -57,7 +57,7 @@
         "inheritProjectContext": true
       },
       "oracle": {
-        "model": "openai-codex/gpt-5.5",
+        "model": "gemini/gemini-3.1-pro",
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -67,11 +67,11 @@
         "inheritProjectContext": false
       },
       "scout": {
-        "model": "openai-codex/gpt-5.5",
-        "thinking": "low"
+        "model": "gemini/gemini-3.1-flash-lite",
+        "thinking": "none"
       }
     }
   },
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "low",
   "powerline": "default"
 }
