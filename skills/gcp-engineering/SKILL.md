@@ -3,11 +3,6 @@ name: gcp-engineering
 description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Dataflow / Apache Beam, Pub/Sub, Cloud Composer, GCS, Secret Manager, cost and quota control. For BigQuery, load bigquery-engineering instead. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
 ---
 
----
-name: gcp-engineering
-description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Dataflow / Apache Beam, Pub/Sub, Cloud Composer, GCS, Secret Manager, cost and quota control. For BigQuery, load bigquery-engineering instead. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
----
-
 # GCP Engineering
 
 ## Non-negotiable defaults

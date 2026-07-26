@@ -12,10 +12,14 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 ├── settings.json                    # Provider, model, subagent overrides
 ├── extensions/
 │   ├── bash-guard/                  # Confirmation on destructive commands
-│   └── graphify-context.ts          # Injects GRAPH_REPORT.md at session start
+│   ├── graphify-context.ts          # Injects GRAPH_REPORT.md at session start
+│   ├── pi-bq-cost-sentinel/         # /bq-cost — BQ query cost gate
+│   ├── pi-diff-review/              # /diff-review — review commits and PRs
+│   └── powerline-footer/            # Status footer
 ├── skills/
 │   ├── python-engineering/SKILL.md
 │   ├── sql-engineering/SKILL.md
+│   ├── bigquery-engineering/SKILL.md
 │   ├── code-review/SKILL.md
 │   ├── data-quality/SKILL.md
 │   ├── gcp-engineering/SKILL.md
@@ -25,7 +29,11 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 │   ├── iac-terraform/SKILL.md
 │   ├── git-collaboration/SKILL.md
 │   ├── technical-writing/SKILL.md
-│   └── graphify/SKILL.md
+│   ├── graphify/SKILL.md
+│   ├── diagnose/SKILL.md
+│   ├── tdd/SKILL.md
+│   ├── grill-me/SKILL.md
+│   └── improve-codebase-architecture/SKILL.md
 └── prompts/
     ├── bq-triage.md                 # /bq-triage
     ├── debug.md                     # /debug
@@ -77,7 +85,8 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 | Skill | Auto-load triggers |
 |---|---|
 | `python-engineering` | `.py` files, `pyproject.toml`, test writing, package structure |
-| `sql-engineering` | `.sql` files, schema design, BQ cost/performance |
+| `sql-engineering` | `.sql` files, SQL conventions, Postgres specifics |
+| `bigquery-engineering` | BigQuery SQL, partitioning, clustering, MERGE, cost control, `bq` CLI |
 | `code-review` | Review requests, PR analysis, "check this" tasks |
 | `data-quality` | dbt model creation, ingestion pipelines, BQ table validation |
 | `gcp-engineering` | `gcloud`/`bq` CLI, IAM, GCP service configuration |
@@ -85,11 +94,17 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 | `dbt-engineering` | `.sql` dbt models, `schema.yml`, `dbt_project.yml`, dbt commands |
 | `airflow-engineering` | `dags/` folder, DAG design, scheduling, Composer |
 | `iac-terraform` | `.tf` files, terraform commands, GCP infrastructure provisioning |
-| `git-collaboration` | Git workflow, commit, push, dotfiles drift check |
+| `git-collaboration` | Git workflow, commit, push, config repo consistency check |
 | `technical-writing` | README, ADR, runbook, API docs, inline comments |
 | `graphify` | Codebase analysis, knowledge graph, dependency mapping |
+| `diagnose` | Bug reports, "broken / failing / throwing", performance regressions |
+| `tdd` | Test-first development, red-green-refactor, integration tests |
+| `grill-me` | Stress-testing a plan or design — "grill me", "challenge mon approche" |
+| `improve-codebase-architecture` | Refactoring, hidden coupling, "ball of mud", making a codebase testable |
 
-Skills > ~300 lines risk slowing context load. Current heaviest: `dbt-engineering`. Review if it grows further.
+Skills > ~300 lines risk slowing context load. Over the threshold today: `graphify` (1212), `bigquery-engineering` (446). `graphify` is 4x the threshold — split or trim.
+
+Orchestrator-only skills (`git-collaboration`, `graphify`, `grill-me`) are invoked with `/skill:<name>` from the main session and are intentionally absent from every sub-agent loadout in `settings.json`.
 
 ## Prompt templates
 
