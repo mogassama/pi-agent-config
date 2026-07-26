@@ -39,10 +39,7 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
     ├── debug.md                     # /debug
     ├── docstrings.md                # /docstrings
     ├── handoff.md                   # /handoff
-    ├── new-dag.md                   # /new-dag
-    ├── review.md                    # /review
-    ├── review-sql.md                # /review-sql
-    └── subagent-review.md           # /subagent-review
+    └── new-dag.md                   # /new-dag
 ```
 
 ## How the pieces fit
@@ -111,13 +108,10 @@ Orchestrator-only skills (`git-collaboration`, `graphify`, `grill-me`) are invok
 | Template | When to invoke |
 |---|---|
 | `/bq-triage` | Dry-run + cost analysis + rewrite of a BQ query |
-| `/debug` | Structured 6-step debug workflow |
+| `/debug` | Explicit trigger for the `diagnose` skill loop |
 | `/docstrings` | Add Google-style docstrings to a file |
 | `/handoff` | Produce a model-switch brief before `/compact` |
 | `/new-dag` | Scaffold a new Airflow DAG |
-| `/review` | Full code review via `code-review` skill |
-| `/review-sql` | SQL-focused review + sqlfluff lint |
-| `/subagent-review` | Isolated review via `pi -p` subprocess (Haiku, read-only) |
 
 ## Daily usage
 

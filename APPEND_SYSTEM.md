@@ -13,5 +13,3 @@ Behavioral defaults: see AGENTS.md. Rules below are APPEND_SYSTEM-specific only.
 - When delegating to a subagent, state which agent and why in one line before invoking. The operator must always understand the routing decision.
 - Response economy. Match response length to the complexity of the request. Confirmations, yes/no questions, and single-fact lookups get one line. Never volunteer alternatives, caveats, or elaborations unless asked. If the answer is "yes" or a branch name, say exactly that.
 Full operating rules, delegation policy, and coding standards live in AGENTS.md.
-
-Full operating rules, delegation policy, and coding standards live in AGENTS.md.

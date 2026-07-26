@@ -99,6 +99,18 @@ uv run pytest --tb=short
 
 ---
 
+## Escalade
+
+La liste d'hypothèses de l'étape 3 est **close**. Quand elle est épuisée sans
+confirmation, s'arrêter et remonter à l'opérateur : ce qui a été écarté, ce qui a été
+observé, et ce qui manque pour aller plus loin (contexte, accès, données).
+
+Ne jamais inventer une hypothèse supplémentaire après coup. Une liste qui s'allonge en
+cours de route est le signe que le signal reproductible de l'étape 1 est trop faible —
+c'est là qu'il faut revenir, pas en aval.
+
+---
+
 ## Post-mortem
 
 Une fois le fix validé, poser la question : qu'est-ce qui aurait empêché ce bug ?
@@ -112,6 +124,15 @@ Une fois le fix validé, poser la question : qu'est-ce qui aurait empêché ce b
 ---
 
 ## Contexte data engineering
+
+**Ordre de triage — épuiser avant toute hypothèse de logique métier.** Sur un pipeline,
+la cause est presque toujours dans cette liste, et dans cet ordre :
+
+1. **Schéma** — types de colonnes, nullabilité, présence
+2. **Temps et fuseaux** — UTC vs local, naïf vs aware, bornes de partition
+3. **Volume** — le test tournait sur 10 lignes, la prod en a 10 millions
+4. **Permissions** — IAM, accès dataset, identité de service
+5. **Logique** — seulement une fois les quatre premiers écartés
 
 Signaux spécifiques à surveiller selon le domaine :
 
@@ -132,3 +153,17 @@ Signaux spécifiques à surveiller selon le domaine :
 **Python pipelines**
 - Memory leak : `tracemalloc` ou profiler sur le batch le plus large
 - Performance régression : comparer avec `cProfile` avant/après
+
+---
+
+## Anti-patterns — jamais
+
+- **Envelopper l'appel qui échoue dans un `try/except`.** Ça ne corrige rien, ça masque.
+- **Semer des `print` / `logger.debug` partout et appeler ça une investigation.** Une
+  mesure ciblée vaut mieux que cinq traces dispersées.
+- **Refactorer « pour la lisibilité » pendant un diagnostic.** Deux changements
+  simultanés, et on ne sait plus lequel a corrigé — ou aggravé.
+- **Proposer un fix sans avoir confirmé l'hypothèse.** « Essaie de changer X » est bon
+  pour un forum, pas ici.
+- **Élargir le fix au passage.** Le plus petit changement qui traite la cause racine
+  confirmée. Les problèmes voisins repérés en chemin sont signalés, pas corrigés.
