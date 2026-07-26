@@ -32,3 +32,4 @@ graphify-out/.graphify_root
 *.bak
 
 
+.pi/

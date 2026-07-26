@@ -1,6 +1,11 @@
 ---
 name: gcp-engineering
-description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Pub/Sub, Cloud Composer, GCS, Secret Manager. For BigQuery, load bigquery-engineering instead. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
+description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Dataflow / Apache Beam, Pub/Sub, Cloud Composer, GCS, Secret Manager, cost and quota control. For BigQuery, load bigquery-engineering instead. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
+---
+
+---
+name: gcp-engineering
+description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Dataflow / Apache Beam, Pub/Sub, Cloud Composer, GCS, Secret Manager, cost and quota control. For BigQuery, load bigquery-engineering instead. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
 ---
 
 # GCP Engineering
@@ -103,6 +108,34 @@ gcloud run jobs create JOB_NAME \
   --set-env-vars=GOOGLE_CLOUD_PROJECT=PROJECT
 ```
 
+## Dataflow / Apache Beam
+
+- **Flex Templates for production.** Classic templates are legacy — new pipelines are Flex.
+- **Batch vs streaming is decided upfront.** Switching later means rewriting windowing and state handling. It is not a runtime flag.
+- **Windowing:** fixed for periodic aggregation, sliding for moving averages, session for user-activity grouping.
+- **Watermarks and late data are the part that bites.** `withAllowedLateness` and trigger configuration are deliberate choices — never left implicit.
+- **Streaming Engine** on streaming jobs: moves shuffle and state off the workers.
+- **`--max-workers` is mandatory in production.** No worker ceiling means no bill ceiling. `--num-workers` is a floor, autoscaling does the rest.
+- **`DirectRunner` does not validate a pipeline.** It misses serialization and fusion behaviour. A staging run on sampled data is the only real validation.
+- **Stop streaming jobs with `drain`, not `cancel`.** Drain finishes in-flight windows; cancel drops them. Cancel only when data loss is acceptable.
+- Workers pinned to the same region as sources and sinks — cross-region worker traffic is billed.
+
+```bash
+# Run a Flex Template job
+gcloud dataflow flex-template run JOB_NAME \
+  --template-file-gcs-location=gs://BUCKET/templates/TEMPLATE.json \
+  --region=europe-west1 \
+  --service-account-email=SA_EMAIL \
+  --max-workers=10 \
+  --parameters=input=INPUT,output=OUTPUT
+
+# Stop a streaming job cleanly
+gcloud dataflow jobs drain JOB_ID --region=europe-west1
+```
+
+> Machine type families and Runner v2 defaults move between SDK releases. Check the
+> current Dataflow docs before pinning a machine type — do not pin one from memory.
+
 ## Pub/Sub
 
 ```bash
@@ -165,6 +198,20 @@ gcloud storage buckets update gs://bucket \
 - Composer infra changes via `gcloud composer environments update` only — never manual console edits.
 - DAG authoring rules in `airflow-engineering` skill — not here.
 
+## Cost & quota awareness
+
+- **BigQuery cost model is not here.** Slots vs on-demand, bytes-scanned billing and `INFORMATION_SCHEMA` cost monitoring live in `bigquery-engineering`. Not duplicated.
+- **Egress is the silent killer.** Cross-region and out-of-GCP egress is billed. Keeping buckets, datasets and workers in `europe-west1` is a cost decision, not only a latency one.
+- **Storage class drives GCS cost:** Standard for hot, Nearline for ~monthly access, Coldline for ~quarterly, Archive for compliance retention. Lifecycle rules do the tiering — see Cloud Storage above.
+- **Budget alert on every project.** Not optional, including sandbox projects.
+- **Quotas fail late and loudly.** The ones that actually bite: regional CPU quota and in-use external IPs when Dataflow autoscales, concurrent Cloud Run job executions, Pub/Sub subscriber throughput. Check before scaling, not after the job dies.
+
+```bash
+gcloud billing budgets list --billing-account=BILLING_ACCOUNT_ID
+gcloud compute regions describe europe-west1 \
+  --format="table(quotas.metric,quotas.limit,quotas.usage)"
+```
+
 ## Review checklist
 
 - [ ] No service account JSON keys in code, config, or environment variables
@@ -177,3 +224,6 @@ gcloud storage buckets update gs://bucket \
 - [ ] Docker images use multi-stage build with uv export
 - [ ] Artifact Registry used — not Container Registry
 - [ ] Secrets via Secret Manager — not env vars with raw values
+- [ ] Dataflow jobs set `--max-workers` — no unbounded autoscaling in production
+- [ ] Streaming pipelines stopped with `drain` unless data loss is explicitly accepted
+- [ ] Budget alert configured on the project
