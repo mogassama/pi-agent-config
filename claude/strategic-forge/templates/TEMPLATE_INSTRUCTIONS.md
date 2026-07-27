@@ -28,19 +28,39 @@ implicite n'existe pas.]
 Un critère de validation est observable : une commande qui passe, un fichier qui existe,
 une assertion qui tient. « Implémenté correctement » n'est pas un critère.
 
+Un critère qui **ne peut pas être évalué** — jeu de données absent, credential manquant,
+outil non installé — est noté `unavailable: <raison>` dans la sortie, et l'item continue.
+Une absence de prérequis n'est jamais une condition d'arrêt.
+
+## Périmètre de décision de pi
+
+Ce bundle donne une **direction**, pas une spécification exhaustive. Il est muet sur
+l'écrasante majorité des détails, et c'est son fonctionnement nominal.
+
+**Trois cas. Un seul s'arrête.**
+
+1. **Le bundle tranche** — stack, service, structure de répertoires, convention,
+   anti-pattern, décision de `DESIGN.md`. Appliquer. Ne pas rediscuter, ne pas
+   reformuler, ne pas résumer.
+2. **Le bundle est muet** — cas par défaut. La skill compétente tranche, sous les
+   contraintes posées par le bundle. Continuer, consigner la décision dans le corps du
+   commit (le *pourquoi*, pas le *quoi*), ne rien demander.
+3. **Le repo contredit le bundle** — seul cas d'arrêt. Émettre une note de divergence
+   (état observé, état attendu, options, aucune décision) et la porter **à l'opérateur**.
+   Ne pas patcher l'architecture en cours de route, ne pas adopter silencieusement la
+   version du repo.
+
+Aucun quatrième cas. Les `Hard limits` globales de pi restent la seule autre liste
+d'arrêt ; elle est complète. Un blanc dans le bundle, une fixture absente, une étape non
+testable, un nommage ambigu : rien de tout cela n'arrête l'exécution.
+
+Le seul champ de ce bundle que pi peut écrire est la ligne `Statut` d'une décision de
+`DESIGN.md`.
+
 ## Done
 Session terminée quand :
 - [ ] [Critère 1]
 - [ ] [Critère 2]
-
-## Périmètre de décision de pi
-
-pi exécute dans une architecture déjà tranchée. Il ne choisit ni la stack, ni les
-services, ni la structure de répertoires, ni les conventions.
-
-Si le repo contredit `ARCHITECTURE.md`, ou si un item du backlog est infaisable dans
-l'architecture décrite : **s'arrêter**, formuler la divergence (constat + options, pas
-de décision), escalader. Ne jamais réviser l'architecture en cours de route.
 
 ## Commande de lancement
 ```

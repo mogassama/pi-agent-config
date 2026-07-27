@@ -14,9 +14,13 @@
         "model": "anthropic/claude-sonnet-5",
         "thinking": "high",
         "skills": [
-          "gcp-engineering",
+          "dataeng-architecture",
+          "gcp-dataeng-architecture",
+          "python-engineering",
+          "airflow-engineering",
           "dbt-engineering",
-          "iac-terraform"
+          "iac-terraform",
+          "tdd"
         ],
         "inheritProjectContext": true
       },
@@ -34,7 +38,8 @@
           "bigquery-engineering",
           "tdd",
           "spark-engineering",
-          "diagnose"
+          "diagnose",
+          "technical-writing"
         ],
         "inheritProjectContext": true
       },
@@ -55,7 +60,8 @@
           "airflow-engineering",
           "spark-engineering",
           "gcp-engineering",
-          "diagnose"
+          "dbt-engineering",
+          "tdd"
         ],
         "inheritProjectContext": true
       },
@@ -64,8 +70,10 @@
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
-          "iac-terraform",
-          "gcp-engineering"
+          "gcp-dataeng-architecture",
+          "improve-codebase-architecture",
+          "gcp-engineering",
+          "iac-terraform"
         ],
         "inheritProjectContext": false
       },

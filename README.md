@@ -25,6 +25,7 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 │   ├── data-quality/SKILL.md
 │   ├── gcp-engineering/SKILL.md
 │   ├── dataeng-architecture/SKILL.md
+│   ├── gcp-dataeng-architecture/SKILL.md
 │   ├── dbt-engineering/SKILL.md
 │   ├── airflow-engineering/SKILL.md
 │   ├── iac-terraform/SKILL.md
@@ -35,17 +36,25 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 │   ├── tdd/SKILL.md
 │   ├── grill-me/SKILL.md
 │   └── improve-codebase-architecture/SKILL.md
-└── prompts/
-    ├── bq-triage.md                 # /bq-triage
-    ├── debug.md                     # /debug
-    ├── docstrings.md                # /docstrings
-    ├── handoff.md                   # /handoff
-    └── new-dag.md                   # /new-dag
+├── prompts/
+│   ├── bq-triage.md                 # /bq-triage
+│   ├── debug.md                     # /debug
+│   ├── docstrings.md                # /docstrings
+│   ├── handoff.md                   # /handoff
+│   └── new-dag.md                   # /new-dag
+└── claude/                          # in .piignore — never loaded by pi
+    └── strategic-forge/             # master of the Claude.ai skill
+        ├── SKILL.md
+        ├── PROJECT_INSTRUCTIONS.md
+        └── templates/               # the four bundle templates
 ```
+
+`claude/` holds design-time assets for Claude.ai, not runtime config for pi. It is the
+master copy: edit here, then re-upload to Claude.ai. Never the other way round.
 
 ## How the pieces fit
 
-Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (v0.21.1, Nicobailon).
+Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (Nicobailon). Pinned reading: whatever `npm ls pi-subagents` reports — the upstream repo is at v0.37.0 and the override schema has moved since v0.21.
 
 | Layer | What it is | Cost | When to use |
 |---|---|---|---|
@@ -61,13 +70,18 @@ Configured in `settings.json` under `subagents.agentOverrides`:
 
 | Agent | Provider/Model | Fallback | Thinking | Skills |
 |---|---|---|---|---|
-| `planner` | `anthropic/claude-sonnet-5` | — | high | gcp-engineering, dbt-engineering, iac-terraform |
-| `worker` | `anthropic/claude-opus-5` | — | high | python-engineering, airflow-engineering, dbt-engineering, data-quality, iac-terraform, sql-engineering, gcp-engineering, bigquery-engineering, tdd, spark-engineering, diagnose |
-| `reviewer` | `openai-codex/gpt-5.6-sol` | `anthropic/claude-sonnet-5` | high | code-review, python-engineering, sql-engineering, bigquery-engineering, data-quality, iac-terraform, technical-writing, airflow-engineering, spark-engineering, gcp-engineering, diagnose |
-| `oracle` | `gemini/gemini-3.1-pro` | — | high | dataeng-architecture, iac-terraform, gcp-engineering |
+| `planner` | `anthropic/claude-sonnet-5` | — | high | dataeng-architecture, gcp-dataeng-architecture, python-engineering, airflow-engineering, dbt-engineering, iac-terraform, tdd |
+| `worker` | `anthropic/claude-opus-5` | — | high | python-engineering, airflow-engineering, dbt-engineering, data-quality, iac-terraform, sql-engineering, gcp-engineering, bigquery-engineering, tdd, spark-engineering, diagnose, technical-writing |
+| `reviewer` | `openai-codex/gpt-5.6-sol` | `anthropic/claude-sonnet-5` | high | code-review, python-engineering, sql-engineering, bigquery-engineering, data-quality, iac-terraform, technical-writing, airflow-engineering, spark-engineering, gcp-engineering, dbt-engineering, tdd |
+| `oracle` | `gemini/gemini-3.1-pro` | — | high | dataeng-architecture, gcp-dataeng-architecture, improve-codebase-architecture, gcp-engineering, iac-terraform |
 | `scout` | `openai-codex/gpt-5.6-luna` | `gemini/gemini-3.1-flash-lite` | off | — |
 
-Scout calibration: called 50-200x per session — never upgrade its model.
+Scout calibration: called 50-200x per session — never upgrade its model, never give it skills.
+
+All builtins run `inheritSkills: false`. A skill absent from an agent's array does not
+exist for that agent. What the array injects is name + description + path, not the body —
+the body is read on demand, so a loadout entry costs one description line at startup.
+Loadout criteria per agent live in `AGENTS.md`, section "Skills available (global)".
 
 ## Extensions
 
@@ -75,6 +89,9 @@ Scout calibration: called 50-200x per session — never upgrade its model.
 |---|---|
 | `bash-guard/` | Interactive confirmation on destructive commands (`rm -rf`, `bq rm`, `DROP TABLE`, `DELETE` without WHERE, `gsutil rm -r`) |
 | `graphify-context.ts` | Injects `graphify-out/GRAPH_REPORT.md` into session context at startup if present |
+| `pi-bq-cost-sentinel/` | `/bq-cost` — dry-run cost gate before approving a BigQuery query |
+| `pi-diff-review/` | `/diff-review` — review commits and PRs |
+| `powerline-footer/` | Status footer |
 
 ## Skills — load triggers
 
@@ -89,7 +106,8 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 | `code-review` | Review requests, PR analysis, "check this" tasks |
 | `data-quality` | dbt model creation, ingestion pipelines, BQ table validation |
 | `gcp-engineering` | `gcloud`/`bq` CLI, IAM, GCP service configuration |
-| `dataeng-architecture` | Architecture questions, service comparisons, pipeline design |
+| `dataeng-architecture` | Architecture questions, sizing, pipeline design — platform-agnostic decision layer |
+| `gcp-dataeng-architecture` | GCP service selection, ingestion patterns, BQ recovery and cost thresholds |
 | `dbt-engineering` | `.sql` dbt models, `schema.yml`, `dbt_project.yml`, dbt commands |
 | `airflow-engineering` | `dags/` folder, DAG design, scheduling, Composer |
 | `iac-terraform` | `.tf` files, terraform commands, GCP infrastructure provisioning |
@@ -101,7 +119,10 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 | `grill-me` | Stress-testing a plan or design — "grill me", "challenge mon approche" |
 | `improve-codebase-architecture` | Refactoring, hidden coupling, "ball of mud", making a codebase testable |
 
-Skills > ~300 lines risk slowing context load. Over the threshold today: `graphify` (1212), `spark-engineering` (456), `bigquery-engineering` (446). `graphify` is 4x the threshold — split or trim.
+Skill bodies are read on demand, not injected at startup — the ~300 line threshold is a
+*read cost*, paid by whichever agent opens the file, not a per-session tax. Over the
+threshold today: `graphify` (1212) and `bigquery-engineering` (446). `graphify` is 4x the
+threshold — split or trim.
 
 Orchestrator-only skills (`git-collaboration`, `graphify`, `grill-me`) are invoked with `/skill:<name>` from the main session and are intentionally absent from every sub-agent loadout in `settings.json`.
 

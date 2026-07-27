@@ -59,7 +59,7 @@ uv run pytest
 
 ## Architecture
 
-[One Mermaid diagram or a 3-5 line description of the data flow. Not a full design doc — that's DESIGN.md.]
+[One Mermaid diagram or a 3-5 line description of the data flow. Not a full design doc — link to it if the project has one.]
 
 ## Operations
 

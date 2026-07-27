@@ -31,9 +31,14 @@ ici en une ligne, puis on passe à autre chose.
 **Alternatives rejetées :** [option + raison du rejet, une ligne chacune]
 **Statut :** `To implement` | `Implemented` | `Roadmap`
 
-> Une section par décision structurante issue du débat. Une décision sans alternative
-> rejetée n'est pas une décision : c'est un défaut de débat. Le statut est mis à jour
-> par pi au fil de l'implémentation — c'est le seul champ du bundle qu'il peut modifier.
+> Une section par décision structurante issue du débat. Une décision présentée sans
+> alternative rejetée signale que le débat n'a pas eu lieu — la rouvrir en session, pas
+> à l'exécution. Le statut est mis à jour par pi au fil de l'implémentation — c'est le
+> seul champ du bundle qu'il peut modifier.
+>
+> **Ce fichier ne couvre que le structurant.** Les décisions d'implémentation prises à
+> l'exécution parce que le bundle était muet ne remontent pas ici : elles sont notées
+> dans le corps du commit. Elles n'ouvrent pas de retour vers Strategic Forge.
 
 ---
 

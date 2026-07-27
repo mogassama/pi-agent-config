@@ -33,7 +33,11 @@ Ces décisions sont tranchées. Elles ne sont pas rediscutées à chaque session
 
 **Frontière Forge ↔ planner pi.** Le board décide de ce qui est cher à annuler et peut être décidé sans lire le code : périmètre, stack, composants d'infra, structure de répertoires, conventions, anti-patterns. Le planner décide de ce qui est cheap à annuler et exige de lire le code : découpage d'un item de backlog en passes worker, fichiers à toucher, ordre d'exécution, stratégie de test. Rien n'est dupliqué entre les deux. Un planner qui reformule l'architecture est un signal que la frontière est cassée.
 
-**Le bundle est figé.** Une fois posé à la racine d'un repo, pi ne redécide, ne reformule et ne résume aucun des quatre fichiers. Seul champ modifiable : le `Statut` d'une décision de `DESIGN.md`. En cas de contradiction entre le repo et `ARCHITECTURE.md` : arrêt, note de divergence, escalade vers l'oracle avec l'extrait embarqué verbatim (l'oracle tourne en `inheritProjectContext: false`).
+**Deux régimes, détectés structurellement.** Présence de `ARCHITECTURE.md` **et** `INSTRUCTIONS.md` à la racine → régime bundle. Sinon → régime libre, où le planner peut trancher l'architecture avec validation opérateur sur les décisions chères. Aucune frontière n'est imposée par retrait de capacité dans `settings.json` : `agentOverrides` est statique, les instructions savent lire le contexte.
+
+**Le bundle est figé, et muet.** Une fois posé à la racine, pi ne redécide, ne reformule et ne résume aucun des quatre fichiers. Seul champ modifiable : le `Statut` d'une décision de `DESIGN.md`. Mais le bundle est une direction, pas une spécification : trois cas, un seul s'arrête. Il tranche → appliquer. Il est muet → la skill tranche sous contraintes, on note, on continue (cas normal). Le repo le contredit → arrêt et question **à l'opérateur**, via l'oracle si arbitrage d'architecture, avec extrait embarqué verbatim (`inheritProjectContext: false`). **Jamais de retour à Strategic Forge en cours d'exécution** — une re-session se décide entre deux sessions pi.
+
+**Une seule liste d'arrêt.** `## Hard limits` de l'`AGENTS.md` global. Un prérequis absent (fixture, dataset, outil, credentials) se note et se dépasse. Un test qui échoue est un signal ; un test qui ne peut pas tourner est un vide.
 
 **Précédence, deux chaînes séparées.**
 Substance projet : bundle > AGENTS.md projet > skills > AGENTS.md global.
@@ -43,7 +47,7 @@ Comportement agent : AGENTS.md global > AGENTS.md projet > skills. Le bundle n'a
 
 **Invariants de cache.** Ordre d'injection stable → variable : `APPEND_SYSTEM.md` → `AGENTS.md` → skills → `CONVENTIONS.md` → `ARCHITECTURE.md` → `DESIGN.md` → `INSTRUCTIONS.md` → graphify report. Aucun timestamp, session ID ou valeur variable en tête d'un fichier de la chaîne.
 
-**Calibrage sub-agents.** Scout sur le modèle le moins cher disponible, jamais upgradé — 50 à 200 appels par session. Oracle : 1 à 3 appels maximum. Planner : granularité « une étape qu'un worker exécute en une passe », et aucune skill de décision d'architecture dans son loadout (`dataeng-architecture`, `improve-codebase-architecture` restent chez l'oracle).
+**Calibrage sub-agents.** Scout sur le modèle le moins cher disponible, jamais upgradé et sans aucune skill — 50 à 200 appels par session. Oracle : 1 à 3 appels maximum, skills de décision uniquement, autosuffisant. Planner : granularité « une étape qu'un worker exécute en une passe », porte la *forme* des artefacts qu'il planifie et la couche de décision d'architecture pour le régime libre — `dataeng-architecture` (agnostique) plus `gcp-dataeng-architecture` (plateforme) ; `improve-codebase-architecture` reste chez l'oracle (design de refactoring, pas décomposition). Les critères de dotation par agent vivent dans `AGENTS.md` — pas ici.
 
 ---
 
@@ -64,8 +68,11 @@ Comportement agent : AGENTS.md global > AGENTS.md projet > skills. Le bundle n'a
 ## Dette connue
 
 À traiter, non résolu à date :
-- `.pi/agent/` imbriqué dans le repo : copie fantôme divergente de la racine, ignorée par `.piignore` donc jamais lue par pi, mais trackée par git. `sql-engineering` y est plus complet qu'à la racine — differ avant suppression.
-- `settings.json` du repo divergent de la config live.
-- `/check-extensions` (skill `git-collaboration`) ne couvre que `extensions/` : aucune détection de drift sur `skills/`, `prompts/`, `AGENTS.md`, `APPEND_SYSTEM.md`, `settings.json`.
-- `README.md` liste 12 skills, le repo en contient 17.
-- `APPEND_SYSTEM.md` se termine par une ligne dupliquée.
+- `settings.json` du repo potentiellement divergent de la config live — aucun mécanisme de vérification.
+- `/check-config` (skill `git-collaboration`) ne couvre ni `prompts/` ni `extensions/`.
+- `skills/graphify/SKILL.md` à 1212 lignes contre un seuil de ~300 annoncé par le README.
+- `skills/sql-engineering/SKILL.md` à 47 lignes, très en dessous des autres skills de domaine — vérifier si la récupération depuis l'ancienne copie fantôme `.pi/agent/` a bien eu lieu avant sa suppression.
+- `skills/diagnose` en français, `prompts/debug.md` en anglais — aucune règle de langue par répertoire.
+- `models-store.json` non tracké, décision `.gitignore` vs commit non prise.
+- La règle « never commit directly to `main` for non-trivial changes » (`skills/git-collaboration`) n'est pas respectée sur ce repo.
+- **Rien de l'édifice n'a été validé par un run réel.** Les deux régimes, la règle en trois cas et le bundle gelé n'ont jamais été confrontés à une session pi complète.

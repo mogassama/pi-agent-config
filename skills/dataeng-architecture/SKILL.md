@@ -1,15 +1,23 @@
 ---
 name: dataeng-architecture
-description: Load for system-level data engineering decisions — service selection, pipeline design, data modeling, idempotency, scalability, and observability on GCP. Auto-load on architecture questions, service comparisons, pipeline design, or "which tool for this?" decisions.
+description: Load for system-level data engineering decisions on any platform — sizing, service selection, pipeline shape, layered modeling, idempotency, observability, and cost posture. Platform-agnostic decision layer. Auto-load on architecture questions, tool comparisons, pipeline design, or "which approach for this?" decisions. For GCP-specific service selection and patterns, also load gcp-dataeng-architecture.
 ---
 
-# Data Engineering Architecture (GCP)
+# Data Engineering Architecture — decision layer
+
+Platform-agnostic. Nothing here names a cloud, a warehouse or a vendor. Load the
+platform skill alongside this one once the platform is known.
 
 ## Philosophy
 
-- **SQL-First.** If BigQuery can do it in SQL, do it there. Avoid Dataflow/Spark unless the logic requires procedural code, multi-source joins in-flight, or streaming windowing.
-- **Lean Pipeline.** Fewer moving parts = fewer failure modes. Native GCP managed services before custom code.
-- **Two options, one verdict.** Never propose a single solution silently. Always present Option A (simple/cheap) and Option B (robust/scalable) with explicit trade-offs, then recommend one with justification.
+- **Push down to the engine.** If the warehouse or query engine can do it in SQL, do it
+  there. Reach for a distributed processing framework only when the logic requires
+  procedural code, multi-source joins in-flight, or streaming windowing.
+- **Lean pipeline.** Fewer moving parts = fewer failure modes. Managed services before
+  custom code, custom code before a new platform component.
+- **Two options, one verdict.** Never propose a single solution silently. Always present
+  Option A (simple/cheap) and Option B (robust/scalable) with explicit trade-offs, then
+  recommend one with justification.
 
 ## Decision framework — V.L.R.
 
@@ -21,62 +29,72 @@ Before proposing any tool or architecture:
 
 These three answers determine the right tool. Document them before recommending anything.
 
-## GCP service selection (2026)
+## Platform confidence — state it
 
-| Job | Default | Escalate to... | Avoid when... |
-|:---|:---|:---|:---|
-| Simple ingestion | Pub/Sub → BQ Subscription | Dataflow | Transformation needed in-flight |
-| Scheduled batch | Cloud Run Jobs + Cloud Scheduler | Composer + Airflow | Single task, no dependencies |
-| Multi-step orchestration | Composer (Airflow 2.x GA) | — | Few tasks → Cloud Run Jobs |
-| Complex ETL (non-SQL logic) | Cloud Run (Python/uv) | Dataflow (Beam) | Pure SQL transformations → stay in BQ |
-| Heavy SQL transforms | BigQuery SQL | Cloud Run | Non-SQL procedural logic required |
-| CDC | Datastream → BQ | Custom connector | Source isn't SQL (MongoDB, etc.) |
-| ML serving | Cloud Run + FastAPI (low volume) | Vertex AI Endpoint | High-concurrency, managed autoscaling needed |
+The platform is an input, not a preference. Once it is fixed, recommend inside it and do
+not propose a migration.
 
-**On Composer/Airflow versions:** Composer 2 with Airflow 2.x is stable GA. Airflow 3 and Composer 3 are in preview as of mid-2026 — verify regional availability before targeting. Do not use preview features in production without explicit operator decision.
+- **Solid ground** (the operator's practice area, or a platform whose current service
+  catalogue and pricing model you can verify): recommend normally.
+- **Thin ground** (a platform known in outline only): say so in one line before the
+  recommendation, keep the advice at the level of patterns rather than named services and
+  SKU-level pricing, and verify anything specific — docs, CLI `--help`, the provider's
+  own reference — before asserting it.
 
-**On BQ Stored Procedures:** Use for simple, self-contained SQL transformations. Avoid for complex ETL — stored procs are hard to test, version, and debug. Prefer Cloud Run Python for anything requiring branching logic, external calls, or unit tests.
+A service selection table invented from memory is the architecture-level version of an
+invented API. Same rule applies: verify or abstain.
+
+## Sizing before selection
+
+Match the tool to the measured volume, not to the largest volume imaginable.
+
+| Volume per run | Reasonable default |
+|:---|:---|
+| < 1 GB | Single-process code, or SQL in the warehouse. No cluster. |
+| 1 GB – 100 GB | Warehouse SQL, or a single well-sized container/VM. |
+| > 100 GB, or a shuffle-heavy join | Distributed processing framework. |
+| Unbounded stream | Streaming runtime with windowing and watermarks. |
+
+Escalating a tier costs operational complexity permanently. Do it on evidence, not on
+anticipated growth.
 
 ## Data modeling — layered architecture
 
-| Layer | Characteristics | Implementation |
+| Layer | Characteristics | Implementation rule |
 |---|---|---|
-| **RAW** | Append-only, no transformation, source fidelity | BigLake if data stays in GCS, partitioned by `_PARTITIONTIME` |
-| **STAGING** | Deduped, type-cast, renamed, cleaned | Idempotent — WRITE_TRUNCATE or MERGE. One source per model. |
-| **MART** | Business logic, denormalized, aggregated | Materialized Views for performance-critical dashboards |
+| **RAW** | Append-only, no transformation, source fidelity | Partitioned by ingestion or event date. Never edited in place. |
+| **STAGING** | Deduped, type-cast, renamed, cleaned | Idempotent — full-partition replace or upsert by key. One source per model. |
+| **MART** | Business logic, denormalized, aggregated | Pre-materialize what dashboards hit repeatedly. |
 
-- Column-level and row-level security enforced in BigQuery — never delegated to the BI tool.
-- Schema evolution via Pydantic models at the ingestion edge — never hardcoded schema in pipeline code.
-
-## Ingestion patterns
-
-| Pattern | Pipeline | When | Trade-off |
-|:---|:---|:---|:---|
-| **1 — Serverless (default)** | `Source → Pub/Sub → BQ Subscription → BQ Raw → BQ SQL Transform` | No in-flight transformation needed; source pushes events; cost sensitivity high | No transformation before BQ write; schema must be stable |
-| **2 — High-scale streaming** | `Source → Pub/Sub → Dataflow (Python/Beam) → BQ (Storage Write API)` | Windowing, sessionization, complex enrichment, or multi-source join before landing | Higher operational complexity; Dataflow cost per worker-hour |
-| **3 — Scheduled batch** | `GCS / API → Cloud Run Job → BQ (WRITE_TRUNCATE / MERGE) → dbt transform` | T+1 batch; source doesn't push; transformation is significant | Requires orchestration (Cloud Scheduler or Composer) |
+- Column-level and row-level security enforced in the warehouse — never delegated to the
+  BI tool.
+- Schema declared and validated at the ingestion edge — never hardcoded mid-pipeline,
+  never auto-detected outside exploration.
 
 ## Idempotency — non-negotiable
 
 Every pipeline task must be safe to run twice without manual cleanup.
 
-- **Partition overwrite:** `WRITE_TRUNCATE` on the target partition. Rerunning replaces, not appends.
-- **Upserts:** `MERGE INTO target USING source ON key WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT`. Always include `source_timestamp` to handle late-arriving data.
-- **Late data:** Define a lookback window (e.g. reprocess last 3 days) rather than relying on event-time exactness.
-- **DAG tasks:** Every Airflow task must be restartable from its own checkpoint. No task should depend on side-effects of a previous failed run.
+- **Partition overwrite:** replace the target partition wholesale. Rerunning replaces,
+  not appends.
+- **Upserts:** merge on a stable business key. Always carry a `source_timestamp` so
+  late-arriving data resolves deterministically.
+- **Late data:** define a lookback window (e.g. reprocess the last 3 days) rather than
+  relying on event-time exactness.
+- **Orchestrated tasks:** every task restartable from its own checkpoint. No task depends
+  on the side-effects of a previous failed run.
 
-## Point-in-time recovery
+Name the mechanism explicitly in the design — "idempotent" without a mechanism is a wish.
 
-BQ Table Snapshots for 7-day recovery:
+## Recovery posture
 
-```sql
-CREATE SNAPSHOT TABLE project.dataset.table_snapshot
-CLONE project.dataset.table
-FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
-OPTIONS (expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 7 DAY));
-```
+Decide these three before the first production run, not after the first incident:
 
-Note: snapshots incur storage costs for the delta between snapshot and current table. Not free — size the retention window accordingly.
+- **Recovery point** — how much data can be lost. Drives snapshot or backup cadence.
+- **Recovery path** — replay from RAW, restore a snapshot, or rebuild from source. One of
+  them must be tested at least once.
+- **Retention cost** — every recovery window has a storage bill. Size the window against
+  it rather than defaulting to the maximum.
 
 ## Observability
 
@@ -84,49 +102,37 @@ Every production pipeline needs:
 
 - **Structured logs** with `run_id`, `source`, `rows_processed`, `duration_ms` at minimum.
 - **Row count assertion** post-load (see `data-quality` skill).
-- **Pub/Sub alert:** `oldest_unacked_message_age > 5 min` → Cloud Monitoring alert.
-- **Cloud Run Job failure:** alert on non-zero exit code via Cloud Monitoring job execution metrics.
-- **BQ slot usage:** monitor `INFORMATION_SCHEMA.JOBS_BY_PROJECT` for runaway queries.
+- **Backlog alert** on any queue or subscription: age of the oldest unprocessed item.
+- **Failure alert** on non-zero exit of any scheduled job.
+- **Spend visibility** on the query or compute layer — a named place to answer "what ran
+  expensive yesterday".
 
-```sql
--- Top 10 most expensive queries last 24h
-SELECT
-  job_id,
-  user_email,
-  total_bytes_processed,
-  ROUND(total_bytes_processed / POW(10, 12) * 6.25, 4) AS estimated_cost_usd,
-  query
-FROM `region-europe-west1`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
-  AND job_type = 'QUERY'
-ORDER BY total_bytes_processed DESC
-LIMIT 10
-```
+## Cost posture
 
-## Cost escalation thresholds
-
-| Signal | Action |
-|---|---|
-| Single query >1 TB scan | Dry-run mandatory, review before production |
-| Daily BQ spend >2x baseline | Investigate `JOBS_BY_PROJECT`, identify offender |
-| Dataflow cost >Cloud Run equivalent | Re-evaluate if Dataflow is justified |
-| Cross-region egress detected | Realign GCS bucket and BQ dataset to same region |
+- Establish a baseline early; alert on a multiple of it, not on an absolute number.
+- A single operation that processes a volume disproportionate to the result it produces
+  is a design problem, not a quota problem.
+- Co-locate storage and compute. Cross-region transfer accumulates silently.
+- Label every resource with owner, environment and cost centre from day one — retrofitting
+  labels onto a live estate is far more expensive than adding them.
 
 ## Anti-patterns
 
-- **Cloud Functions for heavy ETL** — timeout (9 min max), memory limits. Use Cloud Run Jobs.
-- **Hardcoded schema in pipeline code** — use Pydantic at the edge, BQ schema auto-detect only for exploration.
-- **Cross-region storage/compute** — egress costs accumulate silently. Keep everything in `europe-west1`.
-- **No resource labels** — `env`, `team`, `cost_center` on every resource. Use BQ Billing Export to track by label.
-- **Stored procedures for complex logic** — untestable, unversionable. Use Cloud Run Python.
-- **Single pipeline task doing too much** — split at natural checkpoints for restartability.
-- **No dead-letter on Pub/Sub subscriptions** — silent message loss in production.
+- **Scaling tier chosen from anticipated growth** rather than measured volume.
+- **Hardcoded schema mid-pipeline** — validate at the edge instead.
+- **A single task doing too much** — split at natural checkpoints for restartability.
+- **No dead-letter path** on any at-least-once delivery mechanism — silent loss in
+  production.
+- **Storage and compute in different regions** for no stated reason.
+- **Stored procedures or in-database scripting for complex logic** — hard to test,
+  version and debug. Use application code with unit tests.
+- **A new platform component introduced without the problem it solves** stated first.
 
 ## Delivery format (mandatory)
 
 Every architecture recommendation must follow this structure:
 
-1. **Constraints:** Latency target, volume, budget envelope, team size.
-2. **Option A (Simple/Cheap):** Native GCP services, SQL-centric, minimal ops.
-3. **Option B (Robust/Scalable):** More services, Python-centric, higher ops cost.
-4. **Verdict:** One choice with explicit "why" — not "it depends".
+1. **Constraints:** latency target, volume, budget envelope, team size, platform.
+2. **Option A (simple/cheap):** fewest components, push work into the engine, minimal ops.
+3. **Option B (robust/scalable):** more components, more code, higher ops cost.
+4. **Verdict:** one choice with an explicit "why" — not "it depends".

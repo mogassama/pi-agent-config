@@ -50,8 +50,9 @@ Pour chaque flèche : volume attendu, fréquence, et mode de déclenchement.
 ```
 
 Règles :
-- L'arborescence est **complète**. Un `...` dans ce bloc est un défaut de session Forge :
-  le planner comblerait le trou avec une convention arbitraire.
+- Nommer explicitement les répertoires structurants et leur rôle. Éviter les `...` :
+  ils laissent le planner instancier une convention arbitraire. Un répertoire de détail
+  non listé n'est pas un blocage — le planner le crée en cohérence avec ceux qui le sont.
 - Séparation explicite entre logique métier (sans I/O) et adaptateurs (I/O, réseau, stockage).
 - Les répertoires de test miroitent la structure du code.
 
