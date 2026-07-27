@@ -102,6 +102,7 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 - `gcp-engineering`
 - `bigquery-engineering`
 - `dataeng-architecture`
+- `spark-engineering`
 - `dbt-engineering`
 - `code-review`
 - `data-quality`

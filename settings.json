@@ -33,6 +33,7 @@
           "gcp-engineering",
           "bigquery-engineering",
           "tdd",
+          "spark-engineering",
           "diagnose"
         ],
         "inheritProjectContext": true
@@ -52,6 +53,7 @@
           "iac-terraform",
           "technical-writing",
           "airflow-engineering",
+          "spark-engineering",
           "gcp-engineering",
           "diagnose"
         ],
