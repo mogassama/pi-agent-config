@@ -20,6 +20,7 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 │   ├── python-engineering/SKILL.md
 │   ├── sql-engineering/SKILL.md
 │   ├── bigquery-engineering/SKILL.md
+│   ├── spark-engineering/SKILL.md
 │   ├── code-review/SKILL.md
 │   ├── data-quality/SKILL.md
 │   ├── gcp-engineering/SKILL.md
@@ -58,13 +59,13 @@ Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), n
 
 Configured in `settings.json` under `subagents.agentOverrides`:
 
-| Agent | Model | Thinking | Skills |
-|---|---|---|---|
-| `planner` | claude-sonnet-4-6 | high | dataeng-architecture, gcp-engineering, dbt-engineering |
-| `worker` | claude-sonnet-4-6 | medium | python-engineering, airflow-engineering, dbt-engineering |
-| `reviewer` | claude-sonnet-4-6 | medium | code-review, python-engineering, sql-engineering, airflow-engineering, dbt-engineering |
-| `oracle` | claude-sonnet-4-6 | high | dataeng-architecture |
-| `scout` | claude-haiku-4-5 | — | — |
+| Agent | Provider/Model | Fallback | Thinking | Skills |
+|---|---|---|---|---|
+| `planner` | `anthropic/claude-sonnet-5` | — | high | gcp-engineering, dbt-engineering, iac-terraform |
+| `worker` | `anthropic/claude-opus-5` | — | high | python-engineering, airflow-engineering, dbt-engineering, data-quality, iac-terraform, sql-engineering, gcp-engineering, bigquery-engineering, tdd, spark-engineering, diagnose |
+| `reviewer` | `openai-codex/gpt-5.6-sol` | `anthropic/claude-sonnet-5` | high | code-review, python-engineering, sql-engineering, bigquery-engineering, data-quality, iac-terraform, technical-writing, airflow-engineering, spark-engineering, gcp-engineering, diagnose |
+| `oracle` | `gemini/gemini-3.1-pro` | — | high | dataeng-architecture, iac-terraform, gcp-engineering |
+| `scout` | `openai-codex/gpt-5.6-luna` | `gemini/gemini-3.1-flash-lite` | off | — |
 
 Scout calibration: called 50-200x per session — never upgrade its model.
 
@@ -84,6 +85,7 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 | `python-engineering` | `.py` files, `pyproject.toml`, test writing, package structure |
 | `sql-engineering` | `.sql` files, SQL conventions, Postgres specifics |
 | `bigquery-engineering` | BigQuery SQL, partitioning, clustering, MERGE, cost control, `bq` CLI |
+| `spark-engineering` | `SparkSession`, DataFrame transforms, `.parquet` I/O, executor/shuffle tuning, slow/skewed/OOMing Spark jobs |
 | `code-review` | Review requests, PR analysis, "check this" tasks |
 | `data-quality` | dbt model creation, ingestion pipelines, BQ table validation |
 | `gcp-engineering` | `gcloud`/`bq` CLI, IAM, GCP service configuration |
@@ -99,7 +101,7 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 | `grill-me` | Stress-testing a plan or design — "grill me", "challenge mon approche" |
 | `improve-codebase-architecture` | Refactoring, hidden coupling, "ball of mud", making a codebase testable |
 
-Skills > ~300 lines risk slowing context load. Over the threshold today: `graphify` (1212), `bigquery-engineering` (446). `graphify` is 4x the threshold — split or trim.
+Skills > ~300 lines risk slowing context load. Over the threshold today: `graphify` (1212), `spark-engineering` (456), `bigquery-engineering` (446). `graphify` is 4x the threshold — split or trim.
 
 Orchestrator-only skills (`git-collaboration`, `graphify`, `grill-me`) are invoked with `/skill:<name>` from the main session and are intentionally absent from every sub-agent loadout in `settings.json`.
 
