@@ -11,7 +11,7 @@
   "subagents": {
     "agentOverrides": {
       "planner": {
-        "model": "anthropic/claude-sonnet-5",
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -25,8 +25,9 @@
         "inheritProjectContext": true
       },
       "worker": {
-        "model": "anthropic/claude-opus-5",
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
+        "fallbackModels": ["anthropic/claude-sonnet-5"],
         "skills": [
           "python-engineering",
           "airflow-engineering",
@@ -44,10 +45,7 @@
         "inheritProjectContext": true
       },
       "reviewer": {
-        "model": "openai-codex/gpt-5.6-sol",
-        "fallbackModels": [
-          "anthropic/claude-sonnet-5"
-        ],
+        "model": "anthropic/claude-sonnet-5",
         "thinking": "high",
         "skills": [
           "code-review",
@@ -66,27 +64,39 @@
         "inheritProjectContext": true
       },
       "oracle": {
-        "model": "gemini/gemini-3.1-pro",
+        "model": "google/gemini-3.1-pro-preview",
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
           "gcp-dataeng-architecture",
           "improve-codebase-architecture",
           "gcp-engineering",
-          "iac-terraform"
+          "iac-terraform",
+          "bigquery-engineering"
+        ],
+        "inheritProjectContext": false
+      },
+      "oracle-deep": {
+        "model": "anthropic/claude-opus-5",
+        "thinking": "high",
+        "skills": [
+          "dataeng-architecture",
+          "gcp-dataeng-architecture",
+          "improve-codebase-architecture",
+          "gcp-engineering",
+          "iac-terraform",
+          "bigquery-engineering"
         ],
         "inheritProjectContext": false
       },
       "scout": {
-        "model": "openai-codex/gpt-5.6-luna",
-        "fallbackModels": [
-          "gemini/gemini-3.1-flash-lite"
-        ],
+        "model": "google/gemini-3.5-flash",
+        "fallbackModels": ["openai-codex/gpt-5.6-luna"],
         "thinking": "off"
       }
     }
   },
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "medium",
   "powerline": "default",
   "theme": "dark"
 }

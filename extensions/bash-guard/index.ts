@@ -126,7 +126,7 @@ export default function (pi: ExtensionAPI): void {
 
     const options =
       level === "high"
-        ? (["Confirm", "Cancel"] as const)
+        ? (["Confirm", "Consult oracle-deep first", "Cancel"] as const)
         : (["Confirm", "Cancel", "Always allow for this session"] as const);
 
     const choice = await ctx.ui.select(prompt, [...options]);
@@ -140,6 +140,22 @@ export default function (pi: ExtensionAPI): void {
       alwaysAllowed.add(patternSource);
       await appendLog(logPath, level, "auto-allowed", patternSource, command);
       return undefined;
+    }
+
+    if (choice === "Consult oracle-deep first") {
+      await appendLog(logPath, level, "escalated", patternSource, command);
+      return {
+        block: true,
+        reason:
+          "blocked by bash-guard: operator requested oracle-deep review.\n" +
+          `Pattern matched: ${patternSource}\n` +
+          `Command: ${cmdDisplay}\n\n` +
+          "Invoke the `oracle-deep` subagent before retrying. The call MUST embed, verbatim: " +
+          "the exact command, the target resource and environment, the intended outcome, " +
+          "the blast radius if wrong, and the rollback path. " +
+          "oracle-deep runs with inheritProjectContext: false and sees nothing you do not pass it. " +
+          "Re-run only after oracle-deep has answered AND the operator re-confirms.",
+      };
     }
 
     // "Cancel" or Escape (undefined)
