@@ -8,6 +8,8 @@ sessions/
 logs/
 tmp/
 .cache/
+.pi-subagents/
+cc-cli-logs/
 run-history.jsonl
 extensions/pi-session-journal/
 journal.md
