@@ -123,9 +123,6 @@ CROSS JOIN UNNEST(o.items) AS item
 `sqlfluff` with `dialect = bigquery`. Full `.sqlfluff` config in the
 bigquery-ops skill.
 
-Run before any review: `sqlfluff lint --dialect bigquery <file.sql>`.
-Auto-fix: `sqlfluff fix <file.sql>` — review the diff before committing.
-
 ## Review checklist
 
 - [ ] No `SELECT *` anywhere in the query

@@ -57,13 +57,25 @@ ci(composer): add dbt source freshness check to DAG CI step
 ```
  
 ## Branching — trunk-based
- 
+
+**Never create a branch. Commit on the branch already checked out.**
+
+A new branch is an operator decision and it is stated in the request. If a
+change looks like it warrants one, say so in a line and commit on the current
+branch anyway — moving a commit afterwards costs one `git switch` plus one
+`git merge --ff-only`, while an unrequested branch leaves the operator with a
+staged tree on a branch they did not ask for and no commit to move.
+
+The rules below apply once the operator has asked for a branch.
+
 - **Model:** trunk-based. Branches live <3 days. `main` is always deployable.
 - **Branch naming:** `<type>/<short-description>`
   - `feat/revenue-pipeline`
   - `fix/null-partition-handling`
   - `refactor/extract-bq-client`
-- Never commit directly to `main` for non-trivial changes.
+- On shared repos where work lands through review, non-trivial changes go via a
+  branch — still only when the operator asks. This is not a licence to create
+  one unprompted.
 ## Merge strategy
  
 - **Squash and merge** by default → clean, linear `main` history. Each commit tells a complete story.
@@ -79,7 +91,14 @@ ci(composer): add dbt source freshness check to DAG CI step
 ---
  
 ## Execution sequence
- 
+
+**This workflow never delegates.** Staging, drafting a message and committing are
+orchestrator work: there is no context to isolate and nothing to parallelise, so a
+subagent adds a full context and minutes of latency for nothing. Never spawn
+`reviewer` from here, whatever the size of the diff — a staged tree is not a code
+review, and reviewing it a second time at commit time gates work that was already
+gated.
+
 When invoked as `/skill:git-collaboration`, run in order without prompting for selection:
  
 1. `/audit` — security scan
@@ -140,7 +159,8 @@ Run `git log --oneline -1 2>&1`. If no commits exist:
      [ -f "$root/AGENTS.md" ] && [ -f "$root/settings.json" ] && [ -d "$root/skills" ]
      ```
      A path- or remote-name test breaks on the first rename and fails silently.
-2. Run `git status -s` and `git branch --show-current`.
+2. Run `git status -s` and `git branch --show-current`. Whatever it reports is
+   the branch you commit on. Do not create, switch, or rename.
 3. **Secret scan:** Quick `git diff` scan for obvious secrets before staging.
 4. **Security shield:** If sensitive files detected:
    - Append to `.gitignore`

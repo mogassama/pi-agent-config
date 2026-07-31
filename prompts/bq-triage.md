@@ -1,4 +1,5 @@
-Load the `sql-engineering` and `gcp-engineering` skills.
+Load `bigquery-engineering`. If the question is why a job cost what it cost
+rather than how to rewrite it, load `bigquery-ops` instead.
 
 For the query in @{{file}} (or pasted below):
 
