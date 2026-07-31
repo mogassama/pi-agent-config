@@ -1,6 +1,6 @@
 ---
 name: git-collaboration
-description: Load for git workflow tasks — security audit, staging, commit drafting, branch management, and config repo consistency check. Auto-load on git status/commit/push tasks or when invoked with /skill:git-collaboration.
+description: Load for git workflow tasks — security audit, staging, commit drafting, branch management, and config repo consistency check. Auto-load on git status, staging and history questions. The commit workflow itself runs only when the operator invokes /skill:git-collaboration; loading this skill is never by itself a reason to commit.
 ---
 
 # Git Collaboration & Audit Protocol
@@ -91,6 +91,17 @@ The rules below apply once the operator has asked for a branch.
 ---
  
 ## Execution sequence
+
+**Operator-initiated, then run to completion.** This workflow never starts on the
+agent's own initiative — invoking `/skill:git-collaboration` *is* the instruction to
+commit. Once invoked, go all the way through the push; do not stop after drafting and
+ask whether to proceed. Two confirmations gate the run, one on the message and one on
+the push, and nothing else interrupts it.
+
+**Never create `~/.pi/.allow-commit` yourself, under any circumstance.** The token is
+the operator's authorisation. An agent that issues its own removes the only hard
+guarantee in this config. If a commit is blocked for want of a token, report it and
+stop — never work around it.
 
 **This workflow never delegates.** Staging, drafting a message and committing are
 orchestrator work: there is no context to isolate and nothing to parallelise, so a
@@ -186,15 +197,32 @@ feat(dag): add daily revenue aggregation pipeline
 y/n/edit?
 ```
  
-### Phase 3 — Review & execution
- 
-1. Prompt is exactly `y/n/edit?` — one line, nothing else.
-2. If confirmed:
+### Phase 3 — Commit, then push
+
+Two gates, not one. A commit is local and trivially undone; a push is neither. They
+are approved separately.
+
+1. The `y/n/edit?` of Phase 2 approves the **message**. On `edit`, redraft and ask
+   again. On `n`, stop and leave the index as it is.
+2. On `y`, commit:
    ```bash
    git commit -m "<msg>"
+   ```
+   bash-guard intercepts this and asks the operator for a single-use authorisation.
+   That dialog approves the **act**; the prompt above approved the wording. Both are
+   expected — do not try to avoid the second one.
+3. Return the result in one line: `[hash] committed to [branch]`.
+4. Then ask, exactly, on one line, nothing else:
+   ```
+   push to <branch>? y/n
+   ```
+5. On `y`:
+   ```bash
    git push -u origin HEAD
    ```
-3. Return: `[hash] pushed to [branch]` — one line, nothing else.
+   Return `[hash] pushed to [branch]` — one line, nothing else.
+   On `n`, return `[hash] committed, not pushed` and stop. A local commit is a
+   perfectly good stopping point.
 ---
  
 ## /check-config — Config repo consistency (pi config repo only)
