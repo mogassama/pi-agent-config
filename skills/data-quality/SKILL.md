@@ -1,6 +1,13 @@
 ---
 name: data-quality
-description: Load for data quality tasks — dbt test generation, pipeline assertions, schema drift detection, freshness checks, and quarantine patterns. Auto-load when creating dbt models, ingestion pipelines, or validating BigQuery tables.
+description: >-
+  Load when the question is whether a produced dataset can be trusted —
+  volumetry assertions, schema drift, freshness, null and uniqueness
+  guarantees, quarantine of invalid rows. Intent-scoped, not file-scoped. It
+  answers "how do I know this output is correct", not how to write the
+  transformation that produced it. Auto-load on "did we lose rows", "is this
+  table complete", drift or freshness checks, and validation-before-write
+  design.
 ---
 
 # Data Quality
@@ -18,23 +25,19 @@ For dbt-specific test YAML and source freshness config, see dbt-engineering skil
 Assert before writing. Never write first and check later.
 
 ```python
-from loguru import logger
-
 def validate_batch(df: list[dict], source: str) -> None:
     if not df:
         raise ValueError(f"Empty batch from {source} — aborting write")
 
-    row_count = len(df)
     null_ids = [r for r in df if r.get("id") is None]
     if null_ids:
         raise ValueError(
             f"{len(null_ids)} rows with null id in {source} — aborting"
         )
-
-    logger.info("batch_validated", source=source, row_count=row_count)
 ```
 
-Pattern: validate → log → write. Never write → validate after.
+Pattern: validate → write. Never write → validate after. Log the outcome with
+the project's logger — see python-engineering for the two configurations.
 
 ## Volumetry assertions
 

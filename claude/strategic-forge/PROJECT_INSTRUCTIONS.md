@@ -45,7 +45,7 @@ Comportement agent : AGENTS.md global > AGENTS.md projet > skills. Le bundle n'a
 
 **Aucune stack présupposée.** La stack est déterminée en Phase 0 du board, par une question de cadrage bloquante, et porte une provenance (`imposée` | `choisie`). Les templates sont des structures, jamais des contenus : un outil non validé ne laisse aucune trace dans le livrable.
 
-**Invariants de cache.** Ordre d'injection stable → variable : `APPEND_SYSTEM.md` → `AGENTS.md` → skills → `CONVENTIONS.md` → `ARCHITECTURE.md` → `DESIGN.md` → `INSTRUCTIONS.md` → graphify report. Aucun timestamp, session ID ou valeur variable en tête d'un fichier de la chaîne.
+**Invariants de cache.** Ordre d'injection stable → variable : `APPEND_SYSTEM.md` → `AGENTS.md` → skills → `CONVENTIONS.md` → `ARCHITECTURE.md` → `DESIGN.md` → `INSTRUCTIONS.md` → `.pi/BRIEF.md`. Aucun timestamp, session ID ou valeur variable en tête d'un fichier de la chaîne.
 
 **Calibrage sub-agents.** Scout sur le modèle le moins cher disponible, jamais upgradé et sans aucune skill — 50 à 200 appels par session. Oracle : 1 à 3 appels maximum, skills de décision uniquement, autosuffisant. Planner : granularité « une étape qu'un worker exécute en une passe », porte la *forme* des artefacts qu'il planifie et la couche de décision d'architecture pour le régime libre — `dataeng-architecture` (agnostique) plus `gcp-dataeng-architecture` (plateforme) ; `improve-codebase-architecture` reste chez l'oracle (design de refactoring, pas décomposition). Les critères de dotation par agent vivent dans `AGENTS.md` — pas ici.
 
@@ -70,7 +70,6 @@ Comportement agent : AGENTS.md global > AGENTS.md projet > skills. Le bundle n'a
 À traiter, non résolu à date :
 - `settings.json` du repo potentiellement divergent de la config live — aucun mécanisme de vérification.
 - `/check-config` (skill `git-collaboration`) ne couvre ni `prompts/` ni `extensions/`.
-- `skills/graphify/SKILL.md` à 1212 lignes contre un seuil de ~300 annoncé par le README.
 - `skills/sql-engineering/SKILL.md` à 47 lignes, très en dessous des autres skills de domaine — vérifier si la récupération depuis l'ancienne copie fantôme `.pi/agent/` a bien eu lieu avant sa suppression.
 - `skills/diagnose` en français, `prompts/debug.md` en anglais — aucune règle de langue par répertoire.
 - `models-store.json` non tracké, décision `.gitignore` vs commit non prise.

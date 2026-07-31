@@ -53,7 +53,7 @@ One paragraph max. This is orientation, not documentation.
 | Level | Criteria | Examples |
 |---|---|---|
 | **HIGH** | Data loss, security breach, cost explosion, or correctness failure | Hardcoded secret, missing BQ partition filter on a >1TB table, `except: pass`, SQL injection via f-string, non-idempotent write |
-| **MEDIUM** | Silent failure risk, maintainability debt, or policy violation | `print()` or `logging` instead of Loguru, missing type hints on public functions, `WRITE_APPEND` without dedup, `SELECT *` |
+| **MEDIUM** | Silent failure risk, maintainability debt, or policy violation | `print()` in library code, missing type hints on public functions, `WRITE_APPEND` without dedup, `SELECT *` |
 | **LOW** | Naming, structure, or minor clarity issues ruff/sqlfluff cannot auto-fix | Missing docstring on non-obvious public function, CTE that should be extracted |
 
 ## Step 4 — Checklists by domain
@@ -84,7 +84,8 @@ Rules: see sql-engineering skill. Severity assignment:
 
 Rules: see python-engineering skill. Severity assignment:
 
-- `print()` or `logging.getLogger` anywhere in library/pipeline code → **MEDIUM**
+- `print()` anywhere in library/pipeline code → **MEDIUM**
+- Logging library inconsistent with the project bundle's choice → **MEDIUM**
 - Missing type hints on any public function or method → **MEDIUM**
 - Bare `except:` or `except Exception: pass` → **HIGH**
 - No `logger.catch` or explicit exception handling on entry point → **MEDIUM**
@@ -124,7 +125,7 @@ Rules: see gcp-engineering skill. Severity assignment:
 | Sev | Location | Issue | Fix |
 |:---|:---|:---|:---|
 | HIGH | L42 | Hardcoded API key in plain string | Move to Secret Manager + pydantic-settings |
-| MEDIUM | L87 | `logging.getLogger` used | Replace with `from loguru import logger` |
+| MEDIUM | L87 | `print()` in pipeline module | Replace with the project's logger |
 
 **Verdict:** Mergeable | Needs Rework | Blocked
 

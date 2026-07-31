@@ -1,6 +1,16 @@
 ---
 name: gcp-engineering
-description: Load for GCP infrastructure tasks — IAM, Cloud Run, Cloud Functions, Dataflow / Apache Beam, Dataproc, Pub/Sub, Cloud Composer, GCS, Secret Manager, cost and quota control. For BigQuery, load bigquery-engineering instead. For Spark engine semantics, load spark-engineering. Auto-load on gcloud CLI usage, GCP service configuration, IAM policy work, or any task involving GCP resource management.
+description: >-
+  Load for operating GCP imperatively — identity and access (IAM roles, service
+  accounts, ADC, impersonation), runtime configuration and deployment of compute
+  and messaging services (Cloud Run, Cloud Functions, Dataflow, Dataproc,
+  Pub/Sub, Composer environments, GCS), secrets, quotas. Intent-scoped:
+  operations the operator runs by hand, now. Resources declared in a state file
+  belong to iac-terraform; warehouse queries, cost and access belong to the
+  bigquery-* skills; Spark engine semantics belong to spark-engineering.
+  Auto-load on gcloud usage, credential and impersonation problems, service
+  account and role questions.
+
 ---
 
 # GCP Engineering

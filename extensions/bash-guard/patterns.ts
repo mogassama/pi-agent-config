@@ -4,7 +4,7 @@
  * Flags: case-insensitive (i) + dotAll (s) for multi-line shell commands.
  */
 
-export type PatternLevel = "high" | "medium";
+export type PatternLevel = "high" | "medium" | "token";
 
 export interface PatternEntry {
   /** Human-readable label, also used as key for the always-allow session set. */
@@ -16,6 +16,16 @@ export interface PatternEntry {
 // ---------------------------------------------------------------------------
 // Source strings — edit here to add/remove built-in patterns
 // ---------------------------------------------------------------------------
+
+// TOKEN level — single-use authorisation, no always-allow, no whitelist bypass.
+// Matched before HIGH/MEDIUM and before the whitelist: committing is the one
+// hard guarantee, so nothing in settings.json can open it accidentally.
+const TOKEN_SOURCES: string[] = [
+  // Covers `git commit`, `git -C <path> commit`, `git -c k=v commit`,
+  // `git --no-pager commit`. Does not match `git log --grep=commit`.
+  String.raw`\bgit\s+(?:(?:-c|-C|--[\w-]+)(?:[= ]\S+)?\s+)*commit\b`,
+  String.raw`\bgh\s+pr\s+(?:merge|create)\b`,
+];
 
 const HIGH_SOURCES: string[] = [
   String.raw`\bterraform\s+destroy\b`,
@@ -55,6 +65,7 @@ export function compilePatterns(sources: string[], level: PatternLevel): Pattern
 }
 
 // Compiled at module load — never recompiled per call
+export const TOKEN_PATTERNS: PatternEntry[] = compilePatterns(TOKEN_SOURCES, "token");
 export const HIGH_PATTERNS: PatternEntry[] = compilePatterns(HIGH_SOURCES, "high");
 export const MEDIUM_PATTERNS: PatternEntry[] = compilePatterns(MEDIUM_SOURCES, "medium");
 
@@ -66,11 +77,13 @@ export const MEDIUM_PATTERNS: PatternEntry[] = compilePatterns(MEDIUM_SOURCES, "
  * Returns the first matching PatternEntry for `command`, or undefined if none.
  *
  * Evaluation order:
- *   1. Whitelist — if any whitelist pattern matches, return undefined (no block).
- *   2. HIGH patterns (built-in + extra) — checked before MEDIUM so that a
+ *   1. TOKEN patterns — checked FIRST, before the whitelist. A whitelist entry
+ *      must never be able to open a commit path.
+ *   2. Whitelist — if any whitelist pattern matches, return undefined (no block).
+ *   3. HIGH patterns (built-in + extra) — checked before MEDIUM so that a
  *      more-specific HIGH pattern (e.g. git push -f main) wins over the
  *      less-specific MEDIUM variant (git push -f).
- *   3. MEDIUM patterns (built-in + extra).
+ *   4. MEDIUM patterns (built-in + extra).
  */
 export function findMatch(
   command: string,
@@ -78,6 +91,10 @@ export function findMatch(
   extraMedium: PatternEntry[],
   whitelist: RegExp[],
 ): PatternEntry | undefined {
+  for (const entry of TOKEN_PATTERNS) {
+    if (entry.pattern.test(command)) return entry;
+  }
+
   if (whitelist.some((w) => w.test(command))) return undefined;
 
   for (const entry of [...HIGH_PATTERNS, ...extraHigh]) {

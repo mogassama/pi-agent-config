@@ -1,0 +1,6 @@
+{
+  "name": "pi-lint-gate",
+  "version": "1.0.0",
+  "description": "ruff after every Python edit, mypy once per turn, reported back to the agent",
+  "private": true
+}

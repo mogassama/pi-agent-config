@@ -1,6 +1,14 @@
 ---
 name: spark-engineering
-description: Load for PySpark authoring, debugging, or tuning. Covers lazy evaluation, shuffle and partitioning, join strategy and skew, UDF hierarchy, caching discipline, Parquet I/O, and notebook-specific pitfalls. Auto-load when the task involves SparkSession, DataFrame transformations, .parquet reads/writes, executor or shuffle tuning, or a Spark job that is slow, skewed, or OOMing.
+description: >-
+  Load for PySpark authoring, debugging or tuning — lazy evaluation and the
+  action boundary, shuffle and partitioning, join strategy and skew, the UDF
+  hierarchy, caching discipline, Parquet I/O, notebook-specific pitfalls.
+  Territory-scoped: SparkSession, DataFrame transformations, .parquet reads and
+  writes, executor and shuffle configuration. Also load when a job on this
+  engine is slow, skewed, or OOMing — the engine semantics are the answer, not
+  the search method.
+
 ---
 
 # Spark Engineering

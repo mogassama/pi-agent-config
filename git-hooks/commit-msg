@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# commit-msg — enforce Conventional Commits on the subject line.
+#
+# Lives in the pi config repo but is not used by pi. It exists precisely because
+# the format was previously described in a skill, which only constrains commits
+# that go through the agent. This constrains every commit, whatever wrote it.
+#
+# Install (per repo):
+#   ln -sf ~/.pi/agent/git-hooks/commit-msg .git/hooks/commit-msg
+#
+# Install (all new clones):
+#   git config --global core.hooksPath ~/.pi/agent/git-hooks
+#   # note: this replaces the default hooks path for every repo — any other
+#   # hook you rely on must then live in ~/.pi/agent/git-hooks too.
+#
+# Directory is git-hooks/, not hooks/: pi reserves ~/.pi/agent/hooks for what
+# is now extensions/, and warns at startup if it exists.
+
+set -euo pipefail
+
+msg_file="$1"
+
+# First non-comment, non-empty line is the subject.
+subject="$(grep -v '^#' "$msg_file" | grep -v '^[[:space:]]*$' | head -n1 || true)"
+
+# Nothing to check: git will abort on an empty message by itself.
+[ -z "$subject" ] && exit 0
+
+# Pass through commits git generates or rewrites itself.
+case "$subject" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
+esac
+
+types='feat|fix|refactor|perf|docs|test|chore|ci|build'
+pattern="^(${types})(\([a-z0-9._/-]+\))?!?: [a-z].*$"
+
+fail() {
+  cat >&2 <<EOF
+✘ commit-msg: subject line rejected.
+
+  $subject
+
+  Expected: <type>(<scope>): <subject>
+  Types:    ${types//|/, }
+  Rules:    lowercase first letter, no trailing period, ≤72 characters.
+            Imperative present tense — "add", not "added".
+  Example:  feat(dag): add daily revenue aggregation pipeline
+
+  $1
+EOF
+  exit 1
+}
+
+if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+  fail "→ does not match <type>(<scope>): <lowercase subject>"
+fi
+
+if [ "${#subject}" -gt 72 ]; then
+  fail "→ ${#subject} characters, limit is 72"
+fi
+
+case "$subject" in
+  *.) fail "→ trailing period" ;;
+esac
+
+exit 0

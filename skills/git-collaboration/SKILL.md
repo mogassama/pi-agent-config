@@ -5,7 +5,12 @@ description: Load for git workflow tasks — security audit, staging, commit dra
 
 # Git Collaboration & Audit Protocol
  
-## Conventional Commits — enforced format
+## Conventional Commits — drafting aid
+
+The format is **enforced by the `commit-msg` git hook** (`git-hooks/commit-msg` in
+this repo), not by this skill. Git rejects a malformed subject whatever wrote
+it — agent, Claude Code, or a terminal. What follows is here to help draft a
+message that passes, not to be the thing that enforces it.
  
 ```
 <type>(<scope>): <subject>
@@ -31,11 +36,12 @@ description: Load for git workflow tasks — security audit, staging, commit dra
  
 **Scope** (optional but recommended): module or subsystem — `dag`, `bq`, `pipeline`, `dbt`, `infra`, `auth`.
  
-**Subject rules:**
-- Imperative present tense: `add`, `fix`, `update` — not `added`, `fixes`, `updated`
+**Subject rules** (the first three are checked by the hook; the fourth is not —
+no regex can tell `add` from `added`):
 - Lowercase first letter
 - No trailing period
 - ≤72 characters
+- Imperative present tense: `add`, `fix`, `update` — not `added`, `fixes`, `updated`
 **Body:** explain *why*, not *what* — the diff already shows what changed. Use bullet points.
  
 **Footer:** `BREAKING CHANGE:`, `Refs: TICKET-123`, `Co-authored-by:`.
@@ -118,8 +124,6 @@ Run `git log --oneline -1 2>&1`. If no commits exist:
    dist/
    build/
    *.log
-   graphify-out/manifest.json
-   graphify-out/cost.json
    ```
 3. Stage everything: `git add -A`
 4. Propose: `chore: initial commit`
@@ -129,8 +133,6 @@ Run `git log --oneline -1 2>&1`. If no commits exist:
 1. **Environment check:**
    - Ensure `.piignore` exists. Create if missing.
    - Entries in `.piignore`: `.git/`, `node_modules/`, `.pi/`, `dist/`, `build/`, `*.log`
-   - `.gitignore` must include `graphify-out/manifest.json` and `graphify-out/cost.json`. Append if missing.
-   - `graphify-out/` directory itself must NOT be ignored — `GRAPH_REPORT.md` and `wiki/` are committed.
    - If in the pi config repo, auto-trigger `/check-config` **before** staging.
      Detect structurally, never by path or remote name:
      ```bash
@@ -203,60 +205,19 @@ Untidy, not broken. Print and continue.
 | Check | Note |
 |---|---|
 | Skills on disk absent from `README.md` | Documentation drift |
-| Skills loaded by no sub-agent in `settings.json` | Expected for orchestrator-only skills (`git-collaboration`, `graphify`, `grill-me`) — informational, never an error |
+| Skills loaded by no sub-agent in `settings.json` | Expected for orchestrator-only skills (`git-collaboration`, `grill-me`) — informational, never an error |
 | Uncommitted or unpushed changes | This is the normal state mid-work |
  
 ### Implementation
- 
-```bash
-root=$(git rev-parse --show-toplevel)
-python3 - "$root" <<'EOF'
-import json, re, os, glob, sys
-root = sys.argv[1]; os.chdir(root)
-blocking, report = [], []
- 
-disk = sorted(os.path.basename(os.path.dirname(p)) for p in glob.glob('skills/*/SKILL.md'))
- 
-agents = open('AGENTS.md').read()
-block = agents.split('## Skills available (global)')[1].split('\n## ')[0]
-declared = set(re.findall(r'^-\s+`([^`]+)`', block, re.M))
- 
-cfg = json.load(open('settings.json'))
-used = set()
-for a in cfg.get('subagents', {}).get('agentOverrides', {}).values():
-    used |= set(a.get('skills', []))
- 
-for missing in sorted(declared - set(disk)):
-    blocking.append(f"AGENTS.md declares '{missing}' — not in skills/")
-for missing in sorted(used - set(disk)):
-    blocking.append(f"settings.json loads '{missing}' — not in skills/")
- 
-for s in disk:
-    fm = re.match(r'^---\n(.*?)\n---', open(f'skills/{s}/SKILL.md').read(), re.S)
-    if not fm:
-        blocking.append(f"skills/{s}: no frontmatter"); continue
-    name = re.search(r'^name:\s*(.+)$', fm.group(1), re.M)
-    if not name:
-        blocking.append(f"skills/{s}: frontmatter has no 'name'")
-    elif name.group(1).strip() != s:
-        blocking.append(f"skills/{s}: frontmatter name '{name.group(1).strip()}' != directory")
-    if not re.search(r'^description:', fm.group(1), re.M):
-        blocking.append(f"skills/{s}: frontmatter has no 'description'")
- 
-readme = open('README.md').read()
-for s in disk:
-    if s not in readme:
-        report.append(f"skills/{s}: absent from README.md")
-for s in sorted(set(disk) - used):
-    report.append(f"skills/{s}: loaded by no sub-agent (expected for orchestrator-only skills)")
- 
-for line in blocking: print("BLOCKING  " + line)
-for line in report:   print("report    " + line)
-if not blocking and not report: print("config consistent")
-sys.exit(1 if blocking else 0)
-EOF
-```
- 
+
+Registered by the `pi-check-config` extension as `/check-config`. It is a real
+command, not a passage a model has to notice and decide to run — same reason the
+commit format moved to a git hook and commits moved behind a bash-guard token.
+
+Frontmatter is parsed as YAML, not regex-matched. The earlier regex version
+accepted an unquoted single-line `description:` containing a colon: valid to the
+regex, a syntax error to pi's loader, and a skill that never registers.
+
 ### Output contract
  
 Render as a table: `Tier | Item | Finding`.

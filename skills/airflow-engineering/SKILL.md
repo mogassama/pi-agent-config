@@ -1,6 +1,13 @@
 ---
 name: airflow-engineering
-description: Load for Airflow DAG authoring, scheduling, operator selection, testing, and Cloud Composer operations. Auto-load on dags/ folder tasks, DAG design questions, scheduling issues, Composer environment management, or Airflow operator selection.
+description: >-
+  Load for files that are Airflow — anything under dags/, DAG and TaskFlow
+  authoring, operator and sensor selection, schedule and catchup semantics,
+  XCom, task dependencies, and Cloud Composer environment configuration.
+  Territory-scoped: a Python file that defines a DAG object or uses @dag /
+  @task belongs here. A failing pipeline whose cause is unknown is a diagnosis
+  question first.
+
 ---
 
 # Airflow Engineering
@@ -33,15 +40,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from airflow.decorators import dag, task
-from loguru import logger
-import sys
+import logging
 
-# Loguru → stdout so logs appear in Airflow task logs
-# Note: Loguru does not integrate with Airflow's native logging handler.
-# This workaround routes to stdout which Airflow captures.
-# For structured GCP Cloud Logging, use serialize=True.
-logger.remove()
-logger.add(sys.stdout, format="{level} | {name} | {message}", level="INFO")
+# DAG files always use the stdlib logger, whatever the project picked for
+# src/ — it is the only handler Airflow routes to task logs and the UI.
+logger = logging.getLogger(__name__)
 
 
 @dag(
@@ -78,23 +81,36 @@ def billing_pipeline() -> None:
 dag_obj = billing_pipeline()
 ```
 
-## Loguru in Airflow — honest integration
+## Logging in Airflow — the one non-negotiable
 
-Airflow uses its own logging system (Python `logging` module routed to task log files and the UI). Loguru does **not** integrate natively with Airflow's log handler.
+Airflow routes the stdlib `logging` module to task log files and the web UI.
+Nothing else reaches them. This overrides whatever the project bundle chose:
 
-Workaround — route Loguru to stdout, which Airflow captures:
+- **DAG files and operators:** `logging.getLogger(__name__)`. Always.
+- **Business logic in `src/`:** the project's choice — that code is called from
+  tasks but is not Airflow's to log.
+
+If the project uses Loguru in `src/`, it does not integrate with Airflow's
+handler. Two honest options, neither free:
 
 ```python
+# A. Route Loguru to stdout — Airflow captures it as raw task output.
 logger.remove()
 logger.add(sys.stdout, format="{level} | {name} | {message}", level="INFO")
+
+# B. Bridge Loguru into stdlib logging via a propagating sink.
+logger.remove()
+logger.add(lambda m: logging.getLogger(m.record["name"]).log(
+    m.record["level"].no, m.record["message"]))
 ```
 
-Limitations:
-- Logs appear in task stdout, not in Airflow's structured log handler.
-- `@logger.catch` works but tracebacks go to stdout, not the Airflow exception mechanism.
-- For full Airflow UI integration, use Python's `logging.getLogger(__name__)` in operators — Loguru only in external modules called from tasks.
+Limitations of A: logs land in task stdout, outside Airflow's structured
+handler, and `@logger.catch` tracebacks go to stdout rather than the Airflow
+exception mechanism. B keeps UI integration but loses Loguru's own formatting
+and `serialize=True`.
 
-Recommendation: use Loguru in the business logic modules (`src/`), use standard `logging` in the DAG file itself if Airflow UI log visibility matters.
+Default recommendation: stdlib `logging` end to end on Composer projects. The
+bridge is only worth it when `src/` is shared with non-Airflow entry points.
 
 ## Operator selection
 

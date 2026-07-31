@@ -1,6 +1,13 @@
 ---
 name: dbt-engineering
-description: Load for dbt authoring, modeling, testing, and operations on BigQuery. Covers Medallion architecture, incremental patterns, unit tests, macros, Composer CI integration. Auto-load on .sql dbt models, schema.yml, dbt_project.yml, or any dbt command task.
+description: >-
+  Load for work inside a dbt project — files under models/, macros/, seeds/ and
+  snapshots/, plus dbt_project.yml, profiles.yml, schema.yml, and any dbt
+  command. Territory-scoped and unambiguous: a .sql file containing {{ ref() }},
+  {{ source() }} or {{ config() }} belongs here and to nothing else. Covers
+  layered modelling, incremental strategies, unit tests, macros, and CI
+  integration.
+
 ---
 
 # dbt Engineering

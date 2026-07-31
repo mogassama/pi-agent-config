@@ -1,10 +1,12 @@
 ---
 name: tdd
 description: >-
-  Test-driven development avec loop red-green-refactor. Utiliser quand
-  l'utilisateur veut construire une feature ou corriger un bug en TDD,
-  mentionne "red-green-refactor", veut des tests d'intégration, ou demande
-  un développement test-first.
+  Charge quand l'utilisateur veut piloter l'implémentation par les tests —
+  boucle red-green-refactor, écrire le test qui échoue d'abord, conception de
+  tests d'intégration, doublures et fixtures. Scopée par intention : elle porte
+  sur l'ordre dans lequel code et tests sont écrits. Les assertions sur le
+  contenu d'un jeu de données produit ne relèvent pas de cette skill.
+
 ---
 
 # TDD

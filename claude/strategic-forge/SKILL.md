@@ -132,6 +132,23 @@ Dans les deux branches, la stack retenue est **récapitulée explicitement** en 
 - Critère de succès minimal (MVP)
 - Contraintes de coût ou délai
 
+**Question bloquante si la stack retenue contient Python.** Le board la pose
+explicitement et attend la réponse — aucun persona ne suppose une librairie de
+logging :
+
+> **Logging Python — Loguru ou `logging` stdlib ?**
+> 1. **Loguru** — API concise, `bind`/`contextualize`, `serialize=True` pour
+>    Cloud Logging. Dépendance tierce ; ne s'intègre pas au handler Airflow.
+> 2. **`logging` stdlib** — zéro dépendance, seul handler que Composer et la
+>    plupart des runtimes managés remontent nativement. Plus verbeux à configurer.
+> 3. **Le board tranche** — il choisit et justifie en une ligne.
+
+La réponse est écrite dans `CONVENTIONS.md`. Elle ne se redébat pas en Phase 1.
+
+Contrainte qui ne dépend pas de la réponse : les fichiers de DAG Airflow
+utilisent `logging.getLogger(__name__)` dans tous les cas. Le board ne la
+redéclare pas, elle vit dans l'`AGENTS.md` global.
+
 **Commande optionnelle : `+SECURITY`** — active le Security Advisor.
 
 ### Phase 1 — Confrontation

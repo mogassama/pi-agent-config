@@ -100,7 +100,7 @@ See authoring skills for canonical rules. Applies only where the project bundle 
 
 - **Docstrings:** Google style on all public functions/classes with non-obvious args.
 - **Python runtime:** 3.12+; Composer environments may pin 3.11 — DAG files follow the Composer environment version.
-- **Logging exception:** Airflow DAG files use `logging.getLogger(__name__)` instead of Loguru — required for Composer UI visibility (see airflow-engineering skill).
+- **Logging:** the Loguru / stdlib `logging` choice belongs to the project bundle, not to a default here. One absolute constraint on top of it: Airflow DAG files use `logging.getLogger(__name__)` whatever the project picked — Composer's UI only surfaces the stdlib handler (see airflow-engineering skill).
 - **SQL exception:** dbt models use lowercase SQL keywords — distinct from raw BigQuery SQL (see dbt-engineering skill).
 - **New directories:** Don't create new top-level directories without confirming with the operator.
 
@@ -125,6 +125,7 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 - `airflow-engineering`
 - `gcp-engineering`
 - `bigquery-engineering`
+- `bigquery-ops`
 - `dataeng-architecture`
 - `gcp-dataeng-architecture`
 - `spark-engineering`
@@ -134,7 +135,6 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 - `iac-terraform`
 - `git-collaboration`
 - `technical-writing`
-- `graphify`
 - `grill-me`
 - `diagnose`
 - `tdd`
@@ -164,7 +164,7 @@ sibling platform skill rather than widening the generic one.
 `improve-codebase-architecture` stays out of the planner in both regimes: it is refactoring
 design, not decomposition. It belongs to oracle.
 
-Orchestrator-only skills (`git-collaboration`, `graphify`, `grill-me`) are intentionally in no loadout — they are invoked with `/skill:<name>` from the main session.
+Orchestrator-only skills (`git-collaboration`, `grill-me`) are intentionally in no loadout — they are invoked with `/skill:<name>` from the main session.
 
 ## Workflow pi — Gestion du contexte
 
@@ -184,7 +184,7 @@ Un seul ordre, du plus stable au plus variable. Ne jamais faire précéder un é
 5. `ARCHITECTURE.md` — stable après scaffolding
 6. `DESIGN.md` — stable sauf mise à jour d'un `Statut`
 7. `INSTRUCTIONS.md` — backlog vivant
-8. Graphify report — contient commit hash et date, toujours en dernier
+8. `.pi/BRIEF.md` — prose seule, aucune valeur variable ; peut donc rester en cache
 
 Aucun timestamp, session ID ou valeur variable en tête d'un fichier du bundle : invalide le cache à chaque appel.
 

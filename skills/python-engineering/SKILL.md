@@ -1,6 +1,6 @@
 ---
 name: python-engineering
-description: Load for Python authoring, refactoring, packaging, or testing. Covers uv project setup, strict type hints, Loguru logging, pytest patterns, and data engineering idioms (streaming, chunking, GCP clients). Auto-load when the task involves .py files, pyproject.toml, test writing, or Python package structure.
+description: Load for Python authoring, refactoring, packaging, or testing. Covers uv project setup, strict type hints, logging, pytest patterns, and data engineering idioms (streaming, chunking, GCP clients). Auto-load when the task involves .py files, pyproject.toml, test writing, or Python package structure.
 ---
 
 # Python Engineering
@@ -62,21 +62,63 @@ asyncio_mode = "auto"
 - `pydantic-settings` for environment variable management in all non-trivial projects.
 - `@dataclass(slots=True, frozen=True)` for internal immutable data structures.
 
-## Logging (Loguru — mandatory)
+## Logging
 
-- `from loguru import logger` everywhere. Never `logging.getLogger(__name__)`.
+**The Loguru / stdlib `logging` choice is a project decision**, taken by the
+strategic-forge board and written into the bundle. Neither is a default here.
+
+True in both cases:
+
 - All log messages in English.
-- Production / GCP sink (structured JSON for Cloud Logging):
-  ```python
-  import sys
-  from loguru import logger
+- Never `print()` in library or pipeline code. CLI one-shot scripts only.
+- Structured JSON on stderr in production — Cloud Logging parses it into fields.
+- Contextual metadata attached to the record (`run_id`, `source`, `table`),
+  never interpolated into the message string.
 
-  logger.remove()
-  logger.add(sys.stderr, format="{message}", serialize=True, level="INFO")
-  ```
-- Contextual metadata: `logger.contextualize(run_id=run_id, source=source)`.
-- Entry point decoration: `@logger.catch` on `main()` to capture full stack traces with variable values.
-- Never use `print()` in library or pipeline code. CLI one-shot scripts only.
+**Loguru:**
+```python
+import sys
+from loguru import logger
+
+logger.remove()
+logger.add(sys.stderr, format="{message}", serialize=True, level="INFO")
+
+log = logger.bind(run_id=run_id, source=source)
+log.info("batch_validated")
+```
+`logger.contextualize(...)` for a scoped block. `@logger.catch` on `main()`
+captures full stack traces with variable values.
+
+**Stdlib `logging`:**
+```python
+import logging
+
+logger = logging.getLogger(__name__)  # module-level, never the root logger
+logger.info("batch_validated", extra={"run_id": run_id, "source": source})
+```
+Configure once at the entry point, never in a library module. JSON output via
+`python-json-logger` or a `logging.Formatter` subclass. `extra` keys land as
+top-level fields — do not shadow reserved `LogRecord` attributes (`message`,
+`asctime`, `name`, `levelname`, `module`, `args`).
+
+**Airflow is not a choice.** DAG files use `logging.getLogger(__name__)`
+whatever the project picked — Composer's UI only surfaces the stdlib handler.
+See airflow-engineering.
+
+### Trap — Loguru kwargs make the message a format string
+
+`logger.info("msg", key=value)` does two things: it puts `key` into
+`record["extra"]` (so it *does* appear under `serialize=True` — the metadata is
+not lost), and it runs `msg.format(key=value)`. Any literal brace in the message
+then raises at log time, uncaught:
+
+```python
+logger.info('payload {"a": 1} written', source=src)   # KeyError: '"a"'
+```
+
+`logger.bind(source=src).info("msg")` gives the same `extra` with no formatting
+pass. Prefer it. Reserve `logger.info("rows: {n}", n=n)` for the case where the
+message really is a template.
 
 ## Testing (pytest)
 
@@ -119,7 +161,6 @@ asyncio_mode = "auto"
 - `requirements.txt` in new projects — use `uv` and `pyproject.toml`.
 - Mutable default arguments: `def f(items=[])` — use `None` and initialize inside.
 - `os.path.join` — use `Path(...) / "subdir"`.
-- `logging.getLogger` — Loguru only.
 - `print()` in library code — use `logger`.
 - `download_as_bytes()` on large GCS objects — stream instead.
 - Global config objects imported across modules — inject via function arguments.

@@ -1,6 +1,12 @@
 ---
 name: iac-terraform
-description: Load for Terraform IaC on GCP — writing, reviewing, or modifying HCL for BigQuery, GCS, IAM, Cloud Run, Cloud Functions, Pub/Sub, Composer. Auto-load on .tf files, terraform commands, or GCP infrastructure provisioning tasks.
+description: >-
+  Load for .tf and .tfvars files and terraform commands — HCL authoring and
+  review, module structure, variable and output design, state and backend
+  handling, plan/apply discipline, drift. Territory-scoped by file extension:
+  infrastructure declared as code and reconciled against state. A one-off
+  imperative operation on the same resource is not this skill.
+
 ---
 
 # IaC — Terraform GCP

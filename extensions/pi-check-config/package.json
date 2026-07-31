@@ -1,0 +1,6 @@
+{
+  "name": "pi-check-config",
+  "version": "1.0.0",
+  "description": "/check-config — deterministic consistency checks for the pi config repo",
+  "private": true
+}

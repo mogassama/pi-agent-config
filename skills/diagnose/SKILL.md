@@ -1,9 +1,14 @@
 ---
 name: diagnose
 description: >-
-  Disciplined diagnosis loop for hard bugs and performance regressions.
-  Auto-load when the user reports a bug, says something is broken/failing/throwing,
-  describes a performance regression, or says "diagnose this" / "debug this".
+  Charge quand quelque chose est cassé et que la cause est inconnue — boucle
+  disciplinée de reproduction, bissection d'hypothèses, confirmation de la cause
+  racine avant toute modification. Scopée par méthode, pas par sous-système :
+  elle dit comment chercher, pas comment le composant fonctionne. Auto-load sur
+  « ça échoue depuis… », « ça marchait hier », erreurs intermittentes, et
+  régressions sans coupable évident. Si le symptôme désigne un moteur précis,
+  charger aussi la skill de ce moteur.
+
 ---
 
 # Diagnose
@@ -67,7 +72,7 @@ Tester les hypothèses par ordre de probabilité.
 
 ```bash
 # Ajouter des points de mesure temporaires
-# Python : loguru temporaire, assertions, prints de debug
+# Python : logs temporaires, assertions, prints de debug
 # SQL : CTEs intermédiaires, COUNT/DISTINCT checks
 # Airflow : xcom_push sur les valeurs intermédiaires
 # BQ : EXPLAIN ou dry-run pour les query plans
