@@ -18,6 +18,10 @@
       "planner": {
         "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
+        "fallbackModels": [
+          "openai-codex/gpt-5.6-terra",
+          "claude-bridge/claude-sonnet-5"
+        ],
         "skills": [
           "dataeng-architecture",
           "gcp-dataeng-architecture",
@@ -32,9 +36,7 @@
       "worker": {
         "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
-        "fallbackModels": [
-          "claude-bridge/claude-sonnet-5"
-        ],
+        "fallbackModels": ["claude-bridge/claude-sonnet-5"],
         "skills": [
           "python-engineering",
           "airflow-engineering",
@@ -53,9 +55,7 @@
       },
       "reviewer": {
         "model": "claude-bridge/claude-sonnet-5",
-        "fallbackModels": [
-          "anthropic/claude-sonnet-5"
-        ],
+        "fallbackModels": ["anthropic/claude-sonnet-5"],
         "thinking": "high",
         "skills": [
           "code-review",
@@ -88,9 +88,7 @@
       },
       "oracle-deep": {
         "model": "claude-bridge/claude-opus-5",
-        "fallbackModels": [
-          "anthropic/claude-opus-5"
-        ],
+        "fallbackModels": ["anthropic/claude-opus-5"],
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -104,9 +102,7 @@
       },
       "scout": {
         "model": "google/gemini-3.5-flash",
-        "fallbackModels": [
-          "openai-codex/gpt-5.6-luna"
-        ],
+        "fallbackModels": ["openai-codex/gpt-5.6-luna"],
         "thinking": "off"
       }
     }
