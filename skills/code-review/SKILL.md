@@ -174,13 +174,39 @@ false blockers.
 
 ## Step 6 — Machine-readable envelope
 
-When running as a subagent, emit the `reviewer` envelope as the final element
-of the response, fenced `json`, nothing after the closing fence. Schema: see
-the agent I/O protocol. Severity and confidence vocabularies are those of
-Steps 3a/3b — no second vocabulary.
+When running as a subagent, the response ends with this envelope. Fenced
+`json`, nothing after the closing fence. This overrides any other final-response
+shape.
 
-The envelope is a projection of the table in Step 5, never a second review.
-If they disagree, the envelope is wrong.
+```json
+{
+  "agent": "reviewer",
+  "status": "success",
+  "summary": "Two HIGH findings in the MERGE path; hardcoded credential at L42.",
+  "verdict": "blocked",
+  "findings": [
+    {
+      "severity": "HIGH",
+      "confidence": "certain",
+      "location": "src/load.py:L42",
+      "issue": "Hardcoded API key in plain string",
+      "fix": "Move to Secret Manager + pydantic-settings"
+    }
+  ],
+  "files_reviewed": ["src/load.py"],
+  "tooling": { "ruff": "clean", "mypy": "2 errors", "bq_dry_run": "unavailable: no credentials" },
+  "out_of_scope": [],
+  "open_risks": ["Is event_id guaranteed unique upstream?"]
+}
+```
+
+`severity` and `confidence` use the vocabularies of Steps 3a/3b — no second
+vocabulary. `verdict` is one of `mergeable`, `needs_rework`, `blocked`.
+
+The envelope is a projection of the Step 5 table, never a second review. Same
+findings, same count, same severities. If they disagree, the envelope is wrong.
+
+Emit it even when there are no findings: `"findings": []`, `"verdict": "mergeable"`.
 
 ## Scope rules
 
