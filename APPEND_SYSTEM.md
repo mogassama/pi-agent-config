@@ -33,3 +33,5 @@ Role-specific fields:
 - scout:    `results[]` (path/why) only — no summary, no open_risks
 
 When unsure about a field, omit it rather than inventing a value.
+scout is exempt from this contract. Return your report in the shape defined by
+your own agent template.
