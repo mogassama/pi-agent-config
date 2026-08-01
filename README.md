@@ -12,6 +12,8 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 ├── settings.json                    # Provider, model, subagent overrides
 ├── agents/
 │   └── oracle-deep.md               # standalone oracle-deep agent definition
+├── bin/
+│   └── check-envelope               # Validate the latest subagent output contract
 ├── extensions/
 │   ├── bash-guard/                  # Confirmation on destructive commands
 │   ├── pi-project-brief/            # .pi/BRIEF.md — orientation note, injected once
@@ -22,9 +24,11 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 │   ├── pi-session-journal/          # auto-names sessions, writes journal.md
 │   └── powerline-footer/            # Status footer
 ├── skills/
+│   ├── agent-io/SKILL.md
 │   ├── python-engineering/SKILL.md
 │   ├── sql-engineering/SKILL.md
 │   ├── bigquery-engineering/SKILL.md
+│   ├── bigquery-ops/SKILL.md
 │   ├── spark-engineering/SKILL.md
 │   ├── code-review/SKILL.md
 │   ├── data-quality/SKILL.md
@@ -56,9 +60,13 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 `claude/` holds design-time assets for Claude.ai, not runtime config for pi. It is the
 master copy: edit here, then re-upload to Claude.ai. Never the other way round.
 
+`tools/` is reserved by pi. Put local executable scripts in `bin/`. Each project
+that uses subagents must add `.pi-subagents/` to its own `.gitignore`; it contains
+runtime artifacts, not source.
+
 ## How the pieces fit
 
-Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (Nicobailon). `settings.json.packages` currently pulls `npm:pi-subagents@latest` — **not pinned to a version**. Installed today: `0.38.0` (`npm ls pi-subagents`). An unpinned upstream update can break a session without warning; pin it in `settings.json` if that risk becomes real, and confirm the installed version with `npm ls pi-subagents` before changing the pin — the override schema has moved before (e.g. across v0.21) and may move again.
+Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (Nicobailon). `settings.json.packages` currently pulls `npm:pi-subagents@latest` — **not pinned to a version**. The installed package is `0.39.0` (`npm ls pi-subagents --depth=0 --prefix ~/.pi/agent/npm`). An unpinned upstream update can break a session without warning; pin it in `settings.json` if that risk becomes real, and confirm the installed version from pi's `npm/` package store before changing the pin — the override schema has moved before (e.g. across v0.21) and may move again.
 
 | Layer | What it is | Cost | When to use |
 |---|---|---|---|
@@ -81,12 +89,12 @@ Configured in `settings.json` under `subagents.agentOverrides`:
 | `oracle-deep` | `claude-bridge/claude-opus-5` | `anthropic/claude-opus-5` | high | same as `oracle` |
 | `scout` | `google/gemini-3.5-flash` | `openai-codex/gpt-5.6-luna` | off | — |
 
-Fallback semantics on the pinned version (0.25.0): pi-subagents only moves to
+Fallback semantics in the installed version (0.39.0): pi-subagents only moves to
 the next candidate when the failure message matches its retryable list — rate
 limit, quota, auth, unknown/unavailable model, overload, network, 5xx. A failure
-outside that list stops the run on the primary model. The error-class filter was
-removed upstream in a later version; re-read `src/runs/shared/model-fallback.ts`
-before changing the pin. `claude-bridge/*` draws on the Max subscription via the `pi-claude-bridge`
+outside that list stops the run on the primary model. Re-read
+`src/runs/shared/model-fallback.ts` after any unpinned upgrade.
+`claude-bridge/*` draws on the Max subscription via the `pi-claude-bridge`
 extension (Claude Code through the Agent SDK, see `## Extensions`); `anthropic/*` is
 metered API billing — it is the last resort, and the only paid rung.
 
@@ -95,12 +103,56 @@ metered API billing — it is the last resort, and the only paid rung.
 Its `skills` list is missing `bigquery-ops`, present in the `settings.json` version below —
 two sources of truth for the same agent; reconcile before relying on either in isolation.
 
-Scout calibration: called 50-200x per session — never upgrade its model, never give it skills.
+Scout is a context-construction agent, not disposable cheap recon. The bundled
+`scout.md` writes `context.md`, and `worker.md` declares `defaultReads: context.md`; a
+weak scout handoff therefore degrades worker output silently. Keep its high call volume
+(50-200x per session) in the cost calculation, but evaluate its model on downstream
+handoff quality rather than enforcing "never upgrade" as an invariant. It still receives
+no skills.
 
-All builtins run `inheritSkills: false`. A skill absent from an agent's array does not
-exist for that agent. What the array injects is name + description + path, not the body —
-the body is read on demand, so a loadout entry costs one description line at startup.
-Loadout criteria per agent live in `AGENTS.md`, section "Skills available (global)".
+### Skill loading before delegation
+
+All builtins run `inheritSkills: false`. A skill absent from an agent's array is not
+available to that agent. A loadout entry injects only the skill's name, description, and
+path; it does **not** make the child read the body spontaneously. Before delegation, the
+orchestrator must load every required domain skill. For agents with
+`inheritProjectContext: true`, the loaded body reaches the child through inherited parent
+context. Measured behavior: a reviewer launched without this step returned a generic
+format and ignored the review rules; the same task after orchestrator-side loading used
+the complete format and rules.
+
+Asking a child to list its skills is not a valid diagnostic: the descriptions already
+appear in its system prompt and do not prove that the bodies were loaded. Loadout criteria
+per agent live in `AGENTS.md`, section "Skills available (global)".
+
+### Turn and tool budgets
+
+Never pass `turnBudget` or a strict `toolBudget` to a mutation-capable child (`worker`,
+fix worker, reviewer with edit authority, or any custom writer). Assistant turns and tool
+calls do not measure whether an implementation slice is complete, validated, or safe to
+hand off. Hard caps are appropriate only for explicitly read-only scouts, reviewers, and
+validators. This is also the policy documented by pi-subagents.
+
+Budget precedence is explicit call value, then agent default, then global config. A global
+`turnBudget` is therefore not a safety net against a lower call-level limit. In a measured
+run, a worker stopped after 8 turns (soft limit 5 plus grace 1) even though global config
+specified 20/2.
+
+### Subagent output contract
+
+`reviewer`, `planner`, and `oracle` end their human-readable response with a fenced JSON
+envelope. The contract is defined in `APPEND_SYSTEM.md` and the `agent-io` skill; load
+`agent-io` in the orchestrator before delegation so it reaches the child context.
+
+`worker` is exempt: its bundled `worker.md` final-response template overrode all three
+tested delivery mechanisms (`APPEND_SYSTEM.md`, a loaded skill body, and task text). Its
+native output remains parsable: `Implemented` / `Changed files` / `Validation` /
+`Open risks/questions` / `Recommended next step`. `scout` is also exempt and keeps its
+native context report. Validate the latest artifact with:
+
+```bash
+~/.pi/agent/bin/check-envelope [role]
+```
 
 ## Extensions
 
@@ -126,6 +178,7 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 
 | Skill | Auto-load triggers |
 |---|---|
+| `agent-io` | Before delegating to planner, reviewer, or oracle; supplies the subagent output envelope contract |
 | `python-engineering` | `.py` files, `pyproject.toml`, test writing, package structure |
 | `sql-engineering` | Engine-agnostic SQL craft + PostgreSQL dialect (`ON CONFLICT`, indexes, `EXPLAIN ANALYZE`) |
 | `bigquery-engineering` | Writing/optimising a BigQuery query — partition and cluster filters, MERGE, dedup, UNNEST, dry-run |
@@ -148,10 +201,14 @@ Skills are registered at startup (descriptions in system prompt). Bodies load on
 
 Skill bodies are read on demand, not injected at startup — the ~300 line threshold is a
 *read cost*, paid by whichever agent opens the file, not a per-session tax. Over the
-threshold today: none.
+threshold today: `bigquery-ops` (325 lines).
 `bigquery-engineering` was 446 lines and is now split into
-`bigquery-engineering` (152, conventions applied at write time) and
+`bigquery-engineering` (149, conventions applied at write time) and
 `bigquery-ops` (325, reference consulted on demand).
+
+Do not remove concrete skill examples merely to reduce line count. A schema reduced to a
+pointer to another document was not followed in measured runs; the same schema shown as a
+JSON block was followed.
 
 Orchestrator-only skills (`git-collaboration`, `grill-me`) are invoked with `/skill:<name>` from the main session and are intentionally absent from every sub-agent loadout in `settings.json`.
 
