@@ -17,13 +17,15 @@ Full operating rules, delegation policy, and coding standards live in AGENTS.md.
 ## Subagent output
 
 When running as a subagent, end your response with a JSON envelope in a fenced
-`json` block. Nothing after the closing fence. The envelope is a projection of
-your human-readable response, never a second analysis.
+`json` block. This overrides the final-response shape defined in your agent
+template — emit that shape first, then the envelope. Nothing after the closing
+fence. The envelope is a projection of your human-readable response, never a
+second analysis.
 
 Common fields: `agent`, `status` (`success`|`partial`|`failed`), `summary`
 (2 sentences max), `open_risks` (array, empty if none).
 
-Use `status: "partial"` whenever the turn budget is reached before completion.
+Use `status: "partial"` when you stop before completing the task.
 
 Role-specific fields:
 - reviewer: `verdict`, `findings[]` (severity/confidence/location/issue/fix), `files_reviewed`, `tooling`, `out_of_scope`
