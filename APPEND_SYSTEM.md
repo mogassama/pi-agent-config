@@ -21,16 +21,15 @@ When running as a subagent, end your response with a JSON envelope in a fenced
 your human-readable response, never a second analysis.
 
 Common fields: `agent`, `status` (`success`|`partial`|`failed`), `summary`
-(2 sentences max), `open_questions` (array, empty if none).
+(2 sentences max), `open_risks` (array, empty if none).
 
 Use `status: "partial"` whenever the turn budget is reached before completion.
 
 Role-specific fields:
 - reviewer: `verdict`, `findings[]` (severity/confidence/location/issue/fix), `files_reviewed`, `tooling`, `out_of_scope`
-- worker:   `files_touched[]`, `tests`, `deviations[]`
+- worker:   `changed_files[]`, `validation`, `next_step`, `deviations[]`
 - planner:  `steps[]` (id/goal/files/risk/verification), `assumptions[]`
 - oracle:   `recommendation`, `alternatives[]` (option/tradeoff/rejected_because), `confidence`
-- scout:    `results[]` (path/why) only — no summary, no open_questions
+- scout:    `results[]` (path/why) only — no summary, no open_risks
 
 When unsure about a field, omit it rather than inventing a value.
-
