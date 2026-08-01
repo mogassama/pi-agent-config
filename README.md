@@ -10,11 +10,16 @@ Personal `~/.pi/agent/` configuration for data engineering work (Python, SQL, GC
 ├── APPEND_SYSTEM.md                 # Appended to pi's default system prompt
 ├── README.md                        # This file
 ├── settings.json                    # Provider, model, subagent overrides
+├── agents/
+│   └── oracle-deep.md               # standalone oracle-deep agent definition
 ├── extensions/
 │   ├── bash-guard/                  # Confirmation on destructive commands
 │   ├── pi-project-brief/            # .pi/BRIEF.md — orientation note, injected once
 │   ├── pi-bq-cost-sentinel/         # /bq-cost — BQ query cost gate
+│   ├── pi-check-config/             # /check-config — config consistency check
 │   ├── pi-diff-review/              # /diff-review — review commits and PRs
+│   ├── pi-lint-gate/                # ruff/mypy after .py edits
+│   ├── pi-session-journal/          # auto-names sessions, writes journal.md
 │   └── powerline-footer/            # Status footer
 ├── skills/
 │   ├── python-engineering/SKILL.md
@@ -53,7 +58,7 @@ master copy: edit here, then re-upload to Claude.ai. Never the other way round.
 
 ## How the pieces fit
 
-Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (Nicobailon). Pinned in `settings.json` to a specific version — an unpinned upstream update can break a session without warning. Confirm the installed version with `npm ls pi-subagents` before changing the pin; the override schema has moved since v0.21.
+Pi is intentionally minimal: 4 native tools (`read`, `write`, `edit`, `bash`), no MCP. Sub-agents are provided by the `pi-subagents` extension (Nicobailon). `settings.json.packages` currently pulls `npm:pi-subagents@latest` — **not pinned to a version**. Installed today: `0.38.0` (`npm ls pi-subagents`). An unpinned upstream update can break a session without warning; pin it in `settings.json` if that risk becomes real, and confirm the installed version with `npm ls pi-subagents` before changing the pin — the override schema has moved before (e.g. across v0.21) and may move again.
 
 | Layer | What it is | Cost | When to use |
 |---|---|---|---|
@@ -81,8 +86,14 @@ the next candidate when the failure message matches its retryable list — rate
 limit, quota, auth, unknown/unavailable model, overload, network, 5xx. A failure
 outside that list stops the run on the primary model. The error-class filter was
 removed upstream in a later version; re-read `src/runs/shared/model-fallback.ts`
-before changing the pin. `claude-bridge/*` draws on the Max subscription; `anthropic/*` is
+before changing the pin. `claude-bridge/*` draws on the Max subscription via the `pi-claude-bridge`
+extension (Claude Code through the Agent SDK, see `## Extensions`); `anthropic/*` is
 metered API billing — it is the last resort, and the only paid rung.
+
+`oracle-deep` also exists as a standalone definition in `agents/oracle-deep.md`
+(own model pin `anthropic/claude-opus-5`, no fallback, `systemPromptMode: replace`).
+Its `skills` list is missing `bigquery-ops`, present in the `settings.json` version below —
+two sources of truth for the same agent; reconcile before relying on either in isolation.
 
 Scout calibration: called 50-200x per session — never upgrade its model, never give it skills.
 
@@ -101,6 +112,8 @@ Loadout criteria per agent live in `AGENTS.md`, section "Skills available (globa
 | `pi-check-config/` | `/check-config` — Tier 1 blocking + Tier 2 report over skills, `AGENTS.md`, `settings.json`, `README.md`. YAML-parses every frontmatter. |
 | `pi-diff-review/` | `/diff-review` — review commits and PRs |
 | `pi-project-brief/` | `/brief` — writes `.pi/BRIEF.md`, a ≤40-line orientation note with no variable value in it, injected once per session. Staleness is a git diff, not a model call. Subagents follow `inheritProjectContext`; `scout` is denied. |
+| `pi-session-journal/` | Names each session (`{branch} — {first_msg}`) and appends a closing entry to `journal.md` on shutdown. |
+| `pi-claude-bridge` | Model provider extension — routes `claude-bridge/*` models through Claude Code via the Agent SDK, adds an `AskClaude` tool (npm) |
 | `powerline-footer/` | Status footer (npm) |
 | `@tmustier/pi-raw-paste` | Raw paste handling (npm) |
 
