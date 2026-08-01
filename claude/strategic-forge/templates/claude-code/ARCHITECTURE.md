@@ -1,9 +1,14 @@
 # Architecture — [NOM DU PROJET]
 
 > **Règle de production de ce fichier.** Aucune ligne ne survit si elle n'a pas été
-> validée en session. Les blocs de l'annexe en fin de template sont des références :
-> ils ne sont recopiés dans le livrable que si l'outil correspondant a été retenu.
-> L'annexe elle-même n'apparaît jamais dans le fichier produit.
+> validée en session. Les blocs de l'annexe sont des références de forme : ils ne sont
+> recopiés que si l'outil correspondant a été retenu **et** n'est pas déjà couvert par
+> `~/.claude/rules/conventions.md`. L'annexe elle-même n'apparaît jamais dans le
+> fichier produit.
+>
+> **Régime de lecture.** Ce fichier n'est pas chargé automatiquement. Il est lu à la
+> demande, avant une décision de structure. Il peut donc être détaillé — c'est
+> `CLAUDE.md` qui doit rester court, pas celui-ci.
 
 ## Stack technique
 
@@ -14,8 +19,7 @@
 Règles de remplissage :
 - Une ligne = un problème résolu. Un outil sans problème identifié est retiré.
 - Versions épinglées quand la reproductibilité compte, `latest` seulement si assumé.
-- `Provenance = imposée` → la ligne n'est pas rediscutable par pi.
-- Si la stack est mono-outil, la table reste — elle sert de contrat au planner.
+- `Provenance = imposée` → la ligne n'est pas rediscutable.
 
 ## Composants d'infrastructure
 
@@ -40,10 +44,17 @@ Pour chaque flèche : volume attendu, fréquence, et mode de déclenchement.
 
 ## Structure de répertoires
 
-> À produire à partir des conventions natives de la stack retenue, pas d'un layout par défaut.
+> À produire à partir des conventions natives de la stack retenue, pas d'un layout
+> par défaut.
 
 ```
 [nom_projet]/
+├── CLAUDE.md
+├── ARCHITECTURE.md
+├── DESIGN.md
+├── BACKLOG.md
+├── .claude/
+│   └── rules/
 ├── [fichier de manifeste du gestionnaire de paquets retenu]
 ├── README.md
 └── [arborescence complète, sans « ... »]
@@ -51,21 +62,24 @@ Pour chaque flèche : volume attendu, fréquence, et mode de déclenchement.
 
 Règles :
 - Nommer explicitement les répertoires structurants et leur rôle. Éviter les `...` :
-  ils laissent le planner instancier une convention arbitraire. Un répertoire de détail
-  non listé n'est pas un blocage — le planner le crée en cohérence avec ceux qui le sont.
-- Séparation explicite entre logique métier (sans I/O) et adaptateurs (I/O, réseau, stockage).
+  ils laissent instancier une convention arbitraire. Un répertoire de détail non listé
+  n'est pas un blocage — il se crée en cohérence avec ceux qui le sont.
+- Séparation explicite entre logique métier (sans I/O) et adaptateurs (I/O, réseau,
+  stockage).
 - Les répertoires de test miroitent la structure du code.
 
 ## Conventions de nommage
 
+> Ne pas reprendre les conventions de casse et de style déjà portées par
+> `~/.claude/rules/conventions.md`. Cette table ne porte que le nommage des **entités
+> propres au projet**.
+
 | Élément | Convention | Exemple |
 |---|---|---|
-| [fichiers] | [casse] | [exemple concret] |
-| [types / classes] | [casse] | [exemple concret] |
-| [constantes / variables d'env] | [casse] | [exemple concret] |
+| [entité métier] | [pattern] | [exemple concret] |
 | [entités de stockage] | [pattern] | [exemple concret] |
 
-Règles transverses :
+Règles transverses, si elles ne sont pas déjà couvertes :
 - Pas d'abréviations cryptiques. Pas de noms vagues (`data`, `process`, `handle`, `utils`).
 - Les identifiants portent leur entité : `<entity>_id`, jamais `id` seul.
 - Les booléens portent leur prédicat : `is_<adj>` / `has_<noun>`.
@@ -73,11 +87,14 @@ Règles transverses :
 
 ## Principes architecturaux
 
+> Ne conserver que ceux qui sont structurants **pour ce projet**. Les principes
+> génériques déjà énoncés dans le socle global sont supprimés.
+
 - **Boring is good** : à bénéfice comparable, l'option éprouvée et documentée gagne.
 - **Séparation pure / impure** : les transformations sont testables sans mock ; les
   side-effects sont isolés dans une couche dédiée.
-- **Configuration par injection** : les paramètres traversent les signatures de fonctions.
-  Pas d'import d'un module de config global depuis la logique métier.
+- **Configuration par injection** : les paramètres traversent les signatures de
+  fonctions. Pas d'import d'un module de config global depuis la logique métier.
 - **Idempotence obligatoire** : toute écriture peut être rejouée sans effet de bord.
   Le mécanisme exact (écrasement de partition, upsert par clé, transaction) est nommé
   explicitement dans la section stockage.
@@ -86,20 +103,24 @@ Règles transverses :
 
 ## [Spécificités de la stack retenue]
 
-> Une sous-section par outil ou service validé, tirée de l'annexe ci-dessous ou rédigée
-> pendant la session. Section absente si rien à préciser.
+> Une sous-section par outil ou service validé, tirée de l'annexe ou rédigée pendant
+> la session. Section absente si rien à préciser.
 
 ---
 ---
 
 # ANNEXE — blocs de référence conditionnels
 
-> **Ne jamais recopier cette annexe dans le livrable.** Chaque bloc n'est utilisé que si
-> l'outil correspondant a été explicitement validé en Phase 0. Les valeurs sont des
-> exemples de forme, pas des recommandations.
+> **Ne jamais recopier cette annexe dans le livrable.**
+>
+> **Double test avant d'utiliser un bloc :** l'outil a-t-il été validé en Phase 0, et
+> le contenu du bloc est-il absent de `~/.claude/rules/conventions.md` ? Le socle
+> global couvre déjà en profondeur BigQuery, dbt, Airflow, Terraform, PostgreSQL et
+> Python. Ce qui reste utile ici, c'est la **structure et le nommage propres au
+> projet**, pas les conventions d'écriture.
 
 <details>
-<summary>Projet Python packagé</summary>
+<summary>Projet Python packagé — arborescence</summary>
 
 ```
 [nom_projet]/
@@ -121,35 +142,20 @@ Règles transverses :
 │   └── conftest.py
 └── scripts/                 # one-shot, non packagés
 ```
-
-Nommage : modules et fonctions en `snake_case`, classes en `PascalCase`,
-constantes en `SCREAMING_SNAKE_CASE`, privé préfixé `_`.
 </details>
 
 <details>
-<summary>Entrepôt colonne / BigQuery</summary>
+<summary>Entrepôt colonne — nommage d'entités</summary>
 
-- Partitionnement par date d'événement sur toute table dépassant quelques Go.
-- Clustering sur les colonnes les plus filtrées (3-4 max, sélectivité décroissante).
-- Schémas déclarés et versionnés dans le repo — pas d'auto-détection.
+Uniquement le nommage propre au projet. Le partitionnement, le clustering et les
+règles d'écriture sont dans le socle global.
+
 - Datasets : `<env>_<domain>`. Tables brutes : `raw_<source>__<entity>`.
 - Montants : `<entity>_amount_<currency>`. Comptages : `<entity>_count`.
-- Auth : credentials courts en dev, identité de service + impersonation en prod.
-  Jamais de fichier de clé committé.
 </details>
 
 <details>
-<summary>Orchestrateur type Airflow / Composer</summary>
-
-- Un DAG = un fichier. Idempotence obligatoire par task.
-- Zéro logique métier dans la définition du DAG : l'operator appelle une fonction externe.
-- Configuration via Variables / Connections, jamais en dur.
-- Retries explicites au niveau DAG, backoff exponentiel.
-- DAG IDs : `<domain>_<frequency>_<purpose>`. Task IDs : verbe + objet.
-</details>
-
-<details>
-<summary>Transformation SQL type dbt</summary>
+<summary>Transformation SQL type dbt — nommage de couches</summary>
 
 - Staging : `stg_<source>__<entity>` — Intermediate : `int_<entity>__<verb>`
 - Faits : `fct_<entity>` — Dimensions : `dim_<entity>`
@@ -158,7 +164,14 @@ constantes en `SCREAMING_SNAKE_CASE`, privé préfixé `_`.
 </details>
 
 <details>
-<summary>Messagerie asynchrone type Pub/Sub</summary>
+<summary>Orchestrateur — nommage</summary>
+
+- DAG IDs : `<domain>_<frequency>_<purpose>`. Task IDs : verbe + objet.
+- Un DAG = un fichier.
+</details>
+
+<details>
+<summary>Messagerie asynchrone</summary>
 
 - Schémas de message déclarés explicitement et versionnés.
 - Dead letter topic configuré sur toute subscription critique.

@@ -36,6 +36,11 @@ ici en une ligne, puis on passe à autre chose.
 > à l'exécution. Le statut est mis à jour par pi au fil de l'implémentation — c'est le
 > seul champ du bundle qu'il peut modifier.
 >
+> **Chaque décision est auto-portante.** `oracle` et `oracle-deep` tournent en
+> `inheritProjectContext: false` : ils ne liront jamais ce fichier, seulement l'extrait
+> qu'on leur passe. Une décision dont le sens dépend de trois autres sections ne
+> survivra pas à une escalade.
+>
 > **Ce fichier ne couvre que le structurant.** Les décisions d'implémentation prises à
 > l'exécution parce que le bundle était muet ne remontent pas ici : elles sont notées
 > dans le corps du commit. Elles n'ouvrent pas de retour vers Strategic Forge.
@@ -51,9 +56,14 @@ comportement attendu à la place.]
 |---|---|---|
 | [ce que pi ne doit jamais faire] | [pourquoi, en une ligne] | [le comportement correct] |
 
-Cette liste ne reprend pas les interdits universels déjà portés par `AGENTS.md`
+Cette liste ne reprend ni les interdits universels déjà portés par `AGENTS.md`
 (secrets en dur, destruction sans confirmation, dépendance injustifiée, code écrit
-contre une API non vérifiée). Elle ne contient que le spécifique.
+contre une API non vérifiée), ni les anti-patterns techniques portés par les skills,
+ni ce qui est déjà bloqué par `bash-guard` ou `pi-bq-cost-sentinel`. Elle ne contient
+que le spécifique au projet.
+
+Si cette section est vide après filtrage, la supprimer. Une section vide invite au
+remplissage.
 
 ---
 

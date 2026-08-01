@@ -2,12 +2,13 @@
 
 > Lire avant toute action : `ARCHITECTURE.md`, `DESIGN.md`, `CONVENTIONS.md`.
 > Ces trois fichiers sont figés. Ils ne sont ni rediscutés, ni reformulés, ni résumés.
+>
+> **Ce fichier décrit ce qui doit être.** Il ne décrit jamais l'état courant du repo :
+> c'est le rôle de `.pi/BRIEF.md`, qui est local, non versionné et rafraîchi contre le
+> code réel. Un écart entre les deux est un cas 3, pas une mise à jour à faire ici.
 
 ## Objectif
 [Ce que le projet produit, en 2 phrases concrètes et vérifiables.]
-
-## Livrables de session
-[Artefacts attendus à la fin : fichiers, endpoints, tables, jobs, scripts.]
 
 ## Hors scope
 [Ce que pi ne doit PAS faire dans cette session. Liste explicite — un hors-scope
@@ -31,6 +32,9 @@ une assertion qui tient. « Implémenté correctement » n'est pas un critère.
 Un critère qui **ne peut pas être évalué** — jeu de données absent, credential manquant,
 outil non installé — est noté `unavailable: <raison>` dans la sortie, et l'item continue.
 Une absence de prérequis n'est jamais une condition d'arrêt.
+
+**La session est terminée quand tous les items ont passé leur critère de validation.**
+Pas de liste de complétion séparée : elle divergerait du backlog.
 
 ## Périmètre de décision de pi
 
@@ -56,11 +60,6 @@ testable, un nommage ambigu : rien de tout cela n'arrête l'exécution.
 
 Le seul champ de ce bundle que pi peut écrire est la ligne `Statut` d'une décision de
 `DESIGN.md`.
-
-## Done
-Session terminée quand :
-- [ ] [Critère 1]
-- [ ] [Critère 2]
 
 ## Commande de lancement
 ```
