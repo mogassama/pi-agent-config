@@ -10,10 +10,6 @@
     "npm:pi-claude-bridge"
   ],
   "subagents": {
-    "turnBudget": {
-      "maxTurns": 20,
-      "graceTurns": 2
-    },
     "agentOverrides": {
       "planner": {
         "model": "openai-codex/gpt-5.6-sol",
@@ -58,9 +54,7 @@
       },
       "reviewer": {
         "model": "claude-bridge/claude-sonnet-5",
-        "fallbackModels": [
-          "anthropic/claude-sonnet-5"
-        ],
+        "fallbackModels": ["anthropic/claude-sonnet-5"],
         "thinking": "high",
         "skills": [
           "code-review",
@@ -94,9 +88,7 @@
       },
       "oracle-deep": {
         "model": "claude-bridge/claude-opus-5",
-        "fallbackModels": [
-          "anthropic/claude-opus-5"
-        ],
+        "fallbackModels": ["anthropic/claude-opus-5"],
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -111,10 +103,12 @@
       },
       "scout": {
         "model": "google/gemini-3.5-flash",
-        "fallbackModels": [
-          "openai-codex/gpt-5.6-luna"
-        ],
-        "thinking": "off"
+        "fallbackModels": ["openai-codex/gpt-5.6-luna"],
+        "thinking": "off",
+        "turnBudget": {
+          "maxTurns": 20,
+          "graceTurns": 2
+        }
       }
     }
   },

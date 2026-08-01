@@ -227,6 +227,18 @@ Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when
 
 There is no invocation path back to Strategic Forge. It is not a runtime destination.
 
+## Turn budgets
+
+Never pass `turnBudget` or a hard `toolBudget` to mutation-capable subagents
+(worker, or any role invoked with edit/write authority). Turn counts do not
+measure whether a delivery slice is complete or safe to hand off — aborting
+mid-task leaves the working tree in an unverified state.
+
+Count caps are appropriate only for read-only roles: scout, oracle, and
+reviewers invoked without edit authority.
+
+For writers, use a narrow task scope and an outer elapsed deadline instead.
+
 ## Skill loading before delegation
 
 Subagents run with `inheritSkills: false` — they cannot load skills themselves.
