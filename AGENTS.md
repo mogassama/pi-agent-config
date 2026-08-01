@@ -227,6 +227,18 @@ Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when
 
 There is no invocation path back to Strategic Forge. It is not a runtime destination.
 
+## Skill loading before delegation
+
+Subagents run with `inheritSkills: false` — they cannot load skills themselves.
+They only receive skill bodies through the inherited parent context.
+
+Before delegating, load the skills the target role needs in this session:
+- reviewer → code-review, plus the domain skill matching the file type
+- worker   → the domain skills matching the files being changed
+- planner  → dataeng-architecture, plus relevant domain skills
+
+If the relevant skill is not loaded in this session, load it first, then delegate.
+
 ## Output discipline
 
 - After a change, output: (a) what changed, (b) what was run to verify (or "not verified, here's why"), (c) what's still open. Bullets, no prose padding.
