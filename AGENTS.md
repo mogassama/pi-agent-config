@@ -110,7 +110,12 @@ See authoring skills for canonical rules. Applies only where the project bundle 
 - **`read` tool** — for individual files. Use `bash` + `rg` when you need to search across many files.
 - **`edit`** preferred over `write` for existing files. Reserve `write` for new files or full rewrites.
 - **No `cd` in a long pipeline** — it doesn't persist between `bash` calls in pi (each call is a new shell). Use absolute paths or `cd X && cmd` in the same call.
+- **Commits:** never commit on your own initiative. A commit happens only through an
+  explicit `/skill:git-collaboration` invocation — which stands as intent through to
+  push, so don't re-ask for confirmation at each step. Enforced by `bash-guard`;
+  workarounds fail.
 - **Staging:** `git add <specific files>` only. Never `git add .`.
+- **Commit language:** commit subject and body in English, whatever the conversation language.
 
 ## Skills available (global)
 
