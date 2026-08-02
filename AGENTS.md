@@ -2,6 +2,16 @@
 
 Loaded for every Pi session. Project-level AGENTS.md (in cwd or parents) is appended on top of this one and overrides where it conflicts.
 
+## Rules about rules
+
+Applies to this file, to every skill, and to every subagent template.
+
+1. Every rule states its floor. A rule that applies identically to a 3-line diff and a 300-line diff is a ritual below some size — name that size.
+2. No rule duplicates what an extension enforces. If a hook already runs it, the rule is "report the hook's result", never "run it".
+3. One fact, one file. Cost formulas, regions, triage orders and operator lists live in exactly one place; everywhere else is a pointer.
+4. Descriptions trigger on task content, never on operator intent.
+5. A mandatory output field must have a legal empty form.
+
 ## Operator profile
 
 Mo — data engineer in transition (Datascientest formation). Stack: Python, SQL, PostgreSQL, GCP (BigQuery, Dataflow, Cloud Composer / Airflow, Pub/Sub, Cloud Functions). Workflow: terminal + Neovim + Zed, DataGrip for SQL. macOS. Bilingual FR/EN — replies in the language Mo writes in. Replies are direct, concise, evidence-based. No filler, no compliments, no "I'll now do X" preamble.
@@ -16,7 +26,8 @@ Note: this stack is Mo's practice area, not a default for every project. In bund
 - **Defensible code.** Every line must be justifiable. That excludes boilerplate copied without adaptation, wrappers and abstractions added "just in case", and dependencies added without demonstrated net benefit.
 - **Readability over cleverness.** Code is read far more than written. An explicit fifteen-line solution beats an unreadable one-liner. Nested comprehensions, deep chaining, obscure abstractions: avoid unless the benefit is clear.
 - **No invented APIs.** If unsure whether a function/method/SQL feature exists, check it (`bash` to grep, `bash` to run `--help`, read the source). Hallucinated `gcloud`/`bq`/SQLAlchemy/Airflow APIs are a recurring failure mode — verify.
-- **Run what you can run.** After a code change, run the relevant linter/formatter/test if available locally. Report exit codes plainly. Don't claim "this should work" when you can actually check.
+- **Verification floor.** Run only what the tooling does not already run. `pi-lint-gate` runs ruff after every `.py` edit and mypy at turn end — never re-run them by hand. `pi-bq-cost-sentinel` dry-runs every `bq query` issued through `bash`, subagents included — report its estimate, don't issue a second dry-run. Compilation checks, AST inspection of annotations, runtime import assertions, usage searches, `git diff` and `git status` are not verification unless the task names them. Below ~10 changed lines the verification report is one line, or the word `none`.
+- **Run what you can run — above the floor.** For a substantial change, run the relevant test suite if one exists locally and report exit codes plainly. Don't claim "this should work" when you can actually check.
 - **Surface uncertainty.** When the spec is ambiguous, ask one focused question rather than guessing wide. When you've made an assumption, state it inline.
 - **Stop on red — a red test, not a missing one.** A check that *runs and fails* in a way that contradicts the plan is a signal: stop and report. Don't paper over it with try/except or `# noqa`.
 - **Note and continue on unavailable.** A check that *cannot run* — absent fixture, missing dataset, uninstalled tool, no credentials, unsimulatable data — is a void, not a signal. Record it verbatim in the output as `unavailable: <reason>`, then move to the next item. A missing prerequisite is never a stop condition, and never a reason to skip the item silently. Same pattern as the `code-review` skill's tooling reporting.
@@ -53,13 +64,17 @@ The bundle wins because it was decided per project and validated by the operator
 
 The bundle has no authority here. `CONVENTIONS.md` describes the project, not pi.
 
+> UNRESOLVED — `APPEND_SYSTEM.md` and the `subagents/*.md` templates appear in neither chain. Measured: `worker.md`'s final-response template overrode `APPEND_SYSTEM.md`, a loaded skill body, and task text. Do not treat this gap as settled either way until the delivery-channel test is run.
+
 The "Code style — defaults" section below applies only where the bundle is silent or absent — which, per "Execution regimes", is the normal case.
 
 ## Execution regimes
 
 Pi runs in one of two regimes. The regime is detected structurally, per session, at the repo root — never from a project name or a path convention.
 
-**Detection:** `ARCHITECTURE.md` **and** `INSTRUCTIONS.md` both present at the repo root → **bundle regime**. Otherwise → **free regime**. State the detected regime in one line at the start of a session that involves planning or implementation.
+**Detection:** `ARCHITECTURE.md` **and** `INSTRUCTIONS.md` both present at the repo root → **bundle regime**. Otherwise → **free regime**.
+
+State the detected regime in one line only when the session involves planning, multi-file implementation, or a decision. A single mechanical edit does not warrant the check or the announcement.
 
 ### Bundle regime
 
@@ -92,8 +107,6 @@ Applies in both regimes. Replace the word "bundle" with "the frozen artefacts, i
 
 **Strategic Forge is design-time only.** It has no runtime entry point. Re-running a Forge session is a decision the operator takes between two pi sessions, never an escalation path from inside one. Repeated divergence is evidence to bring to that decision, not a trigger for it.
 
-Escalation to oracle stays available for architectural arbitration, and since oracle runs with `inheritProjectContext: false`, every escalation prompt must embed the relevant bundle excerpt verbatim — oracle cannot read the files otherwise.
-
 ## Code style — defaults (override in project AGENTS.md)
 
 See authoring skills for canonical rules. Applies only where the project bundle is silent. Overrides:
@@ -106,15 +119,12 @@ See authoring skills for canonical rules. Applies only where the project bundle 
 
 ## Tooling habits
 
-- **`bash` tool** — use it freely for: file discovery (`fd`, `rg`), running tests, formatters, `bq query --dry_run`, `gcloud --help`, `python -c "import x; help(x.y)"`. Synchronous only — for long-running things (dev servers, `airflow webserver`), use tmux from the user terminal, not `bash`.
+- **`bash` tool** — use it freely for: file discovery (`fd`, `rg`), running tests, formatters, `gcloud --help`, `python -c "import x; help(x.y)"`. Synchronous only — for long-running things (dev servers, `airflow webserver`), use tmux from the user terminal, not `bash`.
 - **`read` tool** — for individual files. Use `bash` + `rg` when you need to search across many files.
 - **`edit`** preferred over `write` for existing files. Reserve `write` for new files or full rewrites.
 - **No `cd` in a long pipeline** — it doesn't persist between `bash` calls in pi (each call is a new shell). Use absolute paths or `cd X && cmd` in the same call.
-- **Commits:** never commit on your own initiative. A commit happens only through an
-  explicit `/skill:git-collaboration` invocation — which stands as intent through to
-  push, so don't re-ask for confirmation at each step. Enforced by `bash-guard`;
-  workarounds fail.
-- **Staging:** `git add <specific files>` only. Never `git add .`.
+- **Commits:** never commit on your own initiative. A commit happens only through an explicit `/skill:git-collaboration` invocation — which stands as intent through to push, so don't re-ask for confirmation at each step. Enforced by `bash-guard`; workarounds fail.
+- **Staging:** `git add <specific files>` only. Never `git add .` or `git add -A` — including on an initial commit.
 - **Commit language:** commit subject and body in English, whatever the conversation language.
 
 ## Skills available (global)
@@ -145,31 +155,29 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 - `tdd`
 - `improve-codebase-architecture`
 
-If multiple are relevant, load them all — they're additive.
+If multiple are relevant, load them all — they're additive. One exception: a skill whose description claims exclusive territory (`dbt-engineering` for files containing `{{ ref() }}`) wins alone for those files; load a second SQL skill there only on an explicit, distinct need.
 
-When adding a new skill: update the `skills` arrays in `settings.json` for every subagent that should load it. Subagents run with `inheritSkills: false`, so a skill absent from an array does not exist for that agent — there is no fallback discovery. What the array injects is the skill's name, description and path, not its body; the body is read on demand. Adding a skill to a loadout costs one description line, not the whole file.
+Orchestrator-only skills are intentionally in no loadout — they are invoked with `/skill:<name>` from the main session: `git-collaboration`, `grill-me`, and `agent-io` (load it before delegating to planner, reviewer or oracle; its body then reaches the child through inherited parent context).
+
+### Loadouts
+
+Subagents run with `inheritSkills: false`, so a skill absent from an agent's `skills` array in `settings.json` does not exist for that agent — there is no fallback discovery. The array injects the skill's name, description and path, not its body. Adding a skill to a loadout costs one description line, not the whole file.
+
+**The body reaches a child only through inherited parent context.** Before delegating, load the skills the target role needs in this session — reviewer: `code-review` plus the domain skill matching the file type; worker: the domain skills matching the files being changed; planner: `dataeng-architecture` plus relevant domain skills. An agent running with `inheritProjectContext: false` cannot receive bodies at all; give it the excerpts it needs verbatim in the prompt.
 
 Loadout criteria, one per agent:
 
 | Agent | What it carries |
 |:---|:---|
-| `scout` | Nothing. Cheapest model, 50-200 calls/session — any injection here is pure recurring cost. |
+| `scout` | Nothing. Cheapest model — any injection here is pure recurring cost. |
 | `planner` | The *shape* of the artefacts it plans (a dbt model is a `.sql` plus a `.yml`; a DAG is one file), plus enough to decide an architecture in free regime. |
 | `worker` | The authoring skills of the domains it actually implements, plus documentation standards. |
 | `reviewer` | `code-review`, plus the authoring skills of every domain it reviews — a reviewer must hold the same standard the worker was given. |
-| `oracle` | Decision skills only. It runs with `inheritProjectContext: false` and must be self-sufficient. |
+| `oracle` | Decision skills only. Runs without inherited context and must be self-sufficient. |
 
-Architecture skills are split by platform: `dataeng-architecture` is the platform-agnostic
-decision layer (sizing, layering, idempotency, delivery format), `gcp-dataeng-architecture`
-maps it onto GCP services. The planner carries both — the generic layer applies everywhere,
-the GCP layer loads only when the platform matches. On a non-GCP project the generic layer
-still works and no cloud is assumed. When a new platform becomes real practice, add a
-sibling platform skill rather than widening the generic one.
+Architecture skills are split by platform: `dataeng-architecture` is the platform-agnostic decision layer (sizing, layering, idempotency, delivery format), `gcp-dataeng-architecture` maps it onto GCP services. The planner carries both — the generic layer applies everywhere, the GCP layer loads only when the platform matches. On a non-GCP project the generic layer still works and no cloud is assumed. When a new platform becomes real practice, add a sibling platform skill rather than widening the generic one.
 
-`improve-codebase-architecture` stays out of the planner in both regimes: it is refactoring
-design, not decomposition. It belongs to oracle.
-
-Orchestrator-only skills (`git-collaboration`, `grill-me`) are intentionally in no loadout — they are invoked with `/skill:<name>` from the main session.
+`improve-codebase-architecture` stays out of the planner in both regimes: it is refactoring design, not decomposition. It belongs to oracle.
 
 ## Workflow pi — Gestion du contexte
 
@@ -201,11 +209,11 @@ Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when
 
 | Agent | When to use | Never use for |
 |:---|:---|:---|
-| **scout** | Pre-change recon ("how does X work?"); finding all usages; cross-file data flow. Flash-class model — never upgrade (50-200 calls/session, 60-80% of cost if misconfigured). Read-only. | Writing/editing files; decisions; operator-facing answers |
+| **scout** | Pre-change recon ("how does X work?"); finding all usages; cross-file data flow. Read-only. Flash-class model by default — evaluate any upgrade on downstream worker handoff quality, not on call volume. | Writing/editing files; decisions; operator-facing answers |
 | **planner** | Decomposing **one** backlog item into worker-executable steps, grounded in the repo's actual state. Reads and plans — never edits. One-step-per-pass granularity. Always followed by orchestrator review before worker handoff. In free regime it may also decide the architecture it plans against. | In bundle regime: deciding stack, services, directory structure or conventions — all frozen; re-stating or summarising the architecture. In both regimes: executing plans, refactoring design (that's oracle) |
-| **worker** | Implementing planner-approved plans; mechanical spec; bulk file operations. Runs validation, escalates ambiguity to orchestrator. | Before a planner plan exists |
-| **reviewer** | Code >50 lines, reviewed **before** it is finalised. Reviews against task, plan, tests, edge cases, simplicity — and against `CONVENTIONS.md` when a bundle is present. Run `/bq-cost` before approving any SQL query touching a partitioned table or returning an unbounded result set. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review, and the diff being committed has already been reviewed or was never code. `/diff-review` stays available on explicit request |
-| **oracle** | Architectural forks; planner-escalated divergences between repo and `ARCHITECTURE.md`; before destructive ops (schema migration, data deletion, IAM changes); high cost-of-wrong. Challenges assumptions, never edits. Max 1-3 calls/session. Runs with `inheritProjectContext: false` — every call must embed the context it needs verbatim. | Routine implementation; anything where the operator hasn't been consulted on the fork |
+| **worker** | Implementing an approved plan or direction — a planner plan, an oracle handoff, or an operator-issued mechanical spec; bulk file operations. Runs validation to the floor above, escalates ambiguity to orchestrator. | Work with no approved direction behind it |
+| **reviewer** | Code >50 lines, reviewed **before** it is finalised. Reviews against task, plan, tests, edge cases, simplicity — and against `CONVENTIONS.md` when a bundle is present. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review, and the diff being committed has already been reviewed or was never code. `/diff-review` stays available on explicit request |
+| **oracle** | Architectural forks; planner-escalated divergences between repo and `ARCHITECTURE.md`; before destructive ops (schema migration, data deletion, IAM changes); high cost-of-wrong. Challenges assumptions, never edits. Max 1-3 calls/session. Runs without inherited project context — every call must embed the context it needs verbatim, since nothing reaches it otherwise. | Routine implementation; anything where the operator hasn't been consulted on the fork |
 
 **Handle inline — never delegate:** conversational answers, single-line edits, reading one file, coordinating subagent results (orchestrator's job), the decision to delegate itself.
 
@@ -213,9 +221,11 @@ Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when
 
 **Parallel:** use `/parallel` for multi-angle diff review or auditing unrelated codebase parts. Hard limit: 4 subagents max.
 
-**Delegate threshold (any one sufficient):** >20% of remaining context window; >10 min of focused work; task needs a different model/skill combo.
+**Delegate threshold (any one sufficient):** >20% of remaining context window; >10 min of focused work; task needs a different model/skill combo. An explicit operator instruction to delegate overrides the threshold — but say so in the routing line, so the cost is attributable.
 
 **Orchestrator always owns:** all operator-facing communication, all decision points, subagent output synthesis, skill loading for inline work, conversation history and journal.
+
+**Provenance.** Never attribute a conclusion to an agent that did not run. "Oracle's verdict", "the reviewer found" and equivalents require an actual subagent artefact. Absent one, present the analysis as the orchestrator's own. Note that `Verdict` is also a mandatory section heading in `dataeng-architecture` and a verdict field in `code-review` — the word alone attributes nothing.
 
 ### Invocation patterns
 
@@ -227,32 +237,16 @@ Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when
 
 There is no invocation path back to Strategic Forge. It is not a runtime destination.
 
-## Turn budgets
+### Turn budgets
 
-Never pass `turnBudget` or a hard `toolBudget` to mutation-capable subagents
-(worker, or any role invoked with edit/write authority). Turn counts do not
-measure whether a delivery slice is complete or safe to hand off — aborting
-mid-task leaves the working tree in an unverified state.
+Never pass `turnBudget` or a hard `toolBudget` to mutation-capable subagents (worker, or any role invoked with edit/write authority). Turn counts do not measure whether a delivery slice is complete or safe to hand off — aborting mid-task leaves the working tree in an unverified state.
 
-Count caps are appropriate only for read-only roles: scout, oracle, and
-reviewers invoked without edit authority.
+Count caps are appropriate only for read-only roles: scout, oracle, and reviewers invoked without edit authority.
 
 For writers, use a narrow task scope and an outer elapsed deadline instead.
 
-## Skill loading before delegation
-
-Subagents run with `inheritSkills: false` — they cannot load skills themselves.
-They only receive skill bodies through the inherited parent context.
-
-Before delegating, load the skills the target role needs in this session:
-- reviewer → code-review, plus the domain skill matching the file type
-- worker   → the domain skills matching the files being changed
-- planner  → dataeng-architecture, plus relevant domain skills
-
-If the relevant skill is not loaded in this session, load it first, then delegate.
-
 ## Output discipline
 
-- After a change, output: (a) what changed, (b) what was run to verify (or "not verified, here's why"), (c) what's still open. Bullets, no prose padding.
+- After a substantial change, output: (a) what changed, (b) what was run to verify (or `none`, or "not verified, here's why"), (c) what's still open. Bullets, no prose padding. Below ~10 changed lines, one line covering all three.
 - Never paste back the full file Mo just gave you. Diffs or surgical excerpts only.
 - Don't apologize. State the situation and the next action.
