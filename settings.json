@@ -6,12 +6,8 @@
   "packages": [
     {
       "source": "npm:pi-subagents@0.39.0",
-      "extensions": [
-        "+index.ts"
-      ],
-      "skills": [
-        "+skills/pi-subagents/SKILL.md"
-      ],
+      "extensions": ["+index.ts"],
+      "skills": ["+skills/pi-subagents/SKILL.md"],
       "prompts": [
         "+prompts/gather-context-and-clarify.md",
         "+prompts/parallel-cleanup.md",
@@ -24,15 +20,11 @@
     },
     {
       "source": "npm:pi-powerline-footer",
-      "extensions": [
-        "+index.ts"
-      ]
+      "extensions": ["+index.ts"]
     },
     {
       "source": "npm:@tmustier/pi-raw-paste",
-      "extensions": [
-        "+index.ts"
-      ]
+      "extensions": ["+index.ts"]
     },
     "npm:pi-claude-bridge"
   ],
@@ -81,9 +73,7 @@
       },
       "reviewer": {
         "model": "claude-bridge/claude-sonnet-5",
-        "fallbackModels": [
-          "anthropic/claude-sonnet-5"
-        ],
+        "fallbackModels": ["anthropic/claude-sonnet-5"],
         "thinking": "high",
         "skills": [
           "code-review",
@@ -113,13 +103,11 @@
           "bigquery-engineering",
           "bigquery-ops"
         ],
-        "inheritProjectContext": false
+        "inheritProjectContext": true
       },
       "oracle-deep": {
         "model": "claude-bridge/claude-opus-5",
-        "fallbackModels": [
-          "anthropic/claude-opus-5"
-        ],
+        "fallbackModels": ["anthropic/claude-opus-5"],
         "thinking": "high",
         "skills": [
           "dataeng-architecture",
@@ -134,10 +122,8 @@
       },
       "scout": {
         "model": "google/gemini-3.5-flash",
-        "fallbackModels": [
-          "openai-codex/gpt-5.6-luna"
-        ],
-        "thinking": "off",
+        "fallbackModels": ["openai-codex/gpt-5.6-luna"],
+        "thinking": "low",
         "turnBudget": {
           "maxTurns": 20,
           "graceTurns": 2

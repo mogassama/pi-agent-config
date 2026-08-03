@@ -1,14 +1,10 @@
 ---
 name: oracle-deep
 description: Escalation-tier arbiter for irreversible operations and high cost-of-wrong architectural forks
-model: anthropic/claude-opus-5
 tools: read, grep, find, ls, bash, intercom
-thinking: high
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
-skills: ["dataeng-architecture", "gcp-dataeng-architecture", "improve-codebase-architecture", "gcp-engineering", "iac-terraform", "bigquery-engineering"]
-turnBudget: {"maxTurns": 8, "graceTurns": 2}
 acceptanceRole: read-only
 ---
 
