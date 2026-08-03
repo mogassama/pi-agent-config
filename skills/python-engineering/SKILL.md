@@ -156,6 +156,12 @@ message really is a template.
 
 ## Anti-patterns — never do these
 
+- **Never build a shell command by interpolating external input.** `subprocess`
+  is fine and used daily; `shell=True` with a value that came from a request,
+  a filename, a config field or a DAG parameter is a command injection.
+  Pass a list of arguments and leave `shell` at its default. `os.system()` has
+  no safe form — it is always a shell.
+
 - `except Exception: pass` or bare `except:` — always catch narrow and re-raise with context.
 - `import *` — ever.
 - `requirements.txt` in new projects — use `uv` and `pyproject.toml`.
@@ -164,3 +170,65 @@ message really is a template.
 - `print()` in library code — use `logger`.
 - `download_as_bytes()` on large GCS objects — stream instead.
 - Global config objects imported across modules — inject via function arguments.
+
+## Review delta
+
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It does not restate the rules
+above — it says how to weigh a breach of them, and what a diff does not show.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Do not report what the tooling already reports.** `pi-lint-gate` runs `ruff`
+after every `.py` edit and `mypy` at turn end. Import order, line length,
+unused names, `UP`/`SIM` rewrites and type errors are already surfaced.
+
+### Severity assignment
+
+Definitions live in `code-review`. Confidence is orthogonal: a HIGH at
+`possible` does not block.
+
+| Breach | Severity |
+|:--|:--|
+| `shell=True` or `os.system()` with a value from outside the process | **HIGH** |
+| Bare `except:` or `except Exception: pass` | **HIGH** |
+| Missing type hints on a public function or method | MEDIUM |
+| No explicit exception handling at the entry point | MEDIUM |
+| Mutable default argument | MEDIUM |
+| `import *` | MEDIUM |
+| `print()` anywhere in library or pipeline code | MEDIUM |
+| Global config object imported across modules | MEDIUM |
+| Logging library inconsistent with the project bundle's choice | MEDIUM |
+| Large dataset loaded into a list instead of streamed via a generator | MEDIUM |
+| `download_as_bytes()` on a large GCS object | MEDIUM |
+| Pure transform function that has acquired a side effect | MEDIUM |
+| Several writes through one engine with no shared transaction block | MEDIUM |
+| `os.path` where `pathlib` applies | LOW |
+
+**Logging: enforce the library declared in the project bundle. Do not assume a
+default. If the bundle is silent on logging, raise no finding.**
+
+Not weighed here — see the owning skill: secrets and credentials
+(`gcp-engineering`), `WRITE_APPEND` and `MERGE` keys (`bigquery-engineering`),
+`SELECT *` and query text (`sql-engineering`).
+
+### Traps a diff does not show
+
+- **Loguru braces.** `logger.info("msg", key=value)` runs `msg.format(...)`. A
+  literal `{` or `}` in the message raises at log time, uncaught, and never in
+  the reviewed run. Read the message string, not just the call shape.
+- **Shadowed `LogRecord` attributes.** Stdlib `extra` keys named `message`,
+  `asctime`, `name`, `levelname`, `module` or `args` are silently mangled — no
+  exception, no warning.
+- **Test path drift.** `src/package/etl/loader.py` must be mirrored by
+  `tests/etl/test_loader.py`. A test placed elsewhere may never be collected;
+  a green run proves nothing about it.
+- **Transaction scope.** Several writes through the same engine without a
+  shared `begin()` block commit independently; a failure midway leaves a
+  partial state no rollback undoes. Visible only by reading the whole function.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority` as
+an assumption requiring verification. With no finding above LOW, `approved`.

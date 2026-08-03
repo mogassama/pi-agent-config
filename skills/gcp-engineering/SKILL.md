@@ -47,7 +47,12 @@ gcloud config get-value account
 | Read secrets | `roles/secretmanager.secretAccessor` |
 | Invoke Cloud Run | `roles/run.invoker` |
 
-Never grant `roles/owner` or `roles/editor`. Flag immediately in review.
+Never grant a basic role. `roles/owner` and `roles/editor` carry write and
+destroy; `roles/viewer` carries read across every service in the project,
+including data. Flag all three in review — the first two block.
+
+This is the canonical statement. `iac-terraform` points here rather than
+restating it: IAM is a GCP subject, not a Terraform one.
 
 **Debug IAM permission failures:**
 
@@ -120,7 +125,11 @@ gcloud run jobs create JOB_NAME \
 - **Windowing:** fixed for periodic aggregation, sliding for moving averages, session for user-activity grouping.
 - **Watermarks and late data are the part that bites.** `withAllowedLateness` and trigger configuration are deliberate choices — never left implicit.
 - **Streaming Engine** on streaming jobs: moves shuffle and state off the workers.
-- **`--max-workers` is mandatory in production.** No worker ceiling means no bill ceiling. `--num-workers` is a floor, autoscaling does the rest.
+- **Every autoscaled service declares its ceiling.** No ceiling means no bill
+  ceiling. Dataflow: `--max-workers` — `--num-workers` is a floor, autoscaling
+  does the rest. Cloud Run: `--max-instances`. Cloud Functions:
+  `--max-instances`. The default on each is high enough to be indistinguishable
+  from unbounded during an incident.
 - **`DirectRunner` does not validate a pipeline.** It misses serialization and fusion behaviour. A staging run on sampled data is the only real validation.
 - **Stop streaming jobs with `drain`, not `cancel`.** Drain finishes in-flight windows; cancel drops them. Cancel only when data loss is acceptable.
 - Workers pinned to the same region as sources and sinks — cross-region worker traffic is billed.
@@ -276,20 +285,70 @@ gcloud compute regions describe europe-west1 \
   --format="table(quotas.metric,quotas.limit,quotas.usage)"
 ```
 
-## Review checklist
+## Review delta
 
-- [ ] No service account JSON keys in code, config, or environment variables
-- [ ] All resources have `env`, `team`, `cost_center` labels
-- [ ] Project ID injected via env var or function argument — never hardcoded
-- [ ] IAM roles are least-privilege — no `roles/owner` or `roles/editor`
-- [ ] Dead-letter topic configured on all Pub/Sub production subscriptions
-- [ ] GCS lifecycle rule present on all buckets
-- [ ] `gsutil` commands replaced with `gcloud storage`
-- [ ] Docker images use multi-stage build with uv export
-- [ ] Artifact Registry used — not Container Registry
-- [ ] Secrets via Secret Manager — not env vars with raw values
-- [ ] Dataflow jobs set `--max-workers` — no unbounded autoscaling in production
-- [ ] Streaming pipelines stopped with `drain` unless data loss is explicitly accepted
-- [ ] Budget alert configured on the project
-- [ ] Dataproc: Serverless preferred; any cluster has `--max-idle` and `--max-age`
-- [ ] Dataproc: runtime version pinned, PHS configured, subnet has Private Google Access
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist` — the unweighted checkbox list and the `code-review`
+severity block were two parallel lists for the same domain.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings. A single
+resource added to an existing, already-conformant module does not warrant a
+full posture review.
+
+**Do not report what the tooling already reports.** `bash-guard` gates
+destructive `gcloud` and `gsutil` calls; `pi-bq-cost-sentinel` dry-runs every
+`bq query` passed through `bash`, subagents included, and blocks past 1 TB.
+
+### Severity assignment
+
+Definitions live in `code-review`. Confidence is orthogonal: a HIGH at
+`possible` does not block.
+
+| Breach | Severity |
+|:--|:--|
+| Service account JSON key in code, config, or an environment variable | **HIGH** |
+| Hardcoded secret, token or password | **HIGH** |
+| `roles/owner` or `roles/editor` granted | **HIGH** |
+| `roles/viewer` granted on a production project | MEDIUM |
+| IAM binding to `allUsers` or `allAuthenticatedUsers` | **HIGH** |
+| Secret read from a raw env var instead of Secret Manager | **HIGH** |
+| Project ID hardcoded instead of injected | MEDIUM |
+| ADC not used in GCP client code | MEDIUM |
+| Pub/Sub production subscription with no dead-letter topic | MEDIUM |
+| Autoscaled service with no declared ceiling — Dataflow, Cloud Run, Cloud Functions | MEDIUM |
+| Streaming pipeline stopped with `cancel` where `drain` was possible | MEDIUM |
+| GCS bucket with no lifecycle rule | MEDIUM |
+| Container Registry used instead of Artifact Registry | MEDIUM |
+| `gsutil` where `gcloud storage` applies | LOW |
+| Docker image without multi-stage build and uv export | LOW |
+| Missing `env`, `team` or `cost_center` label | LOW |
+| No budget alert on the project | LOW |
+
+**Dataproc** — a cluster with no `--max-idle` and no `--max-age` is **MEDIUM**:
+it bills until someone notices. Unpinned runtime version, absent PHS, or a
+subnet without Private Google Access are each LOW on their own and MEDIUM
+together, since the combination makes an incident undiagnosable.
+
+Not weighed here — see the owning skill: f-string interpolation in SQL
+(`sql-engineering`), `os.system()`/`subprocess` with unsanitized input
+(`python-engineering`), Terraform resource lifecycle (`iac-terraform`),
+BigQuery table expiry and cost formulas (`bigquery-ops`).
+
+### Traps a diff does not show
+
+- **A dead-letter topic that exists but has no subscriber.** The configuration
+  passes review and the messages accumulate until the retention window drops
+  them. Check that something consumes the DLQ, not just that it is declared.
+- **`--max-workers` set on the template, absent from the launch.** Dataflow
+  takes the runtime value. Reading the pipeline file alone proves nothing.
+- **A least-privilege role granted at project scope.** `roles/bigquery.dataEditor`
+  is narrow as a role and broad as a binding. Read the scope, not the role name.
+- **Lifecycle rules that never match.** A rule keyed on a prefix no writer uses
+  is inert. The bucket looks configured and grows forever.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

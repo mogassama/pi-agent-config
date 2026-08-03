@@ -42,12 +42,6 @@ sqlfluff lint --dialect <dialect> <file.sql>
 sqlfluff fix <file.sql>   # review the diff before committing
 ```
 
-### Review checklist
-
-- [ ] No `SELECT *` anywhere in the query
-- [ ] JOINs have explicit `ON` clause with selective predicate
-- [ ] Query linted with the correct dialect before review
-
 ---
 
 ## Block 2 — PostgreSQL
@@ -69,13 +63,6 @@ sqlfluff fix <file.sql>   # review the diff before committing
 - **Connection pooling:** PgBouncer or a SQLAlchemy pool. Never a new connection
   per query.
 - `RETURNING` instead of a follow-up SELECT after an INSERT or UPDATE.
-
-### Review checklist
-
-- [ ] Upsert uses `ON CONFLICT` — never manual SELECT+INSERT
-- [ ] `EXPLAIN (ANALYZE, BUFFERS)` run before merging any new query on a large table
-- [ ] Index type matches the predicate shape (B-tree / GIN / GiST)
-- [ ] `sqlfluff --dialect postgres`
 
 ---
 
@@ -103,3 +90,62 @@ lever is partitioning and clustering.
 - f-string interpolation of values into SQL
 - PostgreSQL rules applied to a BigQuery file, or the reverse — check the
   recognition markers first
+
+## Review delta
+
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the two former
+`### Review checklist` blocks.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Do not report what the tooling already reports.** `sqlfluff` with the correct
+dialect covers formatting, keyword casing and layout. A finding it would raise
+is a duplicate.
+
+**Dialect first.** Before weighing anything, confirm which engine the file
+targets using the recognition markers in Block 1. A PostgreSQL rule applied to
+a BigQuery file — or the reverse — is itself a MEDIUM finding, and it
+invalidates everything else you were about to report.
+
+### Severity assignment — every dialect
+
+Definitions live in `code-review`.
+
+| Breach | Severity |
+|:--|:--|
+| Value interpolated into SQL by f-string or string concatenation | **HIGH** |
+| `SELECT *` in production or pipeline SQL | MEDIUM |
+| JOIN with no explicit `ON`, or with a non-selective predicate | MEDIUM |
+| PostgreSQL rules applied to a BigQuery file, or the reverse | MEDIUM |
+| Query not linted with the correct dialect before review | LOW |
+
+### Severity assignment — PostgreSQL
+
+| Breach | Severity |
+|:--|:--|
+| Upsert written as manual `SELECT` then `INSERT` instead of `ON CONFLICT` | MEDIUM |
+| Index type mismatched to the predicate shape — B-tree, GIN, GiST | MEDIUM |
+| No `EXPLAIN (ANALYZE, BUFFERS)` on a new query against a large table | LOW |
+
+### BigQuery
+
+Not weighed here. Query conventions live in `bigquery-engineering`; access,
+cost and administration in `bigquery-ops`. A partition-filter rule
+half-remembered in this file would be worse than no rule.
+
+### Traps a diff does not show
+
+- **A `WHERE` clause that is selective in staging and not in production.**
+  Predicate selectivity depends on the data, not the text. Say so in
+  `open_risks` rather than asserting a performance finding as `certain`.
+- **`ON CONFLICT DO NOTHING` where `DO UPDATE` was meant.** Both are idempotent;
+  only one converges. Silent, and invisible until the values diverge.
+- **An index added in a migration but the query still not using it.** The diff
+  shows the index; only `EXPLAIN` shows whether the planner picks it.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

@@ -9,8 +9,10 @@
  *   - validation happens on tool arguments, enforced by pi against TypeBox,
  *     instead of a regex over markdown fences;
  *   - `terminate: true` ends the child on the tool call, saving one LLM turn;
- *   - measured: across 8 real reviews in anime-etl, 4 task prompts asked for
- *     the JSON envelope by name and 0 produced it. Asking does not work.
+ *   - measured: across 10 reviewer runs in anime-etl, the envelope appeared in
+ *     5/5 runs whose task prompt named it and 0/3 that only described the work.
+ *     A loaded skill never imposes its own output format; asking in the prompt
+ *     works only when someone remembers to ask. The schema removes the choice.
  *
  * Vocabulary is taken from skills/code-review/SKILL.md and from the 8 observed
  * outputs. Do not invent a parallel scale here — one fact, one file.
@@ -64,10 +66,18 @@ const Location = Type.String({
  * its own: "flake8 -> unavailable: module not installed in .venv".
  */
 const ToolingEntry = Type.Object({
-  command: Type.String(),
+  command: Type.String({ description: "As invoked, e.g. `uv run ruff check src/load.py`." }),
   outcome: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unavailable")]),
   detail: Type.String({ description: "Result line, or the reason it could not run." }),
 });
+
+/*
+ * An array, not the object-with-named-keys shape the corpus used (`ruff`, `mypy`,
+ * `bq_dry_run`, `sqlfluff`). Named keys cannot express a tool that was never
+ * relevant, cannot carry an arbitrary command, and have no empty form. Verified
+ * in practice: a reviewer with no `bash` in its allowlist returned [] rather
+ * than inventing commands.
+ */
 
 const payloads = {
   scout: Type.Object({
@@ -107,18 +117,25 @@ const payloads = {
           Type.Literal("possible"),
         ]),
         location: Location,
-        what: Type.String({ description: "The defect itself." }),
+        issue: Type.String({ description: "The defect itself." }),
         impact: Type.String({ description: "What breaks, concretely." }),
-        recommendation: Type.String({ description: "Actionable remedy." }),
+        fix: Type.String({ description: "Actionable remedy." }),
       }),
     ),
     verdict: Type.Union(
-      [Type.Literal("Approved"), Type.Literal("Needs Rework"), Type.Literal("Blocked")],
+      [Type.Literal("approved"), Type.Literal("needs_rework"), Type.Literal("blocked")],
       {
         description:
-          "Blocked = at least one HIGH at certain or probable confidence. A HIGH at possible confidence downgrades to Needs Rework and must be named in top_priority.",
+          "blocked = at least one HIGH at certain or probable confidence. A HIGH at possible confidence downgrades to needs_rework and must be named in top_priority.",
       },
     ),
+    files_reviewed: Type.Array(Type.String(), {
+      description: "Exactly the files judged. Anything read only for context belongs in out_of_scope.",
+    }),
+    open_risks: Type.Array(Type.String(), {
+      description:
+        "What could not be settled within scope, and why. Empty array is legal — say nothing rather than padding.",
+    }),
     top_priority: Type.Union([Type.String(), Type.Null()], {
       description: "The single thing to fix first, or null when there is nothing to fix.",
     }),

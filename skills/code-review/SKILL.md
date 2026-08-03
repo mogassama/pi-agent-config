@@ -77,66 +77,33 @@ Rules:
 - Do not report `LOW` + `possible`. That combination is noise — drop it.
 - Never inflate confidence to strengthen a case. An honest `possible` on a real risk is more useful than a false `certain`.
 
-## Step 4 — Checklists by domain
+## Step 4 — Domain severity lives in the domain skill
 
-### Security & identity
+This file holds the review *mechanism* only: severity definitions, the
+confidence axis, the `blocked` rule, and the output steps. It carries no
+domain rules and no domain severity tables.
 
-Rules: see gcp-engineering skill. Severity assignment:
+Each domain skill ends with a `## Review delta` section that assigns severity
+for its own breaches, weighted against the definitions above. The reviewer
+receives that section together with the skill's authoring guidance, so the
+standard it judges by is the standard the worker was given.
 
-- Hardcoded secrets, tokens, passwords, or `service-account.json` references → **HIGH**
-- `roles/owner` or `roles/editor` granted → **HIGH**
-- f-string interpolation in SQL queries → **HIGH**
-- `os.system()` or `subprocess.call()` with unsanitized input → **HIGH**
-- ADC not used in GCP code → **MEDIUM**
+| Domain | Where its severity table lives |
+|:--|:--|
+| Python | `python-engineering` |
+| Generic SQL, PostgreSQL | `sql-engineering` |
+| BigQuery queries | `bigquery-engineering` |
+| BigQuery administration, access, cost | `bigquery-ops` |
+| GCP services, identity, secrets | `gcp-engineering` |
+| Terraform | `iac-terraform` |
+| Airflow | `airflow-engineering` |
+| dbt | `dbt-engineering` |
+| Data quality and contracts | `data-quality` |
+| Spark | `spark-engineering` |
+| Documentation | `technical-writing` |
 
-### Data engineering & costs
-
-Rules: see sql-engineering skill. Severity assignment:
-
-- `SELECT *` in production or pipeline SQL → **MEDIUM**
-- Partitioned table queried without partition filter → **HIGH**
-- `WHERE DATE(timestamp_col)` on a partition column → **HIGH**
-- `WRITE_APPEND` without dedup strategy → **HIGH**
-- Large dataset loaded into a list instead of streamed via generator → **MEDIUM**
-- `download_as_bytes()` on large GCS object → **MEDIUM**
-- Missing `MERGE` unique key → **HIGH**
-
-Confidence note: table-size-dependent findings (partition filter, `SELECT *` cost) are `certain` only if the dry-run in Step 1 confirms the scan volume. Otherwise `probable`.
-
-### Python engineering
-
-Rules: see python-engineering skill. Severity assignment:
-
-- `print()` anywhere in library/pipeline code → **MEDIUM**
-- Logging library inconsistent with the project bundle's choice → **MEDIUM**
-- Missing type hints on any public function or method → **MEDIUM**
-- Bare `except:` or `except Exception: pass` → **HIGH**
-- No explicit exception handling on entry point → **MEDIUM**
-- Mutable default argument → **MEDIUM**
-- `os.path` instead of `pathlib` → **LOW**
-- `import *` → **MEDIUM**
-- Global config object imported across modules → **MEDIUM**
-
-Logging: enforce the logging library declared in the project bundle. Do not
-assume a default. If the bundle is silent on logging, do not raise a finding.
-
-### Terraform / IaC
-
-Rules: see iac-terraform skill. Severity assignment:
-
-- Hardcoded project IDs or credentials in `.tf` files → **HIGH**
-- Missing `lifecycle { prevent_destroy = true }` on stateful resources (BQ datasets, GCS buckets) → **MEDIUM**
-- Overly broad IAM bindings (`allUsers`, `allAuthenticatedUsers`) → **HIGH**
-- No remote backend configured → **MEDIUM**
-- Resources not tagged/labeled for cost attribution → **LOW**
-
-### GCP configs
-
-Rules: see gcp-engineering skill. Severity assignment:
-
-- Pub/Sub subscription without dead-letter topic → **MEDIUM**
-- Cloud Function with no max-instances limit → **MEDIUM**
-- BigQuery dataset with no expiration on staging tables → **LOW**
+A finding whose domain has no skill loaded is out of scope: report it in
+`out_of_scope`, do not weigh it.
 
 ## Step 5 — Human-readable output
 
@@ -201,12 +168,15 @@ shape.
 ```
 
 `severity` and `confidence` use the vocabularies of Steps 3a/3b — no second
-vocabulary. `verdict` is one of `mergeable`, `needs_rework`, `blocked`.
+vocabulary. `verdict` is one of `approved`, `needs_rework`, `blocked` — lowercase,
+snake_case, matching the `submit` tool schema. The former value `mergeable`
+is retired: Step 5 already said `Approved`, and two words for one verdict is
+the defect this file exists to catch.
 
 The envelope is a projection of the Step 5 table, never a second review. Same
 findings, same count, same severities. If they disagree, the envelope is wrong.
 
-Emit it even when there are no findings: `"findings": []`, `"verdict": "mergeable"`.
+Emit it even when there are no findings: `"findings": []`, `"verdict": "approved"`.
 
 ## Scope rules
 

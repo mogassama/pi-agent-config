@@ -238,18 +238,6 @@ The interactive loop introduces failure modes that don't exist in a submitted jo
    means under-partitioning or an unsplittable source (gzip CSV).
 5. Only then tune memory.
 
-## Review checklist
-
-- [ ] Shuffle count justified — no avoidable `distinct`, `orderBy`, or redundant `groupBy`
-- [ ] `spark.sql.shuffle.partitions` sized for the environment, not left at 200
-- [ ] Joins: small side broadcast, or a documented reason it can't be
-- [ ] No Python UDF where a native or `pandas_udf` equivalent exists
-- [ ] Every `cache()` justified by ≥2 downstream actions, and unpersisted
-- [ ] Explicit schema on every read
-- [ ] Output file sizes controlled; `partitionBy` cardinality sane
-- [ ] No unbounded `collect()` / `toPandas()`
-- [ ] Idempotent writes — rerunning the job produces the same dataset, not duplicates
-
 ## Anti-patterns — never do these
 
 - `collect()` or `toPandas()` on an unbounded DataFrame — driver OOM, and it defeats the
@@ -266,3 +254,55 @@ The interactive loop introduces failure modes that don't exist in a submitted jo
 - Tuning executor memory before looking at the partition count.
 - `spark.conf.set` on a startup-only config (`driver.memory`, `executor.instances`,
   `serializer`) and assuming it took effect.
+
+## Review delta
+
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Confidence depends on the plan.** A shuffle, skew or broadcast finding is
+`certain` only if `explain()` or the Spark UI confirms it. From the code alone
+it is `probable`. Partition counts and join strategies are chosen at runtime
+from statistics the source text does not carry.
+
+### Severity assignment
+
+Definitions live in `code-review`. Python authoring is weighed in
+`python-engineering`.
+
+| Breach | Severity |
+|:--|:--|
+| Non-idempotent write — rerunning the job duplicates the dataset | **HIGH** |
+| Unbounded `collect()` or `toPandas()` on a distributed DataFrame | **HIGH** |
+| Read with no explicit schema on a production path | MEDIUM |
+| Python UDF where a native function or `pandas_udf` exists | MEDIUM |
+| Avoidable shuffle — `distinct`, `orderBy` or redundant `groupBy` | MEDIUM |
+| `spark.sql.shuffle.partitions` left at the 200 default | MEDIUM |
+| Large-side join not broadcast, with no documented reason | MEDIUM |
+| `cache()` with a single downstream action, or never unpersisted | MEDIUM |
+| `partitionBy` on a high-cardinality column — small-file explosion | MEDIUM |
+| Output file sizes uncontrolled | LOW |
+
+### Traps a diff does not show
+
+- **`cache()` that never materialises.** Caching before a transformation and
+  after the only action caches nothing and costs memory.
+- **A broadcast hint on a side that grows.** Correct at review time, an OOM on
+  the driver three months later. Weigh the hint against how the table grows,
+  not its current size.
+- **Skew that only appears in production data.** A join key uniform in the
+  sample and 90 % one value in production. The code is identical.
+- **A `partitionBy` whose cardinality is a property of the data.** The column
+  name says nothing about how many directories it will create.
+- **An idempotent write made non-idempotent by its output path.** A path built
+  from `now()` rather than the logical date accumulates a new dataset on every
+  rerun instead of replacing one.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

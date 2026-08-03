@@ -202,13 +202,52 @@ WHERE _PARTITIONDATE = DATE(run_date)
 
 ---
 
-## Review checklist
+## Review delta
 
-- [ ] README setup section is copy-pasteable and tested
-- [ ] No "will eventually" or aspirational statements
-- [ ] ADR status is current — no stale "Proposed"
-- [ ] ADR consequences include at least one negative
-- [ ] Runbook includes exact commands for the most common failure modes
-- [ ] Mermaid arrows labeled with mechanism
-- [ ] Inline comments explain *why*, not *what*
-- [ ] No author/date headers — git blame handles provenance
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings. A typo fix
+does not warrant a documentation review.
+
+**Severity means something different here.** Nothing in a document loses data
+by itself. HIGH is reserved for documentation that will cause a wrong action —
+a command that damages state, or an instruction that is confidently false.
+Everything else is MEDIUM at most, however irritating.
+
+### Severity assignment
+
+Definitions live in `code-review`.
+
+| Breach | Severity |
+|:--|:--|
+| A documented command that is wrong and destructive if run as written | **HIGH** |
+| A runbook procedure that no longer matches the system it describes | **HIGH** |
+| Setup instructions not copy-pasteable, or never executed as written | MEDIUM |
+| Aspirational statement — "will eventually", "should soon" — presented as fact | MEDIUM |
+| ADR left at `Proposed` after the decision was taken | MEDIUM |
+| ADR consequences listing no negative | MEDIUM |
+| Runbook with no exact command for the most common failure mode | MEDIUM |
+| Mermaid arrow unlabelled, or labelled with a noun instead of a mechanism | LOW |
+| Inline comment restating *what* the code does instead of *why* | LOW |
+| Author or date header duplicating what git blame already knows | LOW |
+
+### Traps a diff does not show
+
+- **A command that was correct when written.** Documentation rots silently and
+  nothing fails until someone follows it during an incident. Weigh a runbook
+  against the current system, not against its own internal consistency.
+- **A copy-pasteable block containing a placeholder that looks like a value.**
+  `PROJECT_ID=my-project` runs, and against the wrong project.
+- **A diagram that matches an older topology.** Mermaid renders whatever it is
+  given; nothing checks it against reality.
+- **An ADR superseded in practice but not in status.** The stale one is what a
+  new reader finds first, and it is the one an agent will follow.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable` — that is, a
+document that will cause a wrong action. A HIGH at `possible` downgrades to
+`needs_rework` and must be named in `top_priority`. With no finding above LOW,
+`approved`.

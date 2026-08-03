@@ -123,19 +123,6 @@ CROSS JOIN UNNEST(o.items) AS item
 `sqlfluff` with `dialect = bigquery`. Full `.sqlfluff` config in the
 bigquery-ops skill.
 
-## Review checklist
-
-- [ ] No `SELECT *` anywhere in the query
-- [ ] Partitioned table → partition filter present and not wrapped in a function
-- [ ] Clustering columns respected in `WHERE` order
-- [ ] JOINs have explicit `ON` clause with selective predicate
-- [ ] No `WHERE DATE(timestamp_col)` — rewrite to direct column filter
-- [ ] Cross-project references fully qualified (`` `project.dataset.table` ``)
-- [ ] MERGE has explicit unique key — no blind `WRITE_APPEND`
-- [ ] Query >1 TB scan flagged for review before production run
-- [ ] Dry-run cost reported and accepted before any new query is approved
-- [ ] `UNNEST` on a large table does not block partition pruning
-
 ## Anti-patterns — never do these
 
 - `WHERE DATE(timestamp_col) = '...'` on a partitioned column — kills partition pruning
@@ -147,3 +134,69 @@ bigquery-ops skill.
 - Running a multi-TB scan without dry-run first
 - `UNNEST` in a `WHERE` subquery on a large partitioned table — prevents pruning
 - `STRING` column type for JSON payloads — use native `JSON` type
+
+## Review delta
+
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Do not report what the tooling already reports.** `pi-bq-cost-sentinel`
+dry-runs every `bq query` passed through `bash`, subagents included, and blocks
+past 1 TB. Reporting "no dry-run was performed" or "this query should be
+dry-run first" is a duplicate of a gate that already ran. Report the dry-run's
+*result* when it changes a severity — never the absence of the step.
+`sqlfluff --dialect bigquery` covers formatting.
+
+### Confidence is set by the dry-run, not by judgement
+
+This is the rule that makes BigQuery findings reproducible.
+
+A finding whose severity depends on table size — partition filter, `SELECT *`
+cost, `UNNEST` on a large table — is `certain` **only if** the dry-run confirms
+the scan volume. Without that number it is `probable`, never `certain`, however
+obvious the defect looks in the text.
+
+Consequence on the verdict: a HIGH at `probable` still blocks, so this does not
+weaken the gate. It stops the reviewer from claiming a precision it does not
+have, and it makes two reviews of the same file agree.
+
+### Severity assignment
+
+Definitions live in `code-review`. Dialect-agnostic SQL hygiene — `SELECT *`,
+JOIN predicates, string interpolation — is weighed in `sql-engineering`; cost
+formulas, quotas and INFORMATION_SCHEMA in `bigquery-ops`.
+
+| Breach | Severity |
+|:--|:--|
+| Partitioned table queried with no partition filter | **HIGH** |
+| `WHERE DATE(timestamp_col)` or any function wrapping a partition column | **HIGH** |
+| `WRITE_APPEND` with no dedup strategy | **HIGH** |
+| `MERGE` with no explicit unique key | **HIGH** |
+| `UNNEST` in a `WHERE` subquery on a large partitioned table — blocks pruning | MEDIUM |
+| Clustering columns ignored in `WHERE` ordering | MEDIUM |
+| Subquery dedup where `QUALIFY ROW_NUMBER()` applies | LOW |
+| Cross-project reference not fully qualified | LOW |
+| `STRING` column type for a JSON payload instead of native `JSON` | LOW |
+
+### Traps a diff does not show
+
+- **A partition filter present but on the wrong column.** `_PARTITIONTIME` and
+  a business timestamp column are both plausible in the text; only one prunes.
+  Check the table's declared partitioning, not the query alone.
+- **A filter that prunes today and not next month.** A literal date range
+  prunes; a range computed from `CURRENT_DATE()` inside a scheduled query may
+  widen silently as data accumulates.
+- **`MERGE` whose key is unique in the source but not in the target.** The
+  statement is correct and the result is not. Uniqueness is a property of the
+  data, not of the SQL.
+- **A view that hides an unpruned scan.** The reviewed query looks cheap; the
+  view underneath scans everything. The dry-run is the only thing that sees it.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

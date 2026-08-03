@@ -307,15 +307,6 @@ capitalisation_policy = lower
 Run before any review: `sqlfluff lint --dialect bigquery <file.sql>`.  
 Auto-fix: `sqlfluff fix <file.sql>` — review the diff before committing.
 
-## Review checklist
-
-- [ ] Row access policies tested with the target principal's actual identity
-- [ ] Authorized view / authorized dataset used instead of granting direct table access
-- [ ] Policy Tags applied to all PII columns
-- [ ] `bq show` reviewed before any schema change — confirm current state
-- [ ] Reservation assignment checked before blaming a query for a slot wait
-- [ ] Cost attributed to a job id, not guessed from table size
-
 ## Anti-patterns — never do these
 
 - Row-level security enforced via `WHERE` in application code instead of Row Access Policies
@@ -323,3 +314,54 @@ Auto-fix: `sqlfluff fix <file.sql>` — review the diff before committing.
 - Granting direct table access where an authorized view would do
 - Reading `INFORMATION_SCHEMA.JOBS_BY_PROJECT` without a partition filter on `creation_time`
 - Buying slots to fix a query that has no partition filter
+
+## Review delta
+
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Do not report what the tooling already reports.** `pi-bq-cost-sentinel`
+dry-runs every `bq query` and blocks past 1 TB; `bash-guard` gates destructive
+`bq` calls. Report a gate's *result*, never the absence of the step.
+
+**This skill is loaded for administration, not for authoring.** Query
+conventions are weighed in `bigquery-engineering`, generic SQL hygiene in
+`sql-engineering`. If the reviewed change is a query, you are in the wrong
+skill — say so rather than weighing it here.
+
+### Severity assignment
+
+Definitions live in `code-review`.
+
+| Breach | Severity |
+|:--|:--|
+| PII column with no Policy Tag | **HIGH** |
+| Direct table access granted where an authorized view or dataset applies | **HIGH** |
+| Schema change applied with no `bq show` of the current state beforehand | **HIGH** |
+| Row access policy not tested with the target principal's real identity | MEDIUM |
+| Cost attributed by guessing from table size instead of a job id | MEDIUM |
+| Slot wait blamed on a query with no reservation assignment checked | MEDIUM |
+| Staging dataset with no default table expiration | LOW |
+
+### Traps a diff does not show
+
+- **A row access policy tested as the owner.** The owner bypasses it. The test
+  passes and the policy has never been exercised.
+- **An authorized view whose underlying dataset grant was never removed.** Both
+  paths work; the direct one is the hole, and nothing surfaces it.
+- **A Policy Tag applied to a column that has been renamed downstream.** The tag
+  follows the column, not the data. A copy under another name is untagged.
+- **A schema change that is additive in BigQuery and breaking for consumers.**
+  Adding a required column, or widening a type a reader parses strictly, fails
+  outside the warehouse where nothing here can see it.
+- **An expiration set on the dataset after tables already exist.** Defaults
+  apply to new tables only. The existing ones live forever.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

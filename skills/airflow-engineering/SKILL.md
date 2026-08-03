@@ -229,17 +229,54 @@ Every task must answer yes to: "If I run this twice for the same `logical_date`,
 - API calls: idempotency key if the API supports it.
 - Use `logical_date` (Airflow 2.2+), not the deprecated `execution_date`.
 
-## Review checklist
+## Review delta
 
-- [ ] DAG ID and task IDs in English, snake_case
-- [ ] `catchup=False` unless explicitly required with justification
-- [ ] `max_active_runs=1` on pipelines with shared resources
-- [ ] No business logic in DAG file — external modules only
-- [ ] XComs carry pointers only — no DataFrames or large payloads
-- [ ] Sensors use `deferrable=True` for waits >15 min
-- [ ] Triggerer enabled in Composer environment
-- [ ] Connections via Airflow Connection objects or Secret Manager — no hardcoded credentials
-- [ ] `logical_date` used, not `execution_date`
-- [ ] BQ writes idempotent — WRITE_TRUNCATE or MERGE, never blind WRITE_APPEND
-- [ ] DAGBag test present and passes
-- [ ] PyPI deps managed via `uv pip compile` + `gcloud composer environments update`
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Do not report what the tooling already reports.** `pi-lint-gate` runs `ruff`
+and `mypy`; `pi-bq-cost-sentinel` dry-runs `bq query`. The DAGBag test either
+ran or it did not — report its result, never its absence as a finding.
+
+### Severity assignment
+
+Definitions live in `code-review`. Python authoring is weighed in
+`python-engineering`, BigQuery statements in `bigquery-engineering`.
+
+| Breach | Severity |
+|:--|:--|
+| Credential hardcoded instead of an Airflow Connection or Secret Manager | **HIGH** |
+| Blind `WRITE_APPEND` from a task — rerunning duplicates rows | **HIGH** |
+| `catchup=True` with no justification on a DAG with a past `start_date` | **HIGH** |
+| DataFrame or large payload carried in an XCom | MEDIUM |
+| Business logic written inside the DAG file instead of an imported module | MEDIUM |
+| Sensor waiting over ~15 min without `deferrable=True` | MEDIUM |
+| `max_active_runs` unset on a pipeline touching a shared resource | MEDIUM |
+| `execution_date` used instead of `logical_date` | MEDIUM |
+| No DAGBag test for a new DAG | MEDIUM |
+| PyPI dependency added outside `uv pip compile` + `composer environments update` | MEDIUM |
+| DAG or task ID not in English snake_case | LOW |
+
+### Traps a diff does not show
+
+- **`catchup=True` on a DAG whose `start_date` is months back.** One merge
+  launches hundreds of runs. The diff shows a boolean; the consequence is a
+  scheduler flood and a bill. Read `start_date` before weighing `catchup`.
+- **A task that is idempotent alone and not in sequence.** Each task truncates
+  its own target; rerunning the middle of a DAG leaves downstream tables built
+  from a partially rebuilt upstream. Idempotency is a property of the DAG.
+- **`deferrable=True` without a triggerer.** The parameter is accepted and the
+  task never resumes. Check the Composer environment, not just the operator.
+- **A Dataset trigger whose producer never updates it.** The consumer DAG is
+  scheduled and never runs. Nothing fails; nothing happens.
+- **`start_date` computed dynamically** — `days_ago()`, `datetime.now()`. The
+  DAG's schedule shifts every parse. Silent, and it breaks backfills.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

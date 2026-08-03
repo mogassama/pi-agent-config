@@ -108,13 +108,46 @@ def split_valid_invalid(
 
 Quarantine tables: same schema as target + `_quarantine_reason: STRING` column + `_quarantined_at: TIMESTAMP`.
 
-## Review checklist
+## Review delta
 
-- [ ] Every new dbt model has `unique` + `not_null` on primary key
-- [ ] Every source has `source_freshness` configured
-- [ ] Every singular test has a clear failure comment explaining the business rule
-- [ ] Python ingestion validates before writing — not after
-- [ ] Volume check present on any table used downstream
-- [ ] `FLOAT64` not used for financial amounts
-- [ ] Schema drift check present on writes to existing tables
-- [ ] Quarantine table defined for invalid rows — not silent drop
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings. A test added
+to an already-covered model does not warrant a coverage review.
+
+### Severity assignment
+
+Definitions live in `code-review`. dbt test syntax is weighed in
+`dbt-engineering`.
+
+| Breach | Severity |
+|:--|:--|
+| Invalid rows dropped silently instead of quarantined | **HIGH** |
+| `FLOAT64` used for a financial amount | **HIGH** |
+| Validation performed after the write instead of before | **HIGH** |
+| No `unique` + `not_null` on a model's primary key | MEDIUM |
+| No volume check on a table consumed downstream | MEDIUM |
+| No schema drift check on a write to an existing table | MEDIUM |
+| Source with no `source_freshness` configured | MEDIUM |
+| Singular test with no comment stating the business rule it enforces | LOW |
+
+### Traps a diff does not show
+
+- **A quarantine table nobody reads.** The rows are captured, the pipeline is
+  green, and the data is still missing downstream. Check that something
+  consumes or alerts on the quarantine, not just that it exists.
+- **A volume assertion with a threshold copied from another table.** It passes
+  forever and detects nothing. The bound must come from this table's history.
+- **A `not_null` test on a column that is never null because it defaults.** The
+  test is green and the default is the bug.
+- **Freshness configured against the load timestamp rather than the event
+  timestamp.** A stalled source keeps looking fresh as long as an empty load
+  runs on schedule.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.

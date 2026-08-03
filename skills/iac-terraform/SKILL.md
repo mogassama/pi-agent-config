@@ -241,26 +241,6 @@ resource "google_project_iam_member" "composer_runner_bq_job" {
 }
 ```
 
-## Plan review — what to check
-
-Before approving any `terraform apply`:
-
-```
-# Resources to destroy — mandatory review
-- [ ] No stateful resource destroyed (BQ dataset/table, GCS bucket, Composer env, SA)
-- [ ] `prevent_destroy` lifecycle is present on all stateful resources
-- [ ] IAM binding changes don't remove existing human or service account access unexpectedly
-
-# Resources to create
-- [ ] Labels present on all new resources
-- [ ] No hardcoded project IDs or credentials in resource configs
-- [ ] Region matches europe-west1 unless explicitly justified
-
-# Plan flags — immediate escalation
-- Forces replacement (~ → -/+): review impact carefully
-- Destroys > 0 stateful resources: do not apply without operator confirmation
-```
-
 ## Anti-patterns
 
 - Local state (`terraform.tfstate` in the repo) — always use GCS backend
@@ -272,16 +252,75 @@ Before approving any `terraform apply`:
 - Labels missing `managed_by = "terraform"` — breaks cost attribution
 - Workspaces for environment isolation — use separate directories
 
-## Review checklist
+## Review delta
 
-- [ ] GCS remote backend configured with project-specific prefix
-- [ ] `terraform fmt` applied — no formatting issues
-- [ ] Every variable has `type` and `description`
-- [ ] `validation` block on project_id, env, and region variables
-- [ ] `prevent_destroy = true` on all stateful resources
-- [ ] `google_project_iam_member` used (not `_binding`) for additive grants
-- [ ] No `roles/owner` or `roles/editor` granted
-- [ ] Labels include `env`, `team`, `cost_center`, `managed_by = "terraform"`
-- [ ] GCS buckets have lifecycle rules (Coldline transition + Delete)
-- [ ] BQ tables have `time_partitioning` and `clustering` where applicable
-- [ ] Plan output reviewed — zero unexpected destructions
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Plan review` and `## Review checklist` — two unweighted lists that, with the
+`code-review` Terraform block, made three parallel checklists for one domain.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings. A label added
+to an already-conformant resource does not warrant a posture review.
+
+### Review the plan, not the diff
+
+This is the one rule that separates Terraform review from every other review
+in this repo. **A `.tf` diff does not show what will happen.** A three-line
+change to a variable default can force the replacement of a BigQuery dataset.
+Ask for `terraform plan` output; if it is not available, say so in
+`open_risks` and cap the verdict at `needs_rework`.
+
+Escalate on the plan output, regardless of how small the diff is:
+
+- **Forces replacement** (`~` becoming `-/+`) on any resource holding state —
+  **HIGH**. The resource is destroyed and recreated; the data does not follow.
+- **Destroy count above zero** on a stateful resource — BigQuery dataset or
+  table, GCS bucket, Composer environment, service account — **HIGH**, and
+  `blocked` unless the task text names the destruction as intended.
+- **IAM binding change that removes an existing grant** — MEDIUM, HIGH when the
+  grant belongs to a service account a running pipeline uses.
+
+### Severity assignment
+
+Definitions live in `code-review`. Which IAM roles are forbidden is stated in
+`gcp-engineering` — this table weighs the Terraform expression of a binding,
+not the choice of role.
+
+| Breach | Severity |
+|:--|:--|
+| Hardcoded project ID or credential in a `.tf` file | **HIGH** |
+| `force_destroy = true` on a production bucket | **HIGH** |
+| `delete_contents_on_destroy = true` on a production BigQuery dataset | **HIGH** |
+| IAM binding to `allUsers` or `allAuthenticatedUsers` | **HIGH** |
+| `prevent_destroy` absent on a stateful resource | MEDIUM |
+| No remote backend — state local or in the repository | MEDIUM, **HIGH** if the state file is committed and contains a secret |
+| `google_project_iam_binding` used for an additive grant where `_member` applies | MEDIUM |
+| Workspaces used for environment isolation instead of separate directories | MEDIUM |
+| GCS bucket with no lifecycle rule | MEDIUM |
+| Variable with no `type` or `description` | LOW |
+| No `validation` block on `project_id`, `env` or `region` | LOW |
+| `terraform fmt` not applied | LOW |
+| Labels missing `env`, `team`, `cost_center` or `managed_by = "terraform"` | LOW |
+| BigQuery table without `time_partitioning` or `clustering` where applicable | LOW |
+
+### Traps a diff does not show
+
+- **`prevent_destroy` present but the resource renamed.** Renaming the block
+  address destroys and recreates: the lifecycle guard protects the old address,
+  which no longer exists in the configuration. A rename reads as a cosmetic
+  diff and is the most common way stateful data is lost.
+- **A `count` or `for_each` whose key set changed.** Reordering a list
+  reindexes every resource after the change. The diff shows one added entry;
+  the plan shows a cascade of replacements.
+- **A module version bump.** The diff is one line. What it pulls in is not
+  visible without reading the module's own changelog.
+- **A variable default changed in `variables.tf`** while the environment
+  `.tfvars` still overrides it — no effect at all, and a finding raised on it
+  is a false positive. Check the override before reporting.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`, **or** any
+unintended destruction of a stateful resource in the plan. A HIGH at `possible`
+downgrades to `needs_rework` and must be named in `top_priority`. With no
+finding above LOW and a clean plan, `approved`.

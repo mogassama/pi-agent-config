@@ -226,15 +226,53 @@ gcloud storage cp ./target/manifest.json gs://BUCKET/dbt/manifest.json
 - `--defer` resolves upstream refs from the production manifest, not a full rebuild.
 - `dbt source freshness` runs before `dbt build` in every CI pipeline.
 
-## Review checklist
+## Review delta
 
-- [ ] No `select *` in staging, intermediate, or marts — enumerate columns
-- [ ] Every `ref()` and `source()` used — no raw `project.dataset.table`
-- [ ] Incremental models have `unique_key`, `partition_by`, `incremental_predicates`, `on_schema_change`
-- [ ] `not_null` + `unique` on primary key of every model
-- [ ] Unit tests present for models with non-trivial logic
-- [ ] `source_freshness` configured on every source
-- [ ] Macro justified by 3+ repetitions — not written speculatively
-- [ ] Packages pinned in `packages.yml` and `package-lock.yml` committed
-- [ ] No `full_refresh` in production DAG — explicit override only
-- [ ] Descriptions in `schema.yml` present and in English
+*Everything above is authoring guidance, injected for both worker and reviewer.
+This section is injected for the reviewer only. It replaces the former
+`## Review checklist`.*
+
+**Floor.** For a diff under ~10 lines, report only HIGH findings.
+
+**Do not report what the tooling already reports.** `sqlfluff --dialect
+bigquery` covers SQL formatting; `pi-bq-cost-sentinel` dry-runs `bq query`.
+Test *coverage* rules are weighed in `data-quality`; this table weighs how dbt
+itself is used.
+
+### Severity assignment
+
+Definitions live in `code-review`. BigQuery query semantics are weighed in
+`bigquery-engineering`.
+
+| Breach | Severity |
+|:--|:--|
+| Incremental model with no `unique_key` — reruns duplicate rows | **HIGH** |
+| `full_refresh` reachable from a production DAG without an explicit override | **HIGH** |
+| Raw `project.dataset.table` instead of `ref()` or `source()` — lineage broken | **HIGH** |
+| Incremental model with no `partition_by` or `incremental_predicates` on a large table | MEDIUM |
+| `on_schema_change` unset on an incremental model | MEDIUM |
+| `select *` in a staging, intermediate or mart model | MEDIUM |
+| No unit test on a model with non-trivial logic | MEDIUM |
+| Package unpinned, or `package-lock.yml` not committed | MEDIUM |
+| Macro written for fewer than three call sites | LOW |
+| `schema.yml` description missing or not in English | LOW |
+
+### Traps a diff does not show
+
+- **An incremental model whose `unique_key` is unique in the source and not in
+  the target.** The merge is syntactically correct and silently wrong.
+- **`is_incremental()` logic that is never exercised in CI.** Slim CI on an
+  empty target runs the full-refresh branch. The incremental path ships
+  untested; the first production run is the test.
+- **A `ref()` added without the upstream model existing yet.** `dbt parse`
+  catches it, a diff read does not.
+- **A model materialised as a view whose upstream is incremental.** Every query
+  against it recomputes the whole chain. The materialisation is one word.
+- **`on_schema_change: sync_all_columns` on a table with downstream
+  consumers.** dbt drops removed columns without warning them.
+
+### Verdict
+
+`blocked` requires at least one HIGH at `certain` or `probable`. A HIGH at
+`possible` downgrades to `needs_rework` and must be named in `top_priority`.
+With no finding above LOW, `approved`.
