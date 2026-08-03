@@ -6,7 +6,8 @@ fallbackModels: [google/gemini-3.1-pro]
 thinking: medium
 tools: [read, grep, find, ls, submit]
 extensions: [envelope]
-skills: [code-review, python-engineering]
+mechanism: [code-review]
+skills: [python-engineering]
 sliceMode: full
 contextFiles: false
 session: ephemeral

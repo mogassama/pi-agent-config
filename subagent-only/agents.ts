@@ -44,9 +44,22 @@ export interface AgentDefinition {
    */
   extensions: string[];
 
-  /** Skill names, resolved against skills/<name>/SKILL.md and sliced per sliceMode. */
+  /**
+   * Domain skills, resolved against skills/<name>/SKILL.md and sliced per
+   * sliceMode: the worker gets authoring, the reviewer authoring + delta.
+   */
   skills: string[];
   sliceMode: SliceMode;
+
+  /**
+   * Mechanism skills, injected whole and never sliced.
+   *
+   * `code-review` is the only one today. It carries no "## Review delta" and
+   * never will — it is what the deltas are weighed against. Keeping it in a
+   * separate field means the slicer can still throw on a domain skill whose
+   * marker went missing, instead of being loosened into silence.
+   */
+  mechanism: string[];
 
   /** false passes --no-context-files: no AGENTS.md, no CLAUDE.md. */
   contextFiles: boolean;
@@ -73,6 +86,7 @@ const DEFAULTS = {
   fallbackModels: [] as string[],
   extensions: ["envelope"],
   skills: [] as string[],
+  mechanism: [] as string[],
   sliceMode: "none" as SliceMode,
   contextFiles: false,
   session: "ephemeral" as const,
@@ -146,6 +160,7 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
   const model = str(fields, "model");
   const tools = list(fields, "tools") ?? [];
   const skills = list(fields, "skills") ?? DEFAULTS.skills;
+  const mechanism = list(fields, "mechanism") ?? DEFAULTS.mechanism;
   const sliceMode = (str(fields, "sliceMode") ?? DEFAULTS.sliceMode) as SliceMode;
 
   if (!name) throw new Error(`${label}: missing "name"`);
@@ -167,6 +182,9 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
   }
   if (skills.length > 0 && sliceMode === "none") {
     throw new Error(`${label}: ${skills.length} skill(s) listed but sliceMode is "none"`);
+  }
+  if (mechanism.length > 0 && !tools.includes("read")) {
+    throw new Error(`${label}: mechanism skills listed without the "read" tool`);
   }
   if (sliceMode !== "none" && !tools.includes("read")) {
     // Not fatal for injection — the body arrives as text either way — but a
@@ -194,6 +212,7 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
     tools,
     extensions: list(fields, "extensions") ?? DEFAULTS.extensions,
     skills,
+    mechanism,
     sliceMode,
     contextFiles: (str(fields, "contextFiles") ?? "false") === "true",
     session,
