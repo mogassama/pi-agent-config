@@ -1,0 +1,8 @@
+{
+  "name": "subagent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Delegation for pi: one task tool, fresh child process per role, validated envelope.",
+  "main": "index.ts"
+}
