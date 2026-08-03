@@ -191,6 +191,8 @@ Definitions live in `code-review`. Confidence is orthogonal: a HIGH at
 | Breach | Severity |
 |:--|:--|
 | `shell=True` or `os.system()` with a value from outside the process | **HIGH** |
+| Credential, secret or token with a literal default value | **HIGH** |
+| Write to a warehouse table with no dedup or upsert strategy — `to_sql(if_exists="append")`, blind `WRITE_APPEND` | **HIGH** |
 | Bare `except:` or `except Exception: pass` | **HIGH** |
 | Missing type hints on a public function or method | MEDIUM |
 | No explicit exception handling at the entry point | MEDIUM |
@@ -208,9 +210,16 @@ Definitions live in `code-review`. Confidence is orthogonal: a HIGH at
 **Logging: enforce the library declared in the project bundle. Do not assume a
 default. If the bundle is silent on logging, raise no finding.**
 
-Not weighed here — see the owning skill: secrets and credentials
-(`gcp-engineering`), `WRITE_APPEND` and `MERGE` keys (`bigquery-engineering`),
-`SELECT *` and query text (`sql-engineering`).
+**Two of these are weighed elsewhere as well, and that is deliberate.** Secrets
+are also weighed in `gcp-engineering`, non-idempotent warehouse writes also in
+`bigquery-engineering` and `airflow-engineering`. One rule, one file — the
+statements live there. But a severity must exist on **every surface where the
+rule can be breached**, because a reviewer loads only the skill matching the
+file under review. A `.py` file gets this skill and nothing else.
+
+Genuinely not weighed here: `SELECT *` and query text (`sql-engineering`),
+`MERGE` key design and partition filters (`bigquery-engineering`), IAM roles
+and GCP service configuration (`gcp-engineering`).
 
 ### Traps a diff does not show
 

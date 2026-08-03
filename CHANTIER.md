@@ -276,6 +276,59 @@ sous l'arbitrage n°8.
 
 ---
 
+## 4ter. Contrôle de cohérence — 3 août
+
+Effectué sur la branche poussée : 118 lignes de sévérité extraites des onze
+deltas, comparées entre elles.
+
+### Le défaut trouvé — sévérité et fait ne suivent pas la même règle
+
+`python-engineering` renvoyait les secrets en dur à `gcp-engineering` et
+`WRITE_APPEND` à `bigquery-engineering`. Or **un reviewer de fichier `.py` ne
+charge que `python-engineering`.** Les deux HIGH que le corpus réel a produits
+sur des fichiers Python seraient donc restés non pesés :
+
+| Fichier | Finding | Verdict du corpus |
+|:--|:--|:--|
+| `config.py` | mots de passe avec valeur par défaut littérale | `blocked` |
+| `load.py` | `to_sql(if_exists="append")` non rejouable | HIGH, 4 revues sur 4 |
+
+**Cause** : la règle 3 — « one fact, one file » — a été appliquée aux
+sévérités. Elle gouverne les *faits*.
+
+### La règle corrigée
+
+> **Une règle, un fichier. Une sévérité par surface où la règle peut être
+> enfreinte.**
+>
+> L'énoncé « jamais de `WRITE_APPEND` aveugle » vit une seule fois, dans
+> `bigquery-engineering`. Son poids doit exister partout où un reviewer peut le
+> rencontrer — `python-engineering` pour un client, `airflow-engineering` pour
+> une tâche — parce que le reviewer ne charge qu'une skill de domaine.
+>
+> Une sévérité dupliquée entre deux surfaces n'est pas un défaut. Une sévérité
+> **contradictoire** entre deux surfaces en est un.
+
+### Ce que le contrôle a validé
+
+- **Aucune sévérité contradictoire** sur 118 lignes
+- Deux doublons exacts, `allUsers` et cycle de vie GCS, entre `gcp-engineering`
+  et `iac-terraform` : **corrects**, deux surfaces pour le même défaut, même poids
+- `WRITE_APPEND` pesé HIGH dans `airflow-engineering` et `bigquery-engineering` :
+  correct pour la même raison
+- Les renvois de `gcp-engineering` et `sql-engineering` sont sains : les skills
+  cibles pèsent bien ce qui leur est délégué
+- `SELECT *` n'est pesé qu'une fois, dans `sql-engineering` — correct, un
+  fichier SQL charge toujours cette skill
+
+### Correction appliquée
+
+`python-engineering` gagne deux lignes HIGH — secret avec valeur par défaut,
+écriture d'entrepôt sans stratégie de dedup — et sa clause de renvoi distingue
+désormais ce qui est **aussi** pesé ailleurs de ce qui ne l'est **pas** ici.
+
+---
+
 ## 5. À faire — ordre
 
 1. **Déposer la v2 d'`envelope.ts`** — le dépôt porte la v1
