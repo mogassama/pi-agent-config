@@ -571,6 +571,51 @@ sous-processus au rafraîchissement. Coût de latence, jamais de tokens.
 
 ---
 
+## 4octies. Basculement — 4 août
+
+**Déclencheur** : les deux rôles qui comptent ont tourné de bout en bout avec la
+nouvelle extension.
+
+| Rôle | Résultat |
+|:--|:--|
+| `reviewer` sur `anthropic/claude-sonnet-5` | `status: ok`, verdict `blocked` sur `config.py`, 3 tours, `failure: null` |
+| `worker` sur `openai-codex/gpt-5.6-sol` | 2 fonctions typées correctement, 1 fichier touché, `deviations: []`, 5 tours |
+
+**Le plancher de vérification survit à l'injection par tranches.** Le worker a
+rendu `validation: "Automatic pi-lint-gate checks (ruff after edit; mypy at turn
+end)"` — il rapporte le résultat du hook au lieu de relancer les outils. Mesure
+d'origine : 8/8 à la main. Après : 0/1.
+
+`injectedTokens: 1544` contre ~1 375 estimés — l'estimation tenait à 12 % près.
+
+### AGENTS.md réécrit
+
+4 424 → **3 852 tokens** estimés (−13 %).
+
+Supprimé : `### Loadouts` (mort avec D4), toute la section
+`## Delegation with pi-subagents` (six agents, `turnBudget`, `/parallel`,
+`inheritProjectContext`), la mention d'`agent-io`.
+
+Ajouté, tiré des mesures : **un enfant n'hérite de rien** ; **déléguer remplace
+lire** — mesuré, l'orchestrateur lisait `config.py` avant de le confier ;
+**décrire le travail, pas le format de sortie** — 5/5 contre 0/3.
+
+Deux coupes appliquées au brouillon, sur les règles du fichier lui-même : le
+vocabulaire des échecs redisait ce que `dispatch` écrit déjà (règle 2), et une
+ligne de table par agent non appelable se payait dans chaque session (règle 1).
+
+### Ce qui reste après
+
+- `bin/check-envelope` : réaligner sur le schéma `submit`, ou supprimer
+- `pi-check-config` : réécriture, plus la garde sur `## Review delta`
+- Étape D, onze corrections d'hygiène
+- **Transcript des enfants non observable.** Seul le total d'usage revient ; le
+  détail par tour est perdu. Une option `keepTranscript` écrivant le flux JSON
+  de l'enfant à côté de l'artefact le comblerait. Pour un chantier construit sur
+  la mesure, c'est un trou
+
+---
+
 ## 5. À faire — ordre
 
 1. **Déposer la v2 d'`envelope.ts`** — le dépôt porte la v1

@@ -157,27 +157,9 @@ These are loaded on demand. Invoke explicitly with `/skill:<name>` or let the ag
 
 If multiple are relevant, load them all — they're additive. One exception: a skill whose description claims exclusive territory (`dbt-engineering` for files containing `{{ ref() }}`) wins alone for those files; load a second SQL skill there only on an explicit, distinct need.
 
-Orchestrator-only skills are intentionally in no loadout — they are invoked with `/skill:<name>` from the main session: `git-collaboration`, `grill-me`, and `agent-io` (load it before delegating to planner, reviewer or oracle; its body then reaches the child through inherited parent context).
+Orchestrator-only skills are never injected into a child and are invoked with `/skill:<name>` from the main session: `git-collaboration`, `grill-me`, `diagnose`, `improve-codebase-architecture`, `dataeng-architecture`, `gcp-dataeng-architecture`.
 
-### Loadouts
-
-Subagents run with `inheritSkills: false`, so a skill absent from an agent's `skills` array in `settings.json` does not exist for that agent — there is no fallback discovery. The array injects the skill's name, description and path, not its body. Adding a skill to a loadout costs one description line, not the whole file.
-
-**The body reaches a child only through inherited parent context.** Before delegating, load the skills the target role needs in this session — reviewer: `code-review` plus the domain skill matching the file type; worker: the domain skills matching the files being changed; planner: `dataeng-architecture` plus relevant domain skills. An agent running with `inheritProjectContext: false` cannot receive bodies at all; give it the excerpts it needs verbatim in the prompt.
-
-Loadout criteria, one per agent:
-
-| Agent | What it carries |
-|:---|:---|
-| `scout` | Nothing. Cheapest model — any injection here is pure recurring cost. |
-| `planner` | The *shape* of the artefacts it plans (a dbt model is a `.sql` plus a `.yml`; a DAG is one file), plus enough to decide an architecture in free regime. |
-| `worker` | The authoring skills of the domains it actually implements, plus documentation standards. |
-| `reviewer` | `code-review`, plus the authoring skills of every domain it reviews — a reviewer must hold the same standard the worker was given. |
-| `oracle` | Decision skills only. Runs without inherited context and must be self-sufficient. |
-
-Architecture skills are split by platform: `dataeng-architecture` is the platform-agnostic decision layer (sizing, layering, idempotency, delivery format), `gcp-dataeng-architecture` maps it onto GCP services. The planner carries both — the generic layer applies everywhere, the GCP layer loads only when the platform matches. On a non-GCP project the generic layer still works and no cloud is assumed. When a new platform becomes real practice, add a sibling platform skill rather than widening the generic one.
-
-`improve-codebase-architecture` stays out of the planner in both regimes: it is refactoring design, not decomposition. It belongs to oracle.
+**Eleven skills carry a `## Review delta`** — the section a reviewer receives on top of the authoring guidance, holding the severity table for that domain. Loading a skill here loads its description only; the body reaches a child by injection at delegation time, never by inheritance.
 
 ## Workflow pi — Gestion du contexte
 
@@ -190,7 +172,7 @@ Architecture skills are split by platform: `dataeng-architecture` is the platfor
 
 Un seul ordre, du plus stable au plus variable. Ne jamais faire précéder un élément stable par un élément variable.
 
-1. `APPEND_SYSTEM.md` — le plus stable
+1. `APPEND_SYSTEM.md` — le plus stable. **Orchestrateur seulement** : passer un `--append-system-prompt` explicite en supprime la découverte, et chaque rôle en passe au moins un
 2. `AGENTS.md` (global, puis projet)
 3. Skills — chargées à la demande
 4. `CONVENTIONS.md` — jamais modifié en cours de session
@@ -201,49 +183,77 @@ Un seul ordre, du plus stable au plus variable. Ne jamais faire précéder un é
 
 Aucun timestamp, session ID ou valeur variable en tête d'un fichier du bundle : invalide le cache à chaque appel.
 
-## Delegation with pi-subagents
+## Delegation
 
-Extension `pi-subagents`. Supersedes "Working with multiple 'agents' in pi" when installed.
+Extension `subagent`, one tool: `task({ agent, task })`. Each call spawns a fresh
+`pi` process with its own model, tool allowlist, hooks and skill slices.
+
+**A child inherits nothing.** No AGENTS.md, no conversation history, no prior
+tool calls, no `.pi/BRIEF.md`, no `APPEND_SYSTEM.md`. What is not in the task
+text or injected by the extension does not exist for it. Write the task as if
+to someone who has never seen this session — because that is the case.
 
 ### Decision table
 
 | Agent | When to use | Never use for |
 |:---|:---|:---|
-| **scout** | Pre-change recon ("how does X work?"); finding all usages; cross-file data flow. Read-only. Flash-class model by default — evaluate any upgrade on downstream worker handoff quality, not on call volume. | Writing/editing files; decisions; operator-facing answers |
-| **planner** | Decomposing **one** backlog item into worker-executable steps, grounded in the repo's actual state. Reads and plans — never edits. One-step-per-pass granularity. Always followed by orchestrator review before worker handoff. In free regime it may also decide the architecture it plans against. | In bundle regime: deciding stack, services, directory structure or conventions — all frozen; re-stating or summarising the architecture. In both regimes: executing plans, refactoring design (that's oracle) |
-| **worker** | Implementing an approved plan or direction — a planner plan, an oracle handoff, or an operator-issued mechanical spec; bulk file operations. Runs validation to the floor above, escalates ambiguity to orchestrator. | Work with no approved direction behind it |
-| **reviewer** | Code >50 lines, reviewed **before** it is finalised. Reviews against task, plan, tests, edge cases, simplicity — and against `CONVENTIONS.md` when a bundle is present. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review, and the diff being committed has already been reviewed or was never code. `/diff-review` stays available on explicit request |
-| **oracle** | Architectural forks; planner-escalated divergences between repo and `ARCHITECTURE.md`; before destructive ops (schema migration, data deletion, IAM changes); high cost-of-wrong. Challenges assumptions, never edits. Max 1-3 calls/session. Runs without inherited project context — every call must embed the context it needs verbatim, since nothing reaches it otherwise. | Routine implementation; anything where the operator hasn't been consulted on the fork |
+| **worker** | Implementing an approved direction — a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Escalates ambiguity rather than guessing. | Work with no approved direction behind it |
+| **reviewer** | Code >50 lines, reviewed **before** it is finalised. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
+`scout` (read-only recon) and `advisor` (architectural forks, no tools) are
+designed but not written. Do not invoke them.
 
-**Handle inline — never delegate:** conversational answers, single-line edits, reading one file, coordinating subagent results (orchestrator's job), the decision to delegate itself.
+### Composing a task
 
-**Never delegate regardless of agent:** secret rotation, prod credentials, IAM grants on production, `terraform apply` on prod, production data without explicit operator confirmation, forks where operator hasn't been consulted.
+**Delegating replaces reading.** Do not read the file you are about to hand off:
+the child reads it anyway, and reading it here pays for it twice. Read only what
+is needed to decide *whether* to delegate.
 
-**Parallel:** use `/parallel` for multi-angle diff review or auditing unrelated codebase parts. Hard limit: 4 subagents max.
+**Describe the work, not the output format.** The envelope is imposed by the
+`submit` tool schema. Asking for "findings, severity, verdict" in prose is what
+produced a report instead of a tool call — measured, 5/5 against 0/3.
 
-**Delegate threshold (any one sufficient):** >20% of remaining context window; >10 min of focused work; task needs a different model/skill combo. An explicit operator instruction to delegate overrides the threshold — but say so in the routing line, so the cost is attributable.
+**Quote what the child cannot reach.** Anything from this conversation, from
+`.pi/BRIEF.md` or from a file outside the task's scope must be pasted verbatim
+into the task text.
 
-**Orchestrator always owns:** all operator-facing communication, all decision points, subagent output synthesis, skill loading for inline work, conversation history and journal.
+### Boundaries
 
-**Provenance.** Never attribute a conclusion to an agent that did not run. "Oracle's verdict", "the reviewer found" and equivalents require an actual subagent artefact. Absent one, present the analysis as the orchestrator's own. Note that `Verdict` is also a mandatory section heading in `dataeng-architecture` and a verdict field in `code-review` — the word alone attributes nothing.
+**Handle inline — never delegate:** conversational answers, single-line edits,
+reading one file, coordinating subagent results, the decision to delegate itself.
 
-### Invocation patterns
+**Never delegate regardless of agent:** secret rotation, prod credentials, IAM
+grants on production, `terraform apply` on prod, production data without explicit
+operator confirmation, forks where the operator has not been consulted.
 
-**Backlog item (bundle regime):** planner → *(orchestrator review)* → worker → reviewer
-**New feature (free regime):** scout → planner → *(operator validates the expensive calls)* → worker → reviewer
-**Risky decision:** oracle → *(operator validates)* → worker
-**Bug investigation:** scout → oracle → *(operator picks hypothesis)* → worker
-**Repo contradicts the bundle:** planner stops → oracle *(with excerpt embedded)* → *(operator arbitrates)* → worker
+**Delegate threshold (any one sufficient):** >20% of remaining context window;
+>10 min of focused work; the task needs a different model or a different tool
+set. An explicit operator instruction to delegate overrides the threshold — say
+so in the routing line, so the cost is attributable.
 
-There is no invocation path back to Strategic Forge. It is not a runtime destination.
+**Orchestrator always owns:** all operator-facing communication, all decision
+points, subagent output synthesis, skill loading for inline work, conversation
+history and journal.
+
+**Provenance.** Never attribute a conclusion to an agent that did not run. The
+tool returns a summary line and an artefact path; the full envelope is on disk
+under `.pi-subagent-runs/`. Absent an artefact, present the analysis as the
+orchestrator's own. Note that `Verdict` is also a section heading in
+`dataeng-architecture` — the word alone attributes nothing.
+
+### Reading a result
+
+The tool returns one line — `[role: status, next=…] summary` — plus the artefact
+path. Deliberate: returning the whole payload would rebuild, one delegation at a
+time, the context bloat this exists to remove. Read the artefact only when the
+summary is not enough to act. A failure returns its own explanation; do not
+paraphrase it, act on it.
 
 ### Turn budgets
 
-Never pass `turnBudget` or a hard `toolBudget` to mutation-capable subagents (worker, or any role invoked with edit/write authority). Turn counts do not measure whether a delivery slice is complete or safe to hand off — aborting mid-task leaves the working tree in an unverified state.
-
-Count caps are appropriate only for read-only roles: scout, oracle, and reviewers invoked without edit authority.
-
-For writers, use a narrow task scope and an outer elapsed deadline instead.
+`maxTurns` is declared per agent in its definition and enforced by the
+extension — pi has no native turn cap. It is a backstop, not a scoping tool: a
+writer stopped mid-task leaves the working tree unverified. For writers, use a
+narrow task scope; the ceiling exists only to bound a runaway.
 
 ## Output discipline
 
