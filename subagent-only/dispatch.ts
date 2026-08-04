@@ -27,20 +27,40 @@ export interface RunResult {
   /** Where the full envelope was written. The orchestrator reads it only if it needs to. */
   artifact: string;
   turns: number;
-  usage: { input: number; output: number; cacheRead: number; total: number };
+  usage: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; total: number };
   /** Set when the run ended on something other than a submit call. */
-  failure?: "max_turns" | "timeout" | "no_submit" | "spawn_error" | "aborted";
+  failure?: "max_turns" | "timeout" | "no_submit" | "spawn_error" | "aborted" | "provider_error";
+  /** Which model actually answered. Differs from agent.model when a fallback took over. */
+  modelUsed: string;
 }
 
 interface StreamState {
   turns: number;
   submit: Record<string, unknown> | null;
-  usage: { input: number; output: number; cacheRead: number; total: number };
+  usage: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; total: number };
   stderr: string[];
+  /**
+   * Provider errors arrive in-band, not on stderr and not as a non-zero exit.
+   * A rate-limited claude-bridge answers "Credit balance is too low" as
+   * assistant text with stopReason "error", the turn closes normally and the
+   * process exits 0. Read without this, the run looks like a model that simply
+   * declined to call submit.
+   */
+  providerError: string | null;
 }
 
+/**
+ * Every billed field, including the two that were missing.
+ *
+ * `reasoning` is billed at the output rate and reported separately by pi;
+ * `cacheWrite` is billed at 1.25x the input rate. Omitting them understated a
+ * measured delegation by a factor of 4 against the provider's own statement.
+ *
+ * These figures remain an estimate. The bill is what the provider console says
+ * — never what the agent reports.
+ */
 function emptyUsage() {
-  return { input: 0, output: 0, cacheRead: 0, total: 0 };
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 }
 
 /**
@@ -67,9 +87,16 @@ function consume(line: string, state: StreamState): void {
     if (m?.role === "assistant" && m.usage) {
       state.usage.input += m.usage.input ?? 0;
       state.usage.output += m.usage.output ?? 0;
+      state.usage.reasoning += m.usage.reasoning ?? 0;
       state.usage.cacheRead += m.usage.cacheRead ?? 0;
+      state.usage.cacheWrite += m.usage.cacheWrite ?? 0;
       state.usage.total += m.usage.totalTokens ?? 0;
     }
+  }
+
+  if (e.type === "message_end" || e.type === "turn_end") {
+    const m = e.message ?? e;
+    if (m?.stopReason === "error" && m.errorMessage) state.providerError = String(m.errorMessage);
   }
 
   if (e.type === "tool_execution_end" && e.toolName === "submit") {
@@ -88,16 +115,20 @@ export interface DispatchOptions {
   onProgress?: (turns: number) => void;
 }
 
-export async function dispatch(
+/**
+ * Run once with a given model. `dispatch` wraps this with the fallback chain.
+ */
+async function runOnce(
   agent: AgentDefinition,
+  model: string,
   task: string,
   opts: DispatchOptions,
 ): Promise<RunResult> {
-  const plan = buildSpawnPlan(agent, task, opts.ctx);
+  const plan = buildSpawnPlan({ ...agent, model }, task, opts.ctx);
   const artifactDir = opts.artifactDir ?? join(process.cwd(), ".pi-subagent-runs");
   const artifact = join(artifactDir, `${opts.ctx.runId}-${agent.name}.json`);
 
-  const state: StreamState = { turns: 0, submit: null, usage: emptyUsage(), stderr: [] };
+  const state: StreamState = { turns: 0, submit: null, usage: emptyUsage(), stderr: [], providerError: null };
   let failure: RunResult["failure"];
 
   const child = spawn(opts.piPath ?? "pi", plan.args, {
@@ -108,12 +139,19 @@ export async function dispatch(
 
   const stop = (why: NonNullable<RunResult["failure"]>) => {
     if (failure) return;
+    // An envelope already in hand means the run succeeded, whatever the clock
+    // says. Measured: a reviewer called submit and the 300s timer fired during
+    // the child's own shutdown, turning a valid result into a reported failure.
+    if (state.submit && why === "timeout") return;
     failure = why;
     child.kill("SIGTERM");
     // A child that ignores SIGTERM must not hold the orchestrator hostage.
     setTimeout(() => child.kill("SIGKILL"), 2_000).unref?.();
   };
 
+  // Wall clock, not idle time: a role that is still producing tokens at the
+  // deadline is stopped. maxTurns is the cheaper ceiling; this one is the
+  // backstop against a child that never returns at all.
   const timer = setTimeout(() => stop("timeout"), agent.timeoutMs);
   const onAbort = () => stop("aborted");
   opts.signal?.addEventListener("abort", onAbort, { once: true });
@@ -156,7 +194,12 @@ export async function dispatch(
   if (buffer.trim()) consume(buffer, state);
 
   const envelope = state.submit;
-  if (!envelope && !failure) failure = code === 0 ? "no_submit" : "spawn_error";
+  // A validated envelope outranks every other signal. Whatever went wrong on
+  // the way, the role produced the artifact it was asked for.
+  if (envelope) failure = undefined;
+  else if (!failure) {
+    failure = state.providerError ? "provider_error" : code === 0 ? "no_submit" : "spawn_error";
+  }
 
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(
@@ -165,13 +208,14 @@ export async function dispatch(
       {
         runId: opts.ctx.runId,
         role: agent.name,
-        model: agent.model,
+        model,
         task,
         turns: state.turns,
         usage: state.usage,
         injectedTokens: plan.estimatedInputTokens,
         exitCode: code,
         failure: failure ?? null,
+        providerError: state.providerError,
         envelope,
         stderr: failure ? state.stderr.join("").slice(-4000) : undefined,
       },
@@ -183,6 +227,7 @@ export async function dispatch(
 
   if (!envelope) {
     return {
+      modelUsed: model,
       role: agent.name,
       status: "failed",
       summary: failureSummary(agent, failure!, state),
@@ -195,6 +240,7 @@ export async function dispatch(
   }
 
   return {
+    modelUsed: model,
     role: agent.name,
     status: (envelope.status as RunResult["status"]) ?? "ok",
     summary: String(envelope.summary ?? "").trim() || "(empty summary)",
@@ -221,7 +267,45 @@ function failureSummary(
       return `${agent.name} exited cleanly after ${state.turns} turn(s) without calling submit. Its answer, if any, is in the artifact and was not validated.`;
     case "aborted":
       return `${agent.name} was aborted after ${state.turns} turn(s).`;
+    case "provider_error":
+      return `${agent.name}: the provider refused. ${state.providerError}`;
     case "spawn_error":
       return `${agent.name} failed to run. Last stderr: ${state.stderr.join("").slice(-300).trim()}`;
   }
+}
+
+/**
+ * Failures worth retrying on another model.
+ *
+ * Not `no_submit` or `max_turns`: those are the model doing its job badly, and
+ * paying twice for the same bad answer is worse than reporting it once. Only a
+ * refusal to answer at all — an exhausted subscription, an unavailable model —
+ * justifies the next one in the chain.
+ */
+const RETRYABLE = new Set<RunResult["failure"]>(["provider_error", "spawn_error"]);
+
+export async function dispatch(
+  agent: AgentDefinition,
+  task: string,
+  opts: DispatchOptions,
+): Promise<RunResult> {
+  const chain = [agent.model, ...agent.fallbackModels];
+  let last: RunResult | null = null;
+
+  for (const model of chain) {
+    const result = await runOnce(agent, model, task, opts);
+    if (!result.failure || !RETRYABLE.has(result.failure)) return result;
+    last = result;
+    if (opts.signal?.aborted) break;
+  }
+
+  // Every model in the chain refused. Say so, with the last reason, rather
+  // than reporting the last attempt as if it were the only one.
+  return {
+    ...last!,
+    summary:
+      chain.length > 1
+        ? `${agent.name}: all ${chain.length} models refused. Last — ${last!.summary}`
+        : last!.summary,
+  };
 }

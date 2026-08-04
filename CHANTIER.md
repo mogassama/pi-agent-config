@@ -9,28 +9,48 @@ Branche de travail : `feat/subagent-extension`, partant de `main` à jour.
 
 ## 1. Fichiers produits — état
 
-| Fichier | État | Note |
-|:--|:--|:--|
-| `SUBAGENTS-DESIGN.md` | **à déposer** | 5 révisions. Le dépôt ne le contient pas encore |
-| `PLAN-V2-POST-MESURE.md` | **à déposer** | idem |
-| `extensions/envelope/envelope.ts` | **v1 appliquée, v2 à déposer** | Le dépôt porte la v1 : `what`/`recommendation`, `verdict` capitalisé, sans `files_reviewed` ni `open_risks`. **À remplacer en premier à la reprise** |
-| `skills/python-engineering/SKILL.md` | **à déposer** | +60 lignes, purement additif. Dérivé de `code-review:106-118` |
-| `skills/gcp-engineering/SKILL.md` | **à déposer** | `## Review checklist` (`:279-295`) **supprimée et remplacée** par `## Review delta`. 295 → 344 lignes |
-| `skills/iac-terraform/SKILL.md` | **à déposer** | `## Plan review` **et** `## Review checklist` supprimées, remplacées par `## Review delta`. 287 → 326 lignes. `Anti-patterns` conservée : c'est de l'authoring |
-| `skills/sql-engineering/SKILL.md` | **à déposer** | **Deux** `### Review checklist` supprimées (Block 1 et Block 2). 105 → 151 lignes |
-| `skills/bigquery-engineering/SKILL.md` | **à déposer** | `## Review checklist` supprimée. 149 → 202 lignes |
-| `skills/airflow-engineering/SKILL.md` | **à déposer** | checklist supprimée. 245 → 282 lignes |
-| `skills/data-quality/SKILL.md` | **à déposer** | checklist supprimée. 120 → 153 lignes |
-| `skills/dbt-engineering/SKILL.md` | **à déposer** | checklist supprimée. 240 → 278 lignes |
-| `skills/spark-engineering/SKILL.md` | **à déposer** | checklist supprimée. 268 → 308 lignes |
-| `skills/bigquery-ops/SKILL.md` | **à déposer** | checklist supprimée. 325 → 367 lignes |
-| `skills/technical-writing/SKILL.md` | **à déposer** | checklist supprimée. 214 → 253 lignes |
-| `skills/code-review/SKILL.md` | **à déposer** | **Cinq blocs de domaine supprimés**, remplacés par une table de renvoi. Vocabulaire de verdict unifié. 216 → 188 lignes |
-| `AGENTS.md` | appliqué | Version corrigée, mesurée, fusionnée dans `main` |
-| `settings.json` | appliqué | Reformaté, pin `pi-subagents@0.39.0` |
-| `.gitignore` | appliqué | `evidence/` |
+*Branche `feat/subagent-extension`. Tout ce qui est marqué **poussé** est en ligne.*
 
-**Une version obsolète à ne pas utiliser** : le premier `python-engineering` Review delta de cette séance, écrit sans consulter `code-review`. Il contredisait la table existante sur trois lignes (argument mutable classé HIGH au lieu de MEDIUM) et perdait `import *` et la gestion d'exception au point d'entrée. Remplacé.
+### Poussé
+
+| Fichier | Note |
+|:--|:--|
+| `skills/*/SKILL.md` — 11 deltas | Ancienne section de relecture supprimée dans chacune |
+| `skills/code-review/SKILL.md` | Cinq blocs de domaine retirés, table de renvoi à la place. 216 → 185 lignes |
+| `SUBAGENTS-DESIGN.md`, `PLAN-V2-POST-MESURE.md`, `CHANTIER.md` | Racine du dépôt |
+| `subagent-only/envelope/envelope.ts` | v2 : `issue`/`fix`, verdict minuscule, `files_reviewed`, `open_risks` |
+| `subagent-only/slicer.ts` | Découpeur, validé sur les 20 skills |
+| `subagent-only/agents.ts` | Schéma étendu + `mechanism` |
+| `subagent-only/dispatch.ts` | Boucle, chaîne de repli, erreurs fournisseur |
+| `subagent-only/spawn-args.ts` | Construction d'argv, clôture imposée |
+| `subagent-only/agents/{worker,reviewer}.md` | |
+| `extensions/subagent/{index.ts,package.json}` | Outil `task` — **190 tokens** dans l'orchestrateur, contre 5 468 pour les six de `pi-subagents` |
+| `AGENTS.md`, `settings.json`, `.gitignore` | Fusionnés dans `main` |
+
+### À déposer
+
+| Fichier | Correction |
+|:--|:--|
+| `subagent-only/agents/reviewer.md` | `model: anthropic/claude-sonnet-5` — retrait de `claude-bridge` |
+| `subagent-only/spawn-args.ts` | `PROVIDER_PACKAGE` vidé, mécanisme conservé |
+| `CHANTIER.md` | Ce fichier |
+
+### Chiffres mesurés
+
+| | Valeur |
+|:--|--:|
+| Orchestrateur, mode print, avant l'extension | 15 005 |
+| Orchestrateur, avec l'outil `task` | **15 195** |
+| Planchers enfants — 0 / 4 / 7 outils | 959 / 1 514 / 2 023 |
+| Coût de la définition de `submit` | ~467 |
+| Fork `pi-subagents`, mesuré | **17 041**, dont 2 frais |
+| Tranche injectée — worker / reviewer | ~1 375 / ~1 946 en moyenne |
+| Total estimé — worker / reviewer | ~4 034 / ~5 742 |
+
+**Une version obsolète à ne pas réutiliser** : le premier Review delta de
+`python-engineering`, écrit sans consulter `code-review`. Il contredisait la
+table existante et perdait `import *` ainsi que la gestion d'exception au point
+d'entrée.
 
 ---
 
@@ -326,6 +346,228 @@ sévérités. Elle gouverne les *faits*.
 `python-engineering` gagne deux lignes HIGH — secret avec valeur par défaut,
 écriture d'entrepôt sans stratégie de dedup — et sa clause de renvoi distingue
 désormais ce qui est **aussi** pesé ailleurs de ce qui ne l'est **pas** ici.
+
+---
+
+## 4quater. Retrait de claude-bridge — 3 août
+
+**Cause.** `pi-claude-bridge/src/index.ts:1249` passe `systemPrompt: { type: "preset",
+preset: "claude_code" }` **sans condition**. Le drapeau `appendSystemPrompt` ne
+remplace pas le preset : il coupe seulement ce que pi y ajoute, et il **active**
+`settingSources: ["user","project"]`, donc le chargement de `CLAUDE.md`. Le
+défaut était déjà le plus isolé possible ; le preset n'est pas exposé.
+
+Conséquence mesurée : un enfant sur `claude-bridge` portait **~26 000 tokens**
+d'instructions de comportement d'un autre agent, non contrôlables, dans un
+processus dont le principe est de ne recevoir que ce qu'on lui passe. Coût nul
+(mis en cache dès le second appel), mais contrôle nul aussi.
+
+**Décision : provider `anthropic` natif, sur API.** ~0,11 $ par revue au tarif
+d'introduction Sonnet 5 (2 $/10 $ jusqu'au 31 août, puis 3 $/15 $), dont 80 %
+en sortie. Vingt revues par jour ouvré coûteraient ~45 €/mois — un rythme
+jamais approché.
+
+**Écartées** : `pi-claude-auth`, `@gotgenes/pi-anthropic-auth`,
+`@cortexkit/pi-anthropic-auth`. Elles règlent le problème à la racine — provider
+natif, pas de Claude Code, pas de preset — mais utilisent des jetons
+d'abonnement hors clients officiels, ce que les CGU d'Anthropic n'autorisent
+pas. À 11 centimes la revue, l'API dispense de trancher. À reconsidérer si
+l'usage montait.
+
+**Incident associé** : `ANTHROPIC_API_KEY` était exportée globalement depuis
+`~/.config/env/api_keys.zsh`, elle-même lisant le trousseau macOS. Claude Code,
+en présence de cette variable, bascule en mode API et ignore l'abonnement. Les
+tests des deux derniers jours ont consommé 10 € de crédit en croyant tirer sur
+Max. Clé retirée du trousseau et de l'export, révoquée.
+
+> **Règle qui en sort.** Un coût affiché comme nul parce qu'on croit être sur
+> abonnement doit être vérifié auprès du fournisseur, jamais déduit de la
+> configuration. La même erreur avait failli être commise sur `openai-codex`.
+
+### Allocation des modèles — révisée
+
+| Rôle | Modèle | Raison |
+|:--|:--|:--|
+| orchestrateur, worker | `openai-codex/gpt-5.6-sol` | abonnement, coût marginal nul |
+| reviewer | `anthropic/claude-sonnet-5` | ~0,11 $/revue, prompt système sous contrôle |
+| advisor (futur) | `anthropic/claude-sonnet-5` ou mieux | jugement ouvert, sans barème |
+| scout | Google | inchangé |
+
+**Inversion assumée d'un principe.** Le document disait « le budget va au
+reviewer, vrai portail de qualité ». C'était juste avant les deltas. Le reviewer
+applique désormais une **table de sévérité explicite** — application de barème,
+pas jugement ouvert. L'advisor n'a aucun barème : c'est là que la capacité du
+modèle compte.
+
+→ Si un advisor est mis en service, il prend Sonnet et le reviewer bascule sur
+un modèle bon marché. Quatre familles au lieu de trois.
+
+**Objection écartée : « l'advisor sert peu, c'est dommage d'y mettre Sonnet ».**
+Un modèle facturé à l'usage ne se gâche pas en restant inactif — sur un advisor
+appelé trois fois par mois, Sonnet coûte quelques centimes. Choisir un modèle
+pour qu'il serve est du coût irrécupérable appliqué à un service à l'usage.
+
+**Le vrai risque est l'inverse** : si Sonnet quitte le reviewer, un modèle non
+testé prend le portail de qualité le plus sollicité. C'est pourquoi la bascule
+est conditionnée au protocole de test ci-dessous, et à rien d'autre.
+
+> **Principe.** Le meilleur modèle va là où une erreur coûte le plus cher, pas
+> là où il tourne le plus souvent. L'advisor tranche des forks irréversibles —
+> un mauvais conseil s'y paie en semaines. Le reviewer applique un barème écrit
+> — une erreur s'y rattrape à la revue suivante.
+
+### Candidats reviewer bon marché — à tester, pas à adopter
+
+Tarifs au 3 août 2026, coût estimé sur la revue réelle de `config.py`
+(5 700 tokens frais, ~50 000 en cache, 8 663 en sortie) :
+
+| Modèle | Tarif | Coût/revue |
+|:--|:--|--:|
+| `anthropic/claude-sonnet-5` | 2 $ / 10 $ | ~0,110 $ |
+| GLM-5.2 | 1,40 $ / 4,40 $ | ~0,046 $ |
+| MiniMax M3 | 0,60 $ / 2,40 $ | ~0,024 $ |
+| **DeepSeek V4 Flash** | **0,14 $ / 0,28 $** | **~0,004 $** |
+| Kimi K3 | 3 $ / 15 $ | ~0,140 $ — plus cher que Sonnet |
+
+**Protocole de test, quand on voudra.** Rejouer les cinq fichiers d'`anime-etl`
+dont les verdicts sont connus. Critère : retrouver le HIGH des identifiants par
+défaut sur `config.py` et la non-idempotence sur `load.py`. Un reviewer qui rate
+un HIGH ne coûte pas 11 centimes, il coûte un `blocked` manquant.
+
+Note : `kimi-coding` est **déjà configuré** dans `--list-models` — aucun intérêt
+au prix actuel.
+
+---
+
+## 4quinquies. Test de bout en bout — pi contre Claude Code
+
+**Objet.** Une vraie tâche de projet, exécutée deux fois : par pi avec la
+nouvelle configuration, puis par Claude Code. On relève tout et on compare.
+
+**Le sujet est disponible** : un pipeline à améliorer, dont Strategic Forge a
+déjà produit les instructions. C'est le bon cas — travail réel, périmètre connu,
+pas une fixture.
+
+### Métriques à relever
+
+| Quoi | Comment |
+|:--|:--|
+| Délégation effective | l'outil `task` a-t-il été appelé, pour quels rôles, combien de fois |
+| Modèles réellement utilisés | `modelUsed` dans les artefacts ; un repli silencieux fausse tout le reste |
+| Tours par délégation | contre `maxTurns` ; une boucle longue pour peu de résultat est le défaut à traquer |
+| Contexte et coût | `in`, `cacheRead`, sortie, par rôle et au total |
+| Enveloppes valides | combien de `submit` contre combien de `no_submit` |
+| Durée | mur, par délégation et au total |
+| **Qualité du rendu** | voir ci-dessous |
+
+### Discipline de protocole — à respecter, sinon le test ne vaut rien
+
+**Le critère de qualité s'écrit avant les runs.** Sinon on juge après coup, et
+on trouve ce qu'on espérait. Poser à l'avance : ce que le pipeline doit faire de
+plus, ce qui ne doit pas casser, la forme attendue du diff.
+
+**Ce que la comparaison n'isole pas.** pi et Claude Code ne diffèrent pas que
+par le harnais : les modèles diffèrent aussi. Un écart de résultat ne prouve
+donc rien sur l'architecture de délégation. Ce que le test mesure honnêtement,
+c'est **si la chaîne complète tient sur une tâche réelle** — pas laquelle des
+deux est supérieure.
+
+**Un seul essai par côté ne conclut pas.** La dispersion mesurée sur la fixture
+était de 6 % ; sur une tâche de projet elle sera bien supérieure.
+
+### Prérequis — adapter Strategic Forge
+
+Le bundle actuel (`INSTRUCTIONS.md`, `ARCHITECTURE.md`, `DESIGN.md`,
+`CONVENTIONS.md`) suppose que l'agent lit des fichiers de contexte. **La nouvelle
+configuration l'interdit** : un enfant tourne en `-nc`, ne reçoit ni AGENTS.md ni
+brief, et son texte de tâche est son instruction entière.
+
+Ce que Strategic Forge devrait produire à la place :
+
+- des **paquets de tâche autonomes**, un par délégation prévue, chacun se
+  suffisant à lui-même — fichiers nommés, contexte cité verbatim, rien
+  d'implicite
+- le **rôle visé** pour chacun, worker ou reviewer, avec la skill de domaine à
+  injecter
+- ce qui reste inline chez l'orchestrateur, et pourquoi
+- **ne pas décrire le format de sortie** : l'enveloppe est imposée par le schéma
+  de `submit`, la réclamer en prose est ce qui produisait un rapport au lieu d'un
+  appel
+
+Rappel déjà noté : le board Strategic Forge doit demander explicitement Loguru
+ou la `logging` standard quand le projet est en Python, au lieu d'imposer Loguru.
+
+---
+
+## 4sexies. `.pi/BRIEF.md` — la couche manquante
+
+**Constat.** Le brief n'atteint aucun enfant. `pi-project-brief` est une
+extension locale, `-ne` est actif, et ni le worker ni le reviewer ne la listent
+en `-e`. Personne ne l'avait relevé.
+
+**Pourquoi c'est un trou.** Un enfant reçoit son prompt de rôle, des conventions
+de domaine **génériques**, et une tâche **spécifique**. Il manque la couche
+intermédiaire : ce projet-ci. La skill dit « jamais de `WRITE_APPEND` aveugle » ;
+le brief dirait « ici les tables sont partitionnées par `event_date` en
+`europe-west1` ». Sans lui, tout le contexte projet doit transiter par le texte
+de tâche, ce qui rend sa composition coûteuse et fragile.
+
+**Décision : injection directe, pas l'extension.** `buildSpawnPlan` lit
+`.pi/BRIEF.md` et l'injecte en `--append-system-prompt`, comme une tranche de
+skill. Aucune dépendance à la découverte, et le contenu apparaît dans le plan
+avant exécution.
+
+**Pour les quatre rôles, par défaut.** Le worker écrit dans ce projet, le
+reviewer juge contre ses conventions, le scout y cherche, l'advisor conseille
+dessus. Seule pièce de contexte dont les quatre ont besoin. ~397 tokens.
+
+### Bundle et brief se complètent — ils ne se recouvrent pas
+
+| | Rôle |
+|:--|:--|
+| **Bundle Strategic Forge** | les consignes de base à respecter, et le travail à faire |
+| **`.pi/BRIEF.md`** | l'état du dépôt à l'instant t |
+
+Distinction posée par l'opérateur, et elle lève l'inquiétude d'une double source :
+l'un est prescriptif et daté de la tâche, l'autre descriptif et daté du dépôt.
+À maintenir explicitement quand Strategic Forge sera adapté — la tentation sera
+de décrire l'état du dépôt dans le bundle.
+
+---
+
+## 4septies. Extension powerline — chantier de fin
+
+L'actuelle ne convient pas. Références souhaitées :
+[CCometixLine](https://github.com/Haleclipse/CCometixLine) et surtout
+[ccstatusline](https://github.com/sirmalloc/ccstatusline).
+
+**Faisable.** pi expose `ctx.ui.setFooter({ render(width) { … } })`, qui
+**remplace entièrement** le footer intégré, plus un `ReadonlyFooterDataProvider`
+pour les données de session et un exemple officiel `custom-footer.ts`
+(`docs/extensions.md:2455-2566`, `2926`). Chaque ligne rendue est sous contrôle.
+
+**Difficulté : modérée.** Le rendu est du texte avec les couleurs du thème ; le
+travail est de composer les segments et de gérer la largeur, pas de se battre
+contre l'API. Les deux références visées ciblent Claude Code, donc rien n'est
+réutilisable tel quel — c'est le **design** qu'on porte, pas le code.
+
+**À instruire au moment venu** : quelles données le `FooterDataProvider` expose
+réellement (modèle, tokens, coût, branche git, durée), et lesquelles demandent
+un calcul propre. Un segment de coût est trivial ; un segment de quota
+d'abonnement, probablement pas.
+
+**Ordonnancement : aucune contrainte.** Correction d'une réserve mal fondée —
+le footer est du **rendu terminal**, il n'entre jamais dans le prompt envoyé au
+modèle. Les 0 tokens de l'actuel ne sont pas une performance à préserver, c'est
+la nature de l'objet : trois lignes colorées avec icônes coûteront exactement
+autant qu'une ligne nue, soit rien.
+
+Le chantier est donc **totalement indépendant** — il ne touche ni les enfants,
+ni le contexte, ni la délégation. Faisable à n'importe quel moment.
+
+Seule nuance restante : afficher une donnée que pi ne calcule pas déjà — un
+quota d'abonnement, par exemple — demanderait un appel réseau ou un
+sous-processus au rafraîchissement. Coût de latence, jamais de tokens.
 
 ---
 

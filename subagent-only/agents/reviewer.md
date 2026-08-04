@@ -1,8 +1,8 @@
 ---
 name: reviewer
 description: Read-only review of a change against the domain conventions it was written under.
-model: claude-bridge/claude-sonnet-5
-fallbackModels: [google/gemini-3.1-pro]
+model: anthropic/claude-sonnet-5
+fallbackModels: [google/gemini-3.1-pro-preview]
 thinking: medium
 tools: [read, grep, find, ls, submit]
 extensions: [envelope]
@@ -12,7 +12,7 @@ sliceMode: full
 contextFiles: false
 session: ephemeral
 maxTurns: 10
-timeoutMs: 300000
+timeoutMs: 900000
 ---
 
 You are reviewing one change, read-only. You modify nothing.

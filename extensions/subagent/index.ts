@@ -48,7 +48,9 @@ export default function (pi: ExtensionAPI) {
       description:
         "The complete instruction. The child inherits nothing: no AGENTS.md, no " +
         "conversation history, no prior tool calls. Name the files, state the " +
-        "goal, and quote any context the child cannot read for itself.",
+        "goal, and quote any context the child cannot read for itself. Describe " +
+        "the work, not the output format — the envelope is imposed by the tool " +
+        "schema and does not need to be requested.",
     }),
   });
 
@@ -79,9 +81,12 @@ export default function (pi: ExtensionAPI) {
 
         // Only the summary crosses back. The envelope stays on disk; the
         // orchestrator reads the artifact when it actually needs the findings.
+        // The model is named only when it is not the declared one: a fallback
+        // took over, and the orchestrator should know which answer it is reading.
+        const via = result.modelUsed === agent.model ? "" : ` via ${result.modelUsed}`;
         const head = result.failure
-          ? `[${result.role}: ${result.failure}]`
-          : `[${result.role}: ${result.status}, next=${result.next}]`;
+          ? `[${result.role}: ${result.failure}${via}]`
+          : `[${result.role}: ${result.status}, next=${result.next}${via}]`;
 
         return {
           content: [
@@ -92,6 +97,7 @@ export default function (pi: ExtensionAPI) {
           ],
           details: {
             role: result.role,
+            model: result.modelUsed,
             status: result.status,
             next: result.next,
             turns: result.turns,

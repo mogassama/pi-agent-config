@@ -14,6 +14,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { SliceMode } from "./slicer.js";
+import { providerExtensionFor } from "./spawn-args.js";
 
 export interface AgentDefinition {
   name: string;
@@ -197,6 +198,16 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
   const timeoutMs = Number(str(fields, "timeoutMs") ?? DEFAULTS.timeoutMs);
   if (!Number.isFinite(maxTurns) || maxTurns < 1) throw new Error(`${label}: maxTurns must be >= 1`);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1000) throw new Error(`${label}: timeoutMs must be >= 1000`);
+
+  // Resolving the provider here turns an unknown one into a load-time error
+  // rather than a "model not found" three minutes into a delegation.
+  for (const m of [model, ...(list(fields, "fallbackModels") ?? [])]) {
+    try {
+      providerExtensionFor(m);
+    } catch (e) {
+      throw new Error(`${label}: ${(e as Error).message}`);
+    }
+  }
 
   const session = (str(fields, "session") ?? DEFAULTS.session) as AgentDefinition["session"];
   if (session !== "ephemeral" && session !== "persistent") {

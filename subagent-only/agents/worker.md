@@ -11,7 +11,7 @@ sliceMode: authoring
 contextFiles: false
 session: persistent
 maxTurns: 20
-timeoutMs: 600000
+timeoutMs: 1200000
 ---
 
 You implement one scoped change and write it directly to the working tree.
