@@ -46,8 +46,13 @@ export interface AgentDefinition {
   extensions: string[];
 
   /**
-   * Domain skills, resolved against skills/<name>/SKILL.md and sliced per
-   * sliceMode: the worker gets authoring, the reviewer authoring + delta.
+   * Domain skills, sliced per sliceMode: the worker gets authoring, the
+   * reviewer authoring + delta.
+   *
+   * Normally empty. Which domain applies is a property of the task, not of the
+   * role, so the orchestrator passes it per call through the tool's `skills`
+   * parameter. A declared default would hand a Terraform change
+   * python-engineering and look deliberate while being wrong.
    */
   skills: string[];
   sliceMode: SliceMode;
@@ -187,6 +192,9 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
   if (mechanism.length > 0 && !tools.includes("read")) {
     throw new Error(`${label}: mechanism skills listed without the "read" tool`);
   }
+  // sliceMode is declared even when `skills` is empty: it says how a slice
+  // would be cut if the orchestrator passes one at call time, which is the
+  // normal case.
   if (sliceMode !== "none" && !tools.includes("read")) {
     // Not fatal for injection — the body arrives as text either way — but a
     // role given conventions and no way to open the files they refer to is

@@ -31,6 +31,13 @@ const RUN_ID = randomBytes(3).toString("hex");
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
 
+  // The UI context is only handed out with an event or a call. Capture it at
+  // session_start so the dispatch loop can publish progress without one.
+  let ui: { setStatus?: (k: string, v: string) => void } | undefined;
+  pi.on("session_start", async (_event, ctx) => {
+    ui = ctx.ui;
+  });
+
   if (agents.size === 0) {
     // Loud, and only in the orchestrator's console: a delegation primitive
     // that registers nothing would look like a model refusing to delegate.
@@ -44,6 +51,15 @@ export default function (pi: ExtensionAPI) {
     agent: Type.Union(
       names.map((n) => Type.Literal(n)),
       { description: agentMenu(agents) },
+    ),
+    skills: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Domain skills to inject, by name — the domains the task touches, not " +
+          "the ones the role usually needs. A .tf change wants iac-terraform, a " +
+          "query wants sql-engineering or bigquery-engineering. Omit to use the " +
+          "agent's declared default.",
+      }),
     ),
     task: Type.String({
       description:
@@ -63,6 +79,7 @@ export default function (pi: ExtensionAPI) {
         "Run one scoped task in a fresh pi process with its own model, tools and " +
         "conventions. Returns a one-line summary; the full result is written to disk.",
       promptGuidelines: [
+        "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a change you could make inline in fewer turns than composing the instruction would take.",
         "The child sees only the task text. Anything implicit here is absent there.",
@@ -78,9 +95,15 @@ export default function (pi: ExtensionAPI) {
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
         // depend on how pi isolates them.
-        const publish = () => pi.getContext?.()?.ui?.setStatus?.(STATUS_KEY, serialize());
+        const publish = () => ui?.setStatus?.(STATUS_KEY, serialize());
 
-        const result = await dispatch(agent, params.task, {
+        // The task decides which domain applies, not the role. A static list on
+        // the definition hands a Terraform change python-engineering and
+        // nothing useful; the definition's list is a default, not a constraint.
+        const effective =
+          params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : agent;
+
+        const result = await dispatch(effective, params.task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
           signal,
           onProgress: publish,
@@ -96,11 +119,18 @@ export default function (pi: ExtensionAPI) {
           ? `[${result.role}: ${result.failure}${via}]`
           : `[${result.role}: ${result.status}, next=${result.next}${via}]`;
 
+        // Say which skills came without a severity table. The review still
+        // ran; the operator should know one domain was judged on the generic
+        // definitions alone rather than discover it from an odd verdict.
+        const note = result.withoutDelta.length
+          ? `\n(no severity table for: ${result.withoutDelta.join(", ")})`
+          : "";
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `${head} ${result.summary}\n${result.artifact}`,
+              text: `${head} ${result.summary}${note}\n${result.artifact}`,
             },
           ],
           details: {

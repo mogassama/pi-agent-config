@@ -16,6 +16,8 @@ export interface RoleState {
   runs: number;
   /** Cumulative tokens across those runs, all kinds. */
   tokens: number;
+  /** Cumulative cache reads. Zero on providers that do not report caching. */
+  cacheRead: number;
   /** Estimated cumulative cost, USD. Zero for subscription providers. */
   cost: number;
   /** Whether the provider bills per token. Drives ∅ vs a figure. */
@@ -35,7 +37,7 @@ export const STATUS_KEY = "subagent";
 const state: SubagentSnapshot = {};
 
 function get(role: RoleName): RoleState {
-  return (state[role] ??= { runs: 0, tokens: 0, cost: 0, billed: false });
+  return (state[role] ??= { runs: 0, tokens: 0, cacheRead: 0, cost: 0, billed: false });
 }
 
 /**
@@ -68,6 +70,7 @@ export function markEnd(
   role: RoleName,
   model: string,
   tokens: number,
+  cacheRead: number,
   cost: number,
   outcome: string,
 ): void {
@@ -75,6 +78,7 @@ export function markEnd(
   s.running = undefined;
   s.runs += 1;
   s.tokens += tokens;
+  s.cacheRead += cacheRead;
   s.cost += s.billed ? cost : 0;
   s.lastModel = model;
   s.lastOutcome = outcome;

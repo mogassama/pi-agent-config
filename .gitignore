@@ -32,3 +32,4 @@ build/
 .pi/
 models-store.json
 evidence/
+.pi-subagent-runs/

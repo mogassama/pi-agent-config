@@ -19,7 +19,7 @@
  * child. That is intended — the role prompt is the child's whole instruction.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { sliceSkillFile } from "./slicer.js";
@@ -39,6 +39,8 @@ export interface SpawnPlan {
   /** Sum of the injected prompt slices, for logging and for the cost gate. */
   injectedChars: number;
   estimatedInputTokens: number;
+  /** Reviewer-mode skills injected without a `## Review delta`, if any. */
+  withoutDelta: string[];
 }
 
 /**
@@ -116,8 +118,16 @@ export function providerExtensionFor(model: string): string | null {
 
 function resolveSkill(name: string, ctx: BuildContext): string {
   const p = join(ctx.agentDir, "skills", name, "SKILL.md");
-  if (!existsSync(p)) throw new Error(`skill "${name}" not found at ${p}`);
-  return p;
+  if (existsSync(p)) return p;
+  // The orchestrator now chooses skills per call, so a wrong name is a runtime
+  // possibility rather than a config error. Name the valid ones.
+  let available = "";
+  try {
+    available = readdirSync(join(ctx.agentDir, "skills")).sort().join(", ");
+  } catch {
+    /* ignore */
+  }
+  throw new Error(`skill "${name}" not found.${available ? ` Available: ${available}` : ""}`);
 }
 
 /**
@@ -170,9 +180,11 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
     args.push("--append-system-prompt", slice.text);
   }
 
+  const withoutDelta: string[] = [];
   for (const skill of agent.skills) {
     const slice = sliceSkillFile(resolveSkill(skill, ctx), agent.sliceMode);
     if (!slice.text) continue;
+    if (agent.sliceMode === "full" && !slice.hasDelta) withoutDelta.push(skill);
     injectedChars += slice.text.length;
     args.push("--append-system-prompt", slice.text);
   }
@@ -190,6 +202,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
     env: { PI_SUBAGENT_ROLE: agent.name },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),
+    withoutDelta,
   };
 }
 

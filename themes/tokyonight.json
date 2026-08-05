@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "_generated": "GENERATED — DO NOT EDIT. Source: ~/.config/theme/colors.toml -> `theme render`",
+  "_delimiters": "Jinja renders this with the default {}{} delimiters, so no two opening braces may ever sit adjacent. Keep every object opening on its own line.",
+  "name": "tokyonight",
+  "colors": {
+    "accent": "#7aa2f7",
+    "border": "#414868",
+    "borderAccent": "#7aa2f7",
+    "borderMuted": "#292e42",
+    "success": "#9ece6a",
+    "error": "#f7768e",
+    "warning": "#e0af68",
+    "muted": "#a9b1d6",
+    "dim": "#565f89",
+    "text": "",
+    "thinkingText": "#565f89",
+
+    "selectedBg": "#292e42",
+    "userMessageBg": "#1a1b26",
+    "userMessageText": "#c0caf5",
+    "customMessageBg": "#1a1b26",
+    "customMessageText": "#a9b1d6",
+    "customMessageLabel": "#bb9af7",
+    "toolPendingBg": "#1a1b26",
+    "toolSuccessBg": "#24283b",
+    "toolErrorBg": "#292e42",
+    "toolTitle": "#7dcfff",
+    "toolOutput": "#a9b1d6",
+
+    "mdHeading": "#bb9af7",
+    "mdLink": "#7aa2f7",
+    "mdLinkUrl": "#7dcfff",
+    "mdCode": "#9ece6a",
+    "mdCodeBlock": "#c0caf5",
+    "mdCodeBlockBorder": "#414868",
+    "mdQuote": "#a9b1d6",
+    "mdQuoteBorder": "#bb9af7",
+    "mdHr": "#414868",
+    "mdListBullet": "#7dcfff",
+
+    "toolDiffAdded": "#9ece6a",
+    "toolDiffRemoved": "#f7768e",
+    "toolDiffContext": "#565f89",
+
+    "syntaxComment": "#565f89",
+    "syntaxKeyword": "#bb9af7",
+    "syntaxFunction": "#7aa2f7",
+    "syntaxVariable": "#c0caf5",
+    "syntaxString": "#9ece6a",
+    "syntaxNumber": "#ff9e64",
+    "syntaxType": "#7dcfff",
+    "syntaxOperator": "#1abc9c",
+    "syntaxPunctuation": "#565f89",
+
+    "thinkingOff": "#3b4261",
+    "thinkingMinimal": "#1abc9c",
+    "thinkingLow": "#7dcfff",
+    "thinkingMedium": "#7aa2f7",
+    "thinkingHigh": "#bb9af7",
+    "thinkingXhigh": "#ff9e64",
+    "thinkingMax": "#f7768e",
+
+    "bashMode": "#9ece6a"
+  },
+  "export": {
+    "pageBg": "#15161e",
+    "cardBg": "#1a1b26",
+    "infoBg": "#292e42"
+  }
+}

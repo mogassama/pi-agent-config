@@ -199,14 +199,39 @@ to someone who has never seen this session — because that is the case.
 |:---|:---|:---|
 | **worker** | Implementing an approved direction — a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Escalates ambiguity rather than guessing. | Work with no approved direction behind it |
 | **reviewer** | Code >50 lines, reviewed **before** it is finalised. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
-`scout` (read-only recon) and `advisor` (architectural forks, no tools) are
-designed but not written. Do not invoke them.
+| **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
+
+`advisor` (architectural forks, no tools) is designed but not written. Do not
+invoke it.
+
+### Searching is scout work
+
+**This is the routing rule that gets used most, so it is stated first.**
+
+Reading one file you can name is inline. **Searching across files is a
+delegation.** The moment the question is *where* rather than *what* — where is
+this handled, who calls this, does this pattern already exist, what would this
+rename touch — it goes to the scout, on a model that costs a fraction of yours
+and does not spend your context on the false positives.
+
+The tell is the tool you are reaching for: a `read` on a named path is yours, a
+`grep` or a `find` across the tree is the scout's. If you have typed two
+searches in a row, the third should have been a delegation.
+
+Delegate the *question*, not the search terms. "Which modules write to
+`f_anime_ratings`, and where" — not "grep for f_anime_ratings". The scout picks
+its own terms and will try several; handing it yours narrows it to your first
+guess.
+
+What comes back is a list of paths and line ranges. Read those ranges yourself
+if you need the content — that is a named read, and it is inline again.
 
 ### Composing a task
 
 **Delegating replaces reading.** Do not read the file you are about to hand off:
 the child reads it anyway, and reading it here pays for it twice. Read only what
-is needed to decide *whether* to delegate.
+is needed to decide *whether* to delegate — and if deciding requires a search,
+that search is itself a scout delegation.
 
 **Describe the work, not the output format.** The envelope is imposed by the
 `submit` tool schema. Asking for "findings, severity, verdict" in prose is what

@@ -6,7 +6,7 @@ fallbackModels: [openai-codex/gpt-5.6-terra]
 thinking: medium
 tools: [read, grep, find, ls, bash, edit, write, submit]
 extensions: [envelope, pi-lint-gate, bash-guard, pi-bq-cost-sentinel]
-skills: [python-engineering]
+skills: []
 sliceMode: authoring
 contextFiles: false
 session: persistent

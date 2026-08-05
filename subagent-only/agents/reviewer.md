@@ -7,7 +7,7 @@ thinking: medium
 tools: [read, grep, find, ls, submit]
 extensions: [envelope]
 mechanism: [code-review]
-skills: [python-engineering]
+skills: []
 sliceMode: full
 contextFiles: false
 session: ephemeral

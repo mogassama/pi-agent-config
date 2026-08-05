@@ -29,6 +29,8 @@ export interface RunResult {
   artifact: string;
   turns: number;
   usage: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; total: number };
+  /** Reviewer-mode skills that carried no severity table. */
+  withoutDelta: string[];
   /** Set when the run ended on something other than a submit call. */
   failure?: "max_turns" | "timeout" | "no_submit" | "spawn_error" | "aborted" | "provider_error";
   /** Which model actually answered. Differs from agent.model when a fallback took over. */
@@ -231,11 +233,19 @@ async function runOnce(
   const outcome = envelope
     ? String((envelope.payload as Record<string, unknown> | undefined)?.verdict ?? envelope.status ?? "ok")
     : (failure ?? "failed");
-  markEnd(agent.name as RoleName, model, state.usage.total, estimateCost(model, state.usage), outcome);
+  markEnd(
+    agent.name as RoleName,
+    model,
+    state.usage.total,
+    state.usage.cacheRead,
+    estimateCost(model, state.usage),
+    outcome,
+  );
 
   if (!envelope) {
     return {
       modelUsed: model,
+      withoutDelta: plan.withoutDelta,
       role: agent.name,
       status: "failed",
       summary: failureSummary(agent, failure!, state),
@@ -249,6 +259,7 @@ async function runOnce(
 
   return {
     modelUsed: model,
+    withoutDelta: plan.withoutDelta,
     role: agent.name,
     status: (envelope.status as RunResult["status"]) ?? "ok",
     summary: String(envelope.summary ?? "").trim() || "(empty summary)",
@@ -326,17 +337,30 @@ export async function dispatch(
  * reported usage implied, and the gap was never fully reconciled. This figure
  * is here to show cost accruing per role, not to be trusted to the cent.
  */
-const RATES: Record<string, { in: number; out: number }> = {
-  anthropic: { in: 2, out: 10 },
-  google: { in: 1.25, out: 10 },
-};
+/**
+ * Per model, not per provider: Flash and Pro differ by an order of magnitude,
+ * and a provider-level rate reported a Flash scout as costing more than a
+ * Sonnet review. Matched longest-prefix first.
+ */
+const RATES: Array<[string, { in: number; out: number }]> = [
+  ["anthropic/claude-opus", { in: 5, out: 25 }],
+  ["anthropic/claude-haiku", { in: 0.8, out: 4 }],
+  ["anthropic/claude-sonnet", { in: 2, out: 10 }],
+  ["google/gemini-3.1-flash-lite", { in: 0.1, out: 0.4 }],
+  ["google/gemini-3.5-flash", { in: 0.3, out: 2.5 }],
+  ["google/gemini-3.6-flash", { in: 0.3, out: 2.5 }],
+  ["google/gemini-3.1-pro", { in: 1.25, out: 10 }],
+  ["google/gemini", { in: 1.25, out: 10 }],
+  ["anthropic/", { in: 2, out: 10 }],
+];
 
 function estimateCost(
   model: string,
   u: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number },
 ): number {
-  const provider = model.includes("/") ? model.split("/")[0] : "";
-  const r = RATES[provider];
+  const r = RATES.filter(([prefix]) => model.startsWith(prefix)).sort(
+    (a, b) => b[0].length - a[0].length,
+  )[0]?.[1];
   if (!r) return 0;
   const M = 1_000_000;
   return (

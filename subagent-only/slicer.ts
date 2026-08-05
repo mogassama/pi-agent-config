@@ -65,9 +65,8 @@ function estimateTokens(text: string): number {
 /**
  * Slice a skill body for a role.
  *
- * Throws when a delta is required and absent, rather than silently injecting
- * the whole file: a renamed heading must fail loudly. This is the runtime half
- * of the guard; pi-check-config is the static half.
+ * Never throws on a missing marker: see the note in the "full" branch. The
+ * static guard lives in pi-check-config, where failing is free.
  */
 export function sliceSkill(source: string, mode: SliceMode, label = "skill"): SkillSlice {
   if (mode === "none") {
@@ -83,14 +82,19 @@ export function sliceSkill(source: string, mode: SliceMode, label = "skill"): Sk
     return { text, hasDelta, estimatedTokens: estimateTokens(text) };
   }
 
-  // mode === "full"
-  if (!hasDelta) {
-    throw new Error(
-      `${label}: no "${DELTA_MARKER}" section. A reviewer slice cannot be built. ` +
-        `Either the heading was renamed, or this skill is not reviewer-facing and ` +
-        `should not be in the reviewer's skill list.`,
-    );
-  }
+  // mode === "full": the whole body, delta included when there is one.
+  //
+  // A missing marker is not an error here. Eight of the twenty skills are not
+  // reviewer-facing and will never carry a delta — `tdd`, `git-collaboration`,
+  // the architecture pair. Refusing them would abort the delegation over a
+  // skill the orchestrator was right to pass, and an aborted review is a worse
+  // outcome than a review without one severity table.
+  //
+  // The case this used to catch — a domain skill whose heading was renamed,
+  // silently losing its severity table — belongs to pi-check-config, which can
+  // assert exactly one marker per reviewer-facing skill without a delegation
+  // riding on it. `hasDelta` is returned so the caller can report the
+  // difference rather than swallow it.
   return { text: body, hasDelta, estimatedTokens: estimateTokens(body) };
 }
 
