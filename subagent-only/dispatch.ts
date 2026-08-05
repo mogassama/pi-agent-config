@@ -132,6 +132,14 @@ async function runOnce(
   const artifact = join(artifactDir, `${opts.ctx.runId}-${agent.name}.json`);
 
   const state: StreamState = { turns: 0, submit: null, usage: emptyUsage(), stderr: [], providerError: null };
+
+  // The child's raw stream, kept beside the artefact.
+  //
+  // Without it only the totals come back, and a run that costs 499k tokens is
+  // indistinguishable from one that costs 20k ten times over — which is
+  // exactly the question that decides a role's tool set and model. Local file,
+  // gitignored, cheap.
+  const transcript: string[] = [];
   markStart(agent.name as RoleName, model, agent.maxTurns);
   let failure: RunResult["failure"];
 
@@ -170,6 +178,7 @@ async function runOnce(
       buffer = buffer.slice(nl + 1);
       if (!line.trim()) continue;
 
+      transcript.push(line);
       consume(line, state);
       markProgress(agent.name as RoleName, state.turns);
       opts.onProgress?.(state.turns);
@@ -207,6 +216,9 @@ async function runOnce(
   }
 
   mkdirSync(artifactDir, { recursive: true });
+  if (agent.keepTranscript !== false) {
+    writeFileSync(artifact.replace(/\.json$/, ".jsonl"), transcript.join("\n") + "\n", "utf-8");
+  }
   writeFileSync(
     artifact,
     JSON.stringify(
@@ -221,7 +233,9 @@ async function runOnce(
         exitCode: code,
         failure: failure ?? null,
         providerError: state.providerError,
-        envelope,
+        // Rebuilt here rather than demanded of the model: the split is useful
+        // to read on disk and was a liability to ask for at the tool boundary.
+        envelope: envelope ? splitEnvelope(envelope) : null,
         stderr: failure ? state.stderr.join("").slice(-4000) : undefined,
       },
       null,
@@ -230,8 +244,9 @@ async function runOnce(
     "utf-8",
   );
 
+  // Flat envelope now: verdict sits beside status, not under a payload key.
   const outcome = envelope
-    ? String((envelope.payload as Record<string, unknown> | undefined)?.verdict ?? envelope.status ?? "ok")
+    ? String(envelope.verdict ?? envelope.status ?? "ok")
     : (failure ?? "failed");
   markEnd(
     agent.name as RoleName,
@@ -346,11 +361,17 @@ const RATES: Array<[string, { in: number; out: number }]> = [
   ["anthropic/claude-opus", { in: 5, out: 25 }],
   ["anthropic/claude-haiku", { in: 0.8, out: 4 }],
   ["anthropic/claude-sonnet", { in: 2, out: 10 }],
-  ["google/gemini-3.1-flash-lite", { in: 0.1, out: 0.4 }],
-  ["google/gemini-3.5-flash", { in: 0.3, out: 2.5 }],
-  ["google/gemini-3.6-flash", { in: 0.3, out: 2.5 }],
-  ["google/gemini-3.1-pro", { in: 1.25, out: 10 }],
-  ["google/gemini", { in: 1.25, out: 10 }],
+  // "Flash" is a family name, not a price band: 3.5 Flash lists at 1.50/9.00,
+  // within a quarter of 3.1 Pro. The cheap tier is Flash-Lite. Getting this
+  // wrong reported a scout run as costing a third of a Sonnet review when it
+  // cost several times more.
+  ["google/gemini-2.5-flash-lite", { in: 0.1, out: 0.4 }],
+  ["google/gemini-3.1-flash-lite", { in: 0.25, out: 1.5 }],
+  ["google/gemini-3.5-flash-lite", { in: 0.3, out: 2.5 }],
+  ["google/gemini-3.6-flash", { in: 1.5, out: 7.5 }],
+  ["google/gemini-3.5-flash", { in: 1.5, out: 9 }],
+  ["google/gemini-3.1-pro", { in: 2, out: 12 }],
+  ["google/gemini", { in: 2, out: 12 }],
   ["anthropic/", { in: 2, out: 10 }],
 ];
 
@@ -369,4 +390,16 @@ function estimateCost(
     (u.cacheRead * r.in * 0.1) / M +
     ((u.output + u.reasoning) * r.out) / M
   );
+}
+
+/** Envelope fields every role shares; everything else is that role's payload. */
+const ENVELOPE_KEYS = new Set(["role", "status", "summary", "next"]);
+
+function splitEnvelope(flat: Record<string, unknown>): Record<string, unknown> {
+  const envelope: Record<string, unknown> = {};
+  const payload: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(flat)) {
+    (ENVELOPE_KEYS.has(k) ? envelope : payload)[k] = v;
+  }
+  return { ...envelope, payload };
 }

@@ -82,6 +82,15 @@ export interface AgentDefinition {
 
   /** Enforced by the dispatch loop. pi has no native turn cap — no flag, no option. */
   maxTurns: number;
+
+  /**
+   * Write the child's raw JSON stream next to the artefact. Default true.
+   *
+   * Only the totals cross back otherwise, and the totals cannot distinguish a
+   * role that reads whole files from one that greps well. Set false once a
+   * role's behaviour is settled and the file is just noise.
+   */
+  keepTranscript: boolean;
   timeoutMs: number;
 
   /** The role prompt. Passed as --append-system-prompt, ahead of any skill slice. */
@@ -98,6 +107,7 @@ const DEFAULTS = {
   session: "ephemeral" as const,
   maxTurns: 12,
   timeoutMs: 300_000,
+  keepTranscript: true,
 };
 
 /**
@@ -237,6 +247,7 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
     session,
     maxTurns,
     timeoutMs,
+    keepTranscript: (str(fields, "keepTranscript") ?? "true") !== "false",
     prompt: body,
   };
 }

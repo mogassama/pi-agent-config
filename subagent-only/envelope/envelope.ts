@@ -166,9 +166,17 @@ type RoleName = keyof typeof payloads;
 // ------------------------------------------------------------------- tool
 
 function buildSubmitTool(role: RoleName) {
+  // Flat, not { ...envelope, payload: {...} }.
+  //
+  // Each child sees exactly one role's schema, so the wrapper separated nothing
+  // — and it was a measured failure mode: on three scout runs out of three the
+  // model called submit with the payload fields at the top level, failed
+  // validation, and retried with the wrapper. A turn and a full context re-read,
+  // every time, for a nesting nobody needed. The envelope/payload split still
+  // exists on disk; dispatch rebuilds it when it writes the artefact.
   const parameters = Type.Object({
     ...envelopeFields,
-    payload: payloads[role],
+    ...payloads[role].properties,
   });
 
   return defineTool({

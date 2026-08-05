@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+subagent-trace — what a child actually did, from its raw stream.
+
+    subagent-trace                 # the most recent run
+    subagent-trace <runId>         # a specific one
+    subagent-trace --all           # one summary line per run
+
+Reads the .jsonl written beside each artefact in .pi-subagent-runs/.
+Answers the questions the totals cannot: how many turns, which tools, how many
+calls per turn, how the context grew, and where the tokens went.
+"""
+
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+RUNS = Path.cwd() / ".pi-subagent-runs"
+
+
+def load(path: Path) -> list[dict]:
+    events = []
+    for line in path.read_text().splitlines():
+        try:
+            events.append(json.loads(line))
+        except Exception:
+            continue
+    return events
+
+
+def analyse(path: Path) -> dict:
+    events = load(path)
+    turns, tools, per_turn = 0, Counter(), []
+    calls_this_turn = 0
+    usage = {"input": 0, "output": 0, "reasoning": 0, "cacheRead": 0, "cacheWrite": 0}
+    ctx_growth, bash_cmds = [], []
+
+    for e in events:
+        t = e.get("type")
+        if t == "tool_execution_start":
+            tools[e.get("toolName", "?")] += 1
+            calls_this_turn += 1
+            if e.get("toolName") == "bash":
+                cmd = (e.get("args") or {}).get("command", "")
+                bash_cmds.append(cmd.replace("\n", " ")[:110])
+        elif t == "turn_end":
+            turns += 1
+            per_turn.append(calls_this_turn)
+            calls_this_turn = 0
+        elif t in ("message", "message_end"):
+            m = e.get("message") or e
+            u = m.get("usage")
+            if m.get("role") == "assistant" and u:
+                for k in usage:
+                    usage[k] += u.get(k) or 0
+                # Live context at that turn, not the running sum.
+                ctx_growth.append((u.get("input") or 0) + (u.get("cacheRead") or 0))
+
+    return {
+        "path": path,
+        "turns": turns,
+        "tools": tools,
+        "per_turn": per_turn,
+        "usage": usage,
+        "ctx": ctx_growth,
+        "bash": bash_cmds,
+    }
+
+
+def fmt(n: int) -> str:
+    return f"{n/1000:.1f}k" if n >= 1000 else str(n)
+
+
+def report(a: dict) -> None:
+    print(f"\n=== {a['path'].name}")
+    print(f"tours      : {a['turns']}   appels/tour : {a['per_turn']}")
+    if a["tools"]:
+        print("outils     : " + "  ".join(f"{k}×{v}" for k, v in a["tools"].most_common()))
+    u = a["usage"]
+    print(
+        f"tokens     : frais {fmt(u['input'])}  sortie {fmt(u['output'])}  "
+        f"raison. {fmt(u['reasoning'])}  cacheR {fmt(u['cacheRead'])}  cacheW {fmt(u['cacheWrite'])}"
+    )
+    if a["ctx"]:
+        # A context that only grows means nothing is being narrowed: the role
+        # is reading its way to an answer instead of searching its way there.
+        print(f"contexte   : {fmt(a['ctx'][0])} -> {fmt(a['ctx'][-1])}  (pic {fmt(max(a['ctx']))})")
+    if a["bash"]:
+        print("bash       :")
+        for c in a["bash"]:
+            print(f"  $ {c}")
+    reads = a["tools"].get("read", 0)
+    searches = a["tools"].get("grep", 0) + a["tools"].get("find", 0) + a["tools"].get("bash", 0)
+    if reads or searches:
+        print(f"ratio      : {searches} recherche(s) pour {reads} lecture(s)"
+              + ("  <- lit plus qu'il ne cherche" if reads > searches else ""))
+
+
+def main() -> None:
+    if not RUNS.exists():
+        sys.exit(f"aucun {RUNS} — lance-le depuis le répertoire du projet")
+    files = sorted(RUNS.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    if not files:
+        sys.exit("aucun transcript. keepTranscript est-il actif ?")
+
+    args = sys.argv[1:]
+    if args and args[0] == "--all":
+        for f in files:
+            a = analyse(f)
+            u = a["usage"]
+            print(
+                f"{f.stem:<28} {a['turns']:>2} tours  "
+                f"{sum(a['per_turn']):>3} appels  "
+                f"{fmt(u['input'] + u['cacheRead'] + u['output']):>7}"
+            )
+        return
+
+    targets = [f for f in files if args[0] in f.stem] if args else [files[-1]]
+    for f in targets:
+        report(analyse(f))
+
+
+if __name__ == "__main__":
+    main()
