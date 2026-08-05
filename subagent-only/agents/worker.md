@@ -9,6 +9,7 @@ extensions: [envelope, pi-lint-gate, bash-guard, pi-bq-cost-sentinel]
 skills: []
 sliceMode: authoring
 contextFiles: false
+projectBrief: true
 session: persistent
 maxTurns: 20
 timeoutMs: 1200000

@@ -19,7 +19,7 @@
  * child. That is intended — the role prompt is the child's whole instruction.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { sliceSkillFile } from "./slicer.js";
@@ -170,6 +170,20 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // instruction not to go hunting for configuration files that -nc removed.
   let injectedChars = agent.prompt.length;
   args.push("--append-system-prompt", agent.prompt);
+
+  // Project brief before any skill: what is true of this repository frames the
+  // conventions, not the other way round. Silent when absent — a project with
+  // no brief is the normal case, not an error.
+  if (agent.projectBrief) {
+    for (const p of [join(process.cwd(), ".pi", "BRIEF.md"), join(ctx.agentDir, ".pi", "BRIEF.md")]) {
+      if (!existsSync(p)) continue;
+      const brief = readFileSync(p, "utf-8").trim();
+      if (!brief) break;
+      injectedChars += brief.length;
+      args.push("--append-system-prompt", brief);
+      break;
+    }
+  }
 
   // Mechanism before domain: the reviewer must hold the severity definitions
   // before it meets a table that assigns against them.

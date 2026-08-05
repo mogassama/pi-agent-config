@@ -71,6 +71,21 @@ export interface AgentDefinition {
   contextFiles: boolean;
 
   /**
+   * Inject `.pi/BRIEF.md` — the project's ~40-line orientation note.
+   *
+   * Worth it for a role that writes: AGENTS.md tells a worker not to assume
+   * project layout, and without the brief it obeys by spending turns
+   * discovering it. A turn costs a full context re-read, so one avoided turn
+   * repays the ~400 tokens.
+   *
+   * Not for the scout: it finds structure by searching, and a brief would point
+   * it at what the brief happens to mention. Not for the reviewer: it judges
+   * against a severity table, and project specifics belong in the task text,
+   * which the orchestrator writes with the brief in front of it.
+   */
+  projectBrief: boolean;
+
+  /**
    * ephemeral  -> --no-session --session-id <runId>-<role>
    *               cache affinity without history accumulation
    * persistent -> --session-id <runId>-<role>
@@ -104,6 +119,7 @@ const DEFAULTS = {
   mechanism: [] as string[],
   sliceMode: "none" as SliceMode,
   contextFiles: false,
+  projectBrief: false,
   session: "ephemeral" as const,
   maxTurns: 12,
   timeoutMs: 300_000,
@@ -244,6 +260,7 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
     mechanism,
     sliceMode,
     contextFiles: (str(fields, "contextFiles") ?? "false") === "true",
+    projectBrief: (str(fields, "projectBrief") ?? "false") === "true",
     session,
     maxTurns,
     timeoutMs,
