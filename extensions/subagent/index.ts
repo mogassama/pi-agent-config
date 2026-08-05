@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch } from "../../subagent-only/dispatch.js";
+import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const SELF_DIR = join(AGENT_DIR, "subagent-only");
@@ -74,10 +75,17 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text" as const, text: `unknown agent: ${params.agent}` }], isError: true };
         }
 
+        // Publish run state for the footer. getExtensionStatuses() is the
+        // documented channel between extensions; a shared module import would
+        // depend on how pi isolates them.
+        const publish = () => pi.getContext?.()?.ui?.setStatus?.(STATUS_KEY, serialize());
+
         const result = await dispatch(agent, params.task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
           signal,
+          onProgress: publish,
         });
+        publish();
 
         // Only the summary crosses back. The envelope stays on disk; the
         // orchestrator reads the artifact when it actually needs the findings.

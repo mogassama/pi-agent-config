@@ -63,17 +63,19 @@ logger = logging.getLogger(__name__)
 def billing_pipeline() -> None:
     @task
     def extract() -> str:
-        logger.info("Extracting data", source="billing_api")
+        logger.info("Extracting data", extra={"source": "billing_api"})
         return "gs://bucket/raw/billing/2026-01-15.parquet"
 
     @task
     def transform(gcs_uri: str) -> str:
-        with logger.contextualize(gcs_uri=gcs_uri):
-            logger.info("Transforming data")
-            # Call external module — no logic here
-            from src.billing import transform_billing
-            output_uri = transform_billing(gcs_uri)
-            return output_uri
+        # stdlib logging has no `contextualize` — that is Loguru's API and it
+        # raises AttributeError here. Pass the context per call with `extra`.
+        logger.info("Transforming data", extra={"gcs_uri": gcs_uri})
+        # Call external module — no logic here
+        from src.billing import transform_billing
+        output_uri = transform_billing(gcs_uri)
+        logger.info("Transformed", extra={"gcs_uri": gcs_uri, "output_uri": output_uri})
+        return output_uri
 
     transform(extract())
 

@@ -556,6 +556,22 @@ réellement (modèle, tokens, coût, branche git, durée), et lesquelles demande
 un calcul propre. Un segment de coût est trivial ; un segment de quota
 d'abonnement, probablement pas.
 
+### Spécifications posées par l'opérateur
+
+À décider ensemble avant d'écrire quoi que ce soit :
+
+- **Combien de lignes.** Piste évoquée : une ligne pour l'orchestrateur, une
+  pour les sous-agents. Faisabilité à vérifier — le `render(width)` rend du
+  texte multiligne, mais l'état des enfants n'est pas exposé par le
+  `FooterDataProvider` : il faudrait que l'extension `subagent` le publie
+- **Quelles informations** sont pertinentes, ligne par ligne
+- **Comment on les affiche** : palette **tokyonight**, formes — par exemple une
+  barre qui se remplit pour le contexte consommé plutôt qu'un nombre nu
+
+Contrainte à ne pas perdre : les données des enfants ne remontent aujourd'hui
+que par l'artefact sur disque. Un segment « sous-agents » suppose que
+`dispatch` publie un état en cours de route, pas seulement à la fin.
+
 **Ordonnancement : aucune contrainte.** Correction d'une réserve mal fondée —
 le footer est du **rendu terminal**, il n'entre jamais dans le prompt envoyé au
 modèle. Les 0 tokens de l'actuel ne sont pas une performance à préserver, c'est
@@ -613,6 +629,72 @@ ligne de table par agent non appelable se payait dans chaque session (règle 1).
   détail par tour est perdu. Une option `keepTranscript` écrivant le flux JSON
   de l'enfant à côté de l'artefact le comblerait. Pour un chantier construit sur
   la mesure, c'est un trou
+
+---
+
+## 4nonies. Étape D — appliquée, 4 août
+
+Les onze corrections d'hygiène. Aucune ne réduit le prompt ; toutes corrigent une
+erreur factuelle ou une double source.
+
+| Constat | Correction appliquée |
+|:--|:--|
+| **R21** `airflow-engineering` | `logger.contextualize()` sur un `logging.Logger` lève un `AttributeError`. Remplacé par `extra={...}` par appel, avec le commentaire qui dit pourquoi |
+| **R8** `spark-engineering` | Bloc `classify_udf` dupliqué mot pour mot — la seconde occurrence devient un renvoi |
+| **R6/R33** `gcp-dataeng-architecture` | Requête `JOBS_BY_PROJECT` supprimée. Elle était fausse sur **deux** axes : `total_bytes_processed` au lieu de `billed`, TB décimal au lieu de TiB. Renvoi vers `bigquery-ops` |
+| **Tarif** | `$6.25` codé en dur → `@on_demand_usd_per_tib`, avec la région du tarif déclarée. Le tableau slots/on-demand ne cite plus de chiffre |
+| **R7** « (Paris) » | `europe-west1` = St-Ghislain, Belgique. Paris est `europe-west9`, et si un projet l'exige c'est une décision d'infra |
+| **R9** `gcp-engineering` | Pointeur corrigé : coût et `INFORMATION_SCHEMA` → `bigquery-ops`, conventions de requête → `bigquery-engineering` |
+| **A4/A6** `APPEND_SYSTEM.md` | « propose 2 options » borné à une question **sans contrainte qui sélectionne une réponse**. Section `## Subagent output` **vidée** : le contrat vit dans le schéma de `submit`, et ce fichier n'atteint plus un enfant |
+| **R31** `iac-terraform` | `Anti-patterns` réécrit pour ne plus redire `Non-negotiable` ; il liste les *formes* qui violent les règles, la table de sévérité les pèse |
+| **R37** `git-collaboration` | Corps de `/check-config` supprimé — l'extension s'exécute seule. `/audit` réécrit : `git ls-files` au lieu d'un scan intégral, et des motifs de **forme** de credential au lieu des mots `key`/`secret`/`token`, qui noyaient le vrai résultat |
+| **R13** `bash-guard/README.md` | Niveau **TOKEN** documenté : vérifié avant HIGH, MEDIUM et la whitelist, pas d'always-allow. Couvre `git commit` et `gh pr merge\|create` |
+| **AGENTS.md:206** | Déjà corrigé antérieurement |
+
+`git-collaboration` passe de 277 à 234 lignes.
+
+---
+
+## 4decies. ponytail — l'idée oui, le paquet non
+
+[DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail), 595 étoiles,
+18 commits, MIT. Évalué le 4 août.
+
+**Ce que c'est** : une échelle de décision à six barreaux, à parcourir avant
+d'écrire du code. Ça doit-il exister → stdlib → primitive native de la
+plateforme → dépendance déjà installée → une ligne → sinon le minimum qui
+marche. Avec la garde explicite : validation aux frontières de confiance, perte
+de données, sécurité et accessibilité ne sont jamais coupées.
+
+**Le benchmark ne vaut pas ce qu'il annonce.** Six tâches, un run par bras,
+l'auteur a conçu les tâches, les bras, les sondes **et** la métrique — laquelle
+est le nombre de lignes de code, c'est-à-dire l'objectif même de
+l'intervention. Les 47 % de tokens et le facteur 7 sont plausibles, pas établis.
+Même défaut de protocole que celui qu'on corrige ailleurs dans ce document.
+
+**Pas un plugin pi.** Plugin Claude Code plus des fichiers de règles Cursor,
+Windsurf, Cline. Le porter revient à copier du texte.
+
+**La config en couvre déjà les trois quarts** : « Smallest correct change »,
+« Defensible code » (pas de wrapper au cas où, pas de dépendance sans bénéfice
+net démontré), « Readability over cleverness ». Ce qui manque est **l'ordre de
+recherche** avant d'écrire.
+
+### Décision : l'échelle est coupée en deux
+
+Le premier barreau — *« ça doit-il exister ? »* — est **dangereux pour un
+worker** à qui on a donné une tâche cadrée : il l'invite à refuser du périmètre,
+alors que son contrat est de faire ce qui est demandé et de signaler le reste
+dans `deviations`.
+
+| Barreau | Où il va |
+|:--|:--|
+| 1. Ça doit-il exister ? | Orchestrateur, et advisor quand il existera. Jamais le worker |
+| 2-6. stdlib → natif → dépendance installée → une ligne → minimum | `python-engineering`, section authoring — ~6 lignes |
+
+À écrire au moment de la passe cosmétique. Coût estimé : négligeable côté
+orchestrateur (le corps des skills ne lui coûte rien), ~40 tokens dans la
+tranche worker.
 
 ---
 

@@ -18,6 +18,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
+import { markStart, markProgress, markEnd, type RoleName } from "./run-state.js";
 
 export interface RunResult {
   role: string;
@@ -129,6 +130,7 @@ async function runOnce(
   const artifact = join(artifactDir, `${opts.ctx.runId}-${agent.name}.json`);
 
   const state: StreamState = { turns: 0, submit: null, usage: emptyUsage(), stderr: [], providerError: null };
+  markStart(agent.name as RoleName, model, agent.maxTurns);
   let failure: RunResult["failure"];
 
   const child = spawn(opts.piPath ?? "pi", plan.args, {
@@ -167,6 +169,7 @@ async function runOnce(
       if (!line.trim()) continue;
 
       consume(line, state);
+      markProgress(agent.name as RoleName, state.turns);
       opts.onProgress?.(state.turns);
 
       // Checked after every event, not at the end: the point of a ceiling is
@@ -224,6 +227,11 @@ async function runOnce(
     ),
     "utf-8",
   );
+
+  const outcome = envelope
+    ? String((envelope.payload as Record<string, unknown> | undefined)?.verdict ?? envelope.status ?? "ok")
+    : (failure ?? "failed");
+  markEnd(agent.name as RoleName, model, state.usage.total, estimateCost(model, state.usage), outcome);
 
   if (!envelope) {
     return {
@@ -308,4 +316,33 @@ export async function dispatch(
         ? `${agent.name}: all ${chain.length} models refused. Last — ${last!.summary}`
         : last!.summary,
   };
+}
+
+/**
+ * Rough USD estimate, for the footer only.
+ *
+ * Deliberately approximate and displayed with a tilde. The bill is what the
+ * provider console says: a measured delegation came out 4x above what pi's
+ * reported usage implied, and the gap was never fully reconciled. This figure
+ * is here to show cost accruing per role, not to be trusted to the cent.
+ */
+const RATES: Record<string, { in: number; out: number }> = {
+  anthropic: { in: 2, out: 10 },
+  google: { in: 1.25, out: 10 },
+};
+
+function estimateCost(
+  model: string,
+  u: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number },
+): number {
+  const provider = model.includes("/") ? model.split("/")[0] : "";
+  const r = RATES[provider];
+  if (!r) return 0;
+  const M = 1_000_000;
+  return (
+    (u.input * r.in) / M +
+    (u.cacheWrite * r.in * 1.25) / M +
+    (u.cacheRead * r.in * 0.1) / M +
+    ((u.output + u.reasoning) * r.out) / M
+  );
 }

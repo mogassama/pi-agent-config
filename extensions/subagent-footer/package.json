@@ -1,0 +1,8 @@
+{
+  "name": "pi-subagent-footer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Three-line footer: orchestrator context and turn, then per-role subagent state.",
+  "main": "index.ts"
+}

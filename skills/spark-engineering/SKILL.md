@@ -146,17 +146,8 @@ def normalise(s: pd.Series) -> pd.Series:
 Reach for `F.when`/`F.regexp_extract`/`F.transform`/`F.aggregate` before concluding no
 native equivalent exists. Higher-order functions cover most array and struct logic.
 
-The pushdown cost is concrete — a UDF in the projection prevents the filter from
-reaching the scan:
-
-```python
-# The UDF blocks pushdown: the full table is read, then filtered
-df.withColumn("region", classify_udf("code")).filter(F.col("year") == 2026)
-
-# Filter first, and prefer a native expression over the UDF entirely
-(df.filter(F.col("year") == 2026)
-   .withColumn("region", F.when(F.col("code").startswith("FR"), "EU").otherwise("OTHER")))
-```
+The pushdown cost is concrete: a UDF in the projection prevents the filter from
+reaching the scan. See the example under "Predicate pushdown" above.
 
 ## Caching
 

@@ -19,7 +19,7 @@ administration, see the bigquery-ops skill.
 
 - **Never legacy SQL.** Always `--use_legacy_sql=false` / `useLegacySql: false`.
 - **Dry-run before any non-trivial query.** Report estimated bytes before executing.
-- **Region:** `europe-west1` (Paris) by default. Dataset and GCS bucket must be in the same region — cross-region queries incur egress costs.
+- **Region:** `europe-west1` (St-Ghislain, Belgium) by default. Dataset and GCS bucket must be in the same region — cross-region queries incur egress costs. Paris is `europe-west9`.
 - **Project-qualify all cross-project references:** `` `project.dataset.table` ``.
 - **Never `SELECT *`** in production SQL or DAG-generated queries. Always enumerate columns explicitly.
 

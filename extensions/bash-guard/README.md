@@ -10,6 +10,23 @@ L'extension est dans `~/.pi/agent/extensions/bash-guard/` — elle est chargée 
 
 ## Comportement
 
+### Niveau TOKEN (autorisation à usage unique)
+
+Le niveau le plus strict. Vérifié **avant** HIGH, MEDIUM et la whitelist — aucune
+entrée de `settings.json` ne peut l'ouvrir accidentellement. Pas d'option
+always-allow, pas de contournement : chaque exécution redemande l'autorisation.
+
+| Pattern | Commande type |
+|---|---|
+| `\bgit\s+(?:(?:-c\|-C\|--[\w-]+)(?:[= ]\S+)?\s+)*commit\b` | `git commit`, `git -C <path> commit`, `git --no-pager commit` |
+| `\bgh\s+pr\s+(?:merge\|create)\b` | `gh pr merge`, `gh pr create` |
+
+Ne matche pas `git log --grep=commit`.
+
+**Pourquoi le commit est ici.** C'est la seule garantie dure du dispositif : un
+agent ne valide jamais son propre travail dans l'historique sans que l'opérateur
+l'ait vu. Le placer au-dessus de la whitelist est délibéré.
+
 ### Niveau HIGH (confirmation obligatoire, sans option always-allow)
 
 | Pattern | Commande type |

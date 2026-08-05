@@ -118,26 +118,27 @@ When invoked as `/skill:git-collaboration`, run in order without prompting for s
 ---
  
 ## /audit — Deep security scan
- 
-Scan the entire repo for forgotten secrets before starting work.
- 
+
+Scan the repo for forgotten secrets before starting work.
+
 ```bash
-# Structure mapping
-find . -maxdepth 4 -not -path '*/.*' -not -path '*node_modules*'
- 
-# Secret pattern scan
-grep -rE "AIza|key|secret|password|token|SESSION|SECRET_KEY|PRIVATE KEY" . \
-  --exclude-dir={.git,node_modules,venv,__pycache__}
+git ls-files -z | xargs -0 rg -n --no-heading \
+  -e 'AIza[0-9A-Za-z_-]{35}' \
+  -e 'sk-[A-Za-z0-9_-]{20,}' \
+  -e 'BEGIN [A-Z ]*PRIVATE KEY' \
+  -e '(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*["\x27][^"\x27]{8,}'
 ```
- 
-Evaluate findings. Report as table: `Risk Level | File | Pattern matched`.
- 
-If sensitive files found:
-- Append to `.gitignore`
-- `git rm -r --cached <files>`
-- Ask: "Add these to .gitignore and remove from staging? (y/n)"
+
+`git ls-files` scopes the scan to tracked files: an untracked `.env` is already
+outside the repository, and scanning it produces findings nobody can act on.
+The patterns match credential *shapes*, not the words — grepping for `token`
+across a codebase returns every variable name and buries the one real hit.
+
+Report as a table: `Risk | File:line | Pattern`. If sensitive files are found,
+propose `.gitignore` entries and `git rm -r --cached`, then ask before doing it.
+
 ---
- 
+
 ## /git-collaboration — Standard commit workflow
  
 **All commit messages in English.**
@@ -226,52 +227,8 @@ are approved separately.
 ---
  
 ## /check-config — Config repo consistency (pi config repo only)
- 
-This repo **is** the live `~/.pi/agent/` working tree — there is no second copy to
-compare against. `git status` already covers file-level drift. What it cannot see is
-whether the config is internally coherent: a skill declared but absent, a frontmatter
-that stops a skill from ever auto-loading, a README describing a tree that no longer
-exists.
- 
-Run before staging. Two tiers, deliberately unequal.
- 
-### Tier 1 — blocking
- 
-These mean something is broken right now. Stop, report, do not draft a commit.
- 
-| Check | Failure mode if unnoticed |
-|---|---|
-| Every skill in `settings.json` `skills` arrays exists in `skills/` | The sub-agent fails at load |
-| Every skill listed in `AGENTS.md` exists in `skills/` | The agent is told a skill exists that does not |
-| Every `SKILL.md` has YAML frontmatter with `name` and `description` | The skill never registers |
-| Each frontmatter `name` equals its directory name | The skill never auto-loads, silently |
- 
-### Tier 2 — report only
- 
-Untidy, not broken. Print and continue.
- 
-| Check | Note |
-|---|---|
-| Skills on disk absent from `README.md` | Documentation drift |
-| Skills loaded by no sub-agent in `settings.json` | Expected for orchestrator-only skills (`git-collaboration`, `grill-me`) — informational, never an error |
-| Uncommitted or unpushed changes | This is the normal state mid-work |
- 
-### Implementation
 
-Registered by the `pi-check-config` extension as `/check-config`. It is a real
-command, not a passage a model has to notice and decide to run — same reason the
-commit format moved to a git hook and commits moved behind a bash-guard token.
+Registered as a real command by the `pi-check-config` extension. It runs itself;
+this file does not restate what it checks. Read its output, act on the blocking
+tier, report the rest.
 
-Frontmatter is parsed as YAML, not regex-matched. The earlier regex version
-accepted an unquoted single-line `description:` containing a colon: valid to the
-regex, a syntax error to pi's loader, and a skill that never registers.
-
-### Output contract
- 
-Render as a table: `Tier | Item | Finding`.
- 
-If any Tier 1 check fails: report and **stop**. Do not stage, do not draft a commit
-message. Propose the specific fix for each blocking item and wait for confirmation.
- 
-If only Tier 2 findings exist: print them, then return control to Phase 1 staging
-without prompting. A tier-2 finding is never a reason to interrupt a commit.

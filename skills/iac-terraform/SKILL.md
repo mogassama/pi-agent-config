@@ -243,14 +243,18 @@ resource "google_project_iam_member" "composer_runner_bq_job" {
 
 ## Anti-patterns
 
-- Local state (`terraform.tfstate` in the repo) — always use GCS backend
-- `google_project_iam_binding` for shared roles — use `_member` instead
-- Hardcoded project IDs or regions in resource blocks — always use variables
-- No `prevent_destroy` on BQ datasets, GCS buckets, or Composer environments
-- `force_destroy = true` on production buckets — data loss risk
-- `delete_contents_on_destroy = true` on production BQ datasets
+The non-negotiable rules above state what to do; these are the shapes that
+break them in practice, and they are not restated in the severity table — that
+table weighs them.
+
+- `terraform.tfstate` committed to the repository
+- `google_project_iam_binding` where `_member` was meant — the binding is
+  authoritative and silently removes grants it does not list
+- Hardcoded project IDs or regions inside resource blocks
+- `force_destroy = true` on a production bucket
+- `delete_contents_on_destroy = true` on a production BigQuery dataset
 - Labels missing `managed_by = "terraform"` — breaks cost attribution
-- Workspaces for environment isolation — use separate directories
+- Workspaces used for environment isolation instead of separate directories
 
 ## Review delta
 

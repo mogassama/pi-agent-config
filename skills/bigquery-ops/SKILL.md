@@ -125,7 +125,9 @@ SELECT
   user_email,
   job_id,
   SUBSTR(query, 0, 200)                                      AS query_snippet,
-  ROUND(total_bytes_billed / POW(1024, 4) * 6.25, 4)        AS estimated_cost_usd,
+  -- On-demand rate, US multi-region, 2026-08. europe-west1 differs; read the
+  -- project's own rate before quoting a figure to the operator.
+  ROUND(total_bytes_billed / POW(1024, 4) * @on_demand_usd_per_tib, 4) AS estimated_cost_usd,
   total_bytes_billed,
   total_slot_ms,
   creation_time
@@ -170,7 +172,7 @@ Required role: `roles/bigquery.resourceViewer` or `roles/bigquery.admin`. For or
 
 | | On-demand | Slots (reservations) |
 |---|---|---|
-| Billing unit | Bytes scanned ($6.25/TB) | Slot-hours (committed or autoscale) |
+| Billing unit | Bytes billed, per TiB — rate is regional, see above | Slot-hours (committed or autoscale) |
 | Best for | Ad-hoc queries, dev | Predictable high-volume workloads |
 | Cost predictability | Low | High (commitments) / Medium (autoscale) |
 | Concurrency | Service-level queuing | Bounded by slot count |

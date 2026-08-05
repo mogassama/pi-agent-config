@@ -73,22 +73,11 @@ size the retention window accordingly.
 
 - **Pub/Sub alert:** `oldest_unacked_message_age > 5 min` → Cloud Monitoring alert.
 - **Cloud Run Job failure:** alert on non-zero exit code via job execution metrics.
-- **BQ slot usage:** monitor `INFORMATION_SCHEMA.JOBS_BY_PROJECT` for runaway queries.
-
-```sql
--- Top 10 most expensive queries last 24h
-SELECT
-  job_id,
-  user_email,
-  total_bytes_processed,
-  ROUND(total_bytes_processed / POW(10, 12) * 6.25, 4) AS estimated_cost_usd,
-  query
-FROM `region-europe-west1`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
-  AND job_type = 'QUERY'
-ORDER BY total_bytes_processed DESC
-LIMIT 10
-```
+- **BQ slot usage:** monitor `INFORMATION_SCHEMA.JOBS_BY_PROJECT` for runaway
+  queries. The query and the cost formula live in `bigquery-ops` — one fact,
+  one file. Do not restate them here: the version that used to sit in this
+  file billed `total_bytes_processed` against decimal TB, and BigQuery bills
+  `total_bytes_billed` against TiB.
 
 ## Cost escalation thresholds
 

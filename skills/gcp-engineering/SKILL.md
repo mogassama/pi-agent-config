@@ -18,7 +18,7 @@ description: >-
 ## Non-negotiable defaults
 
 - **No service account JSON keys.** Ever. Local dev uses ADC. Production uses workload identity or impersonation.
-- **Region:** `europe-west1` (Paris) by default. Never cross-region unless explicitly required.
+- **Region:** `europe-west1` (St-Ghislain, Belgium) by default. Never cross-region unless explicitly required. Paris is `europe-west9` — if a project actually requires Paris, that is an infrastructure decision, not a documentation fix.
 - **Labels on every resource:** `env`, `team`, `cost_center` minimum.
 - **Project ID:** Never hardcoded. Always `os.environ["GOOGLE_CLOUD_PROJECT"]` or injected via function argument.
 - **Language:** Resource descriptions, labels, log messages in English.
@@ -273,7 +273,7 @@ gcloud storage buckets update gs://bucket \
 
 ## Cost & quota awareness
 
-- **BigQuery cost model is not here.** Slots vs on-demand, bytes-scanned billing and `INFORMATION_SCHEMA` cost monitoring live in `bigquery-engineering`. Not duplicated.
+- **BigQuery cost model is not here.** Slots vs on-demand, bytes-billed pricing and `INFORMATION_SCHEMA` cost monitoring live in `bigquery-ops`. Query conventions live in `bigquery-engineering`. Not duplicated.
 - **Egress is the silent killer.** Cross-region and out-of-GCP egress is billed. Keeping buckets, datasets and workers in `europe-west1` is a cost decision, not only a latency one.
 - **Storage class drives GCS cost:** Standard for hot, Nearline for ~monthly access, Coldline for ~quarterly, Archive for compliance retention. Lifecycle rules do the tiering — see Cloud Storage above.
 - **Budget alert on every project.** Not optional, including sandbox projects.
