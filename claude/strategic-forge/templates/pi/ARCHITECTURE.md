@@ -8,8 +8,17 @@
 >
 > **Ce que ce fichier porte, et que rien d'autre ne porte :** la structure et le
 > nommage **propres à ce projet**. Les conventions d'écriture des outils sont dans
-> les skills (`bigquery-engineering`, `dbt-engineering`, `airflow-engineering`,
-> `iac-terraform`, `spark-engineering`) et n'ont pas à être recopiées ici.
+> les skills (`python-engineering`, `sql-engineering`, `bigquery-engineering`,
+> `bigquery-ops`, `spark-engineering`, `airflow-engineering`, `dbt-engineering`,
+> `data-quality`, `gcp-engineering`, `iac-terraform`) et n'ont pas à être recopiées ici.
+>
+> **Ce fichier décrit la cible, pas le dépôt.** L'état réel — ce qui existe, les points
+> d'entrée, la structure effective — est porté par `.pi/BRIEF.md`, injecté au `worker`.
+> Décrire ici l'état courant produit deux sources de vérité qui divergeront.
+>
+> **Chaque section se lit seule.** Aucun sous-agent ne lit ce fichier : l'orchestrateur
+> en cite un extrait dans un texte de tâche, et l'enfant n'a rien d'autre. Pas de renvoi
+> à une autre section, pas de pronom dont l'antécédent est ailleurs.
 
 ## Stack technique
 
@@ -21,7 +30,7 @@ Règles de remplissage :
 - Une ligne = un problème résolu. Un outil sans problème identifié est retiré.
 - Versions épinglées quand la reproductibilité compte, `latest` seulement si assumé.
 - `Provenance = imposée` → la ligne n'est pas rediscutable par pi.
-- Si la stack est mono-outil, la table reste — elle sert de contrat au planner.
+- Si la stack est mono-outil, la table reste — elle sert de contrat à l'orchestrateur.
 
 ## Composants d'infrastructure
 
@@ -55,10 +64,25 @@ Pour chaque flèche : volume attendu, fréquence, et mode de déclenchement.
 └── [arborescence complète, sans « ... »]
 ```
 
+### Répertoires structurants
+
+> La colonne `Skill` est le mécanisme de sélection : l'orchestrateur passe la skill de
+> domaine par appel — `task({ agent: "worker", skills: ["<skill>"], task: "..." })` — et
+> la choisit d'après le territoire que la tâche touche. Un répertoire sans skill
+> correspondante est légitime : l'orchestrateur n'en passe aucune.
+
+| Répertoire | Rôle | Skill |
+|---|---|---|
+| `[répertoire]` | [ce qu'il contient, en une phrase] | `[skill]` \| — |
+
+Skills disponibles : `python-engineering`, `sql-engineering`, `bigquery-engineering`,
+`bigquery-ops`, `spark-engineering`, `airflow-engineering`, `dbt-engineering`,
+`data-quality`, `gcp-engineering`, `iac-terraform`, `technical-writing`.
+
 Règles :
 - Nommer explicitement les répertoires structurants et leur rôle. Éviter les `...` :
-  ils laissent le planner instancier une convention arbitraire. Un répertoire de détail
-  non listé n'est pas un blocage — le planner le crée en cohérence avec ceux qui le sont.
+  ils laissent le `worker` instancier une convention arbitraire. Un répertoire de détail
+  non listé n'est pas un blocage — le `worker` le crée en cohérence avec ceux qui le sont.
 - Séparation explicite entre logique métier (sans I/O) et adaptateurs (I/O, réseau, stockage).
 - Les répertoires de test miroitent la structure du code.
 
@@ -85,8 +109,9 @@ Règles transverses :
 - **Configuration par injection** : les paramètres traversent les signatures de fonctions.
   Pas d'import d'un module de config global depuis la logique métier.
 - **Idempotence obligatoire** : toute écriture peut être rejouée sans effet de bord.
-  Le mécanisme exact (écrasement de partition, upsert par clé, transaction) est nommé
-  explicitement dans la section stockage.
+  Chaque cible d'écriture nomme son mécanisme sur place — écrasement de partition,
+  upsert par clé, transaction. Un principe d'idempotence énoncé sans mécanisme nommé
+  n'est pas applicable par qui lit cet extrait seul.
 - **Fail-fast** : exception explicite au premier état inattendu. Pas de retour silencieux.
 - **Composition > héritage** : au-delà de deux niveaux de hiérarchie, chercher autre chose.
 

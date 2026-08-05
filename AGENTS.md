@@ -91,10 +91,10 @@ The bundle is a *direction*, not a specification. It is silent on almost everyth
 
 ### Free regime
 
-No frozen artefact. The planner may decide architecture, grounded in the repo's actual state and in the loaded skills. Two constraints remain:
+No frozen artefact. Architecture is decided in-session, grounded in the repo's actual state and in the loaded skills. Two constraints remain:
 
 - An expensive or irreversible decision — new service, new dependency, schema shape, storage layout, directory restructure — is put to the operator before implementation, with two options and a recommendation.
-- A real fork with a high cost of being wrong goes to oracle first, then to the operator. Cheap and reversible decisions are taken and stated inline, not escalated.
+- Cheap and reversible decisions are taken and stated inline, not escalated. There is no advisor role today: a fork with a high cost of being wrong goes straight to the operator.
 
 ### The three cases — one of them stops
 
@@ -102,7 +102,7 @@ Applies in both regimes. Replace the word "bundle" with "the frozen artefacts, i
 
 1. **The bundle decides.** Apply it. No question, no restatement, no summary.
 2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, record the decision in the commit body (`why`, not `what`), ask nothing.
-3. **The repo contradicts the bundle.** Stop. Emit a divergence note — observed state, expected state, options, no decision — and put it to **the operator**, through the orchestrator. A blocked subagent raises it via `contact_supervisor` with `reason: "need_decision"`; the orchestrator owns the operator-facing question.
+3. **The repo contradicts the bundle.** Stop. Emit a divergence note — observed state, expected state, options, no decision — and put it to **the operator**, through the orchestrator. A subagent has no channel to the operator: it returns `status: "blocked"` with the note in its summary, and the orchestrator owns the operator-facing question.
 
 **Never a fourth case.** `## Hard limits` above is the only other stop list, and it is complete. Do not invent a second, vaguer one. A gap in the bundle, a missing fixture, an untestable step, an ambiguous naming choice: none of these stop execution.
 

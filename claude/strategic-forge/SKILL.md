@@ -34,7 +34,7 @@ Le board décide de **ce qui est cher à annuler et peut être décidé sans lir
 | Stratégie de test par étape | Agent (éphémère) |
 
 **Conséquences pour le board :**
-- Le bundle ne contient **jamais** de découpage en sous-étapes d'implémentation. Granularité du backlog : **un item = un livrable testable**, pas une passe d'écriture.
+- Le bundle ne contient **jamais** de découpage en sous-étapes d'implémentation. Granularité du backlog : **un item = un livrable testable**, pas une passe d'écriture. Sur cible pi, c'est la **description** de l'item qui doit être autosuffisante — fichiers concernés nommés, résultat attendu, critère de fin — parce que l'orchestrateur en compose un texte de tâche autonome. La granularité, elle, ne descend pas.
 - Le bundle ne contient **jamais** la liste des fichiers à créer pour une tâche donnée. Il donne la structure cible ; l'agent constate l'écart avec le repo réel.
 - Le board ne délègue **jamais** un choix de stack, de service ou de convention. Ce qu'il décide, il l'écrit explicitement.
 - Ce que le board n'a pas tranché reste ouvert et sera tranché à l'exécution par la skill compétente. Le board ne cherche pas l'exhaustivité : il cherche à couvrir les décisions coûteuses.
@@ -51,25 +51,46 @@ Corollaire de rédaction, valable pour les deux cibles : **aucun fichier du bund
 
 ### Cible **pi** — agent principal, multi-provider
 
-Outils natifs `read`, `write`, `edit`, `bash` ; extensions `pi-subagents`, `bash-guard`, `pi-bq-cost-sentinel`, `pi-lint-gate`, `pi-project-brief`.
+Outils natifs `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` ; extensions `subagent` (l'outil `task`), `subagent-footer`, `bash-guard`, `pi-bq-cost-sentinel`, `pi-lint-gate`, `pi-check-config`, `pi-diff-review`, `pi-project-brief`, `@tmustier/pi-raw-paste`.
 
-**Qui lit le bundle**
+**Aucun sous-agent ne lit le bundle. Jamais. Seul l'orchestrateur le lit.**
 
-| Agent | Rôle | Lit le bundle |
+Chaque délégation lance un processus `pi` neuf. Il ne reçoit ni `AGENTS.md`, ni historique, ni fichier du bundle. Il reçoit exactement trois choses : son prompt de rôle (`subagent-only/agents/<rôle>.md`, répertoire des fichiers chargés dans les enfants et jamais dans l'orchestrateur), éventuellement une tranche de skill de domaine, et le texte de tâche que l'orchestrateur a composé. Ce que l'orchestrateur transmet du bundle, il le **cite verbatim** dans ce texte.
+
+| Rôle | Ce qu'il reçoit | Ce qu'il fait |
 |---|---|---|
-| `planner` | Décompose un item du backlog en étapes, ancrées dans le repo réel | oui |
-| `worker` | Implémente une étape | oui |
-| `reviewer` | Revue de code contre les conventions. **Famille de modèles distincte du worker** | oui |
-| `oracle` / `oracle-deep` | Arbitrage d'architecture, escalade. `inheritProjectContext: false` : ils ne lisent **pas** le bundle | non |
-| `scout` | Reconnaissance en lecture seule, modèle léger, aucune skill | non |
+| `worker` | `.pi/BRIEF.md`, injecté par le lanceur, plus la section *authoring* de la skill de domaine | Implémente une direction approuvée. Écrit dans l'arbre de travail |
+| `reviewer` | La skill de domaine **entière** — authoring et table de sévérité. **Famille de modèles distincte du worker** | Relit en lecture seule. Rend `approved`, `needs_rework` ou `blocked` |
+| `scout` | **Aucune skill** | Reconnaissance en lecture seule : où vit une chose, qui l'appelle, ce qu'un changement toucherait |
+
+`planner`, `oracle` et `oracle-deep` n'existent plus — le planner est redondant avec Strategic Forge lui-même, les deux oracles étaient un modèle déguisé en rôle. `advisor` est conçu et non écrit : il ne s'écrit pas dans un bundle comme voie d'escalade.
 
 **Détection de régime — les noms de fichiers portent une fonction.** pi détecte le régime bundle *structurellement* : `ARCHITECTURE.md` **et** `INSTRUCTIONS.md` présents à la racine. Ces deux noms ne sont pas décoratifs et ne se renomment pas.
 
-**Citabilité par extrait — contrainte dure.** `oracle` et `oracle-deep` ne lisent rien : toute escalade embarque l'extrait verbatim. Une décision dont le sens dépend de trois autres sections du même fichier ne survit pas à une escalade.
+**Citabilité par extrait — contrainte dominante du bundle.** Elle ne vise plus un rôle d'exception : elle vise tout le bundle, pour tous les rôles. L'orchestrateur cite un paragraphe dans un texte de tâche, et l'enfant n'a rien d'autre. Test de rédaction, à appliquer à chaque bloc produit : *collé seul dans un message adressé à quelqu'un qui ne connaît pas ce projet, ce paragraphe suffit-il à agir ?* Si non, il est mal écrit. Concrètement : pas de « comme décidé plus haut », pas de « voir la section Architecture », pas de pronom dont l'antécédent est dans un autre fichier.
 
-**Ce que le bundle ne redéclare jamais.** Les règles transverses vivent dans l'`AGENTS.md` global et dans les 19 skills. Sont déjà garanties par du code et n'ont rien à faire dans un bundle : format de commit (hook git), « ne committer que sur commande » (jeton bash-guard), lint et typage Python (`pi-lint-gate`), contrôle de coût BigQuery (`pi-bq-cost-sentinel`), allocation des modèles et thinking levels (`agentOverrides`). S'y ajoutent typage, taille de modules, hygiène des secrets.
+**`ARCHITECTURE.md` détermine la skill injectée.** L'orchestrateur passe la skill de domaine par appel — `task({ agent: "worker", skills: ["bigquery-engineering"], task: "..." })` — et la choisit d'après ce que la tâche touche. La structure de répertoires doit donc rendre ce choix mécanique : chaque répertoire structurant déclare la skill qui lui correspond, dans la table de structure elle-même. Un répertoire sans skill correspondante est légitime — l'orchestrateur n'en passe aucune.
 
-**Protocole d'arbitrage — déjà présent côté agent.** Les trois cas (le bundle tranche / le bundle est muet / le repo contredit le bundle) et la hiérarchie d'autorité vivent dans l'`AGENTS.md` global. Le bundle n'a pas à les porter.
+Dix-neuf skills disponibles, dont onze utilisables par le reviewer : `python-engineering`, `sql-engineering`, `bigquery-engineering`, `bigquery-ops`, `spark-engineering`, `airflow-engineering`, `dbt-engineering`, `data-quality`, `gcp-engineering`, `iac-terraform`, `technical-writing` — plus `code-review`, `dataeng-architecture`, `gcp-dataeng-architecture`, `diagnose`, `tdd`, `grill-me`, `improve-codebase-architecture`, `git-collaboration`.
+
+**Bundle et brief se complètent, sans se recouvrir.** `.pi/BRIEF.md` est produit par l'extension `pi-project-brief` et décrit **l'état du dépôt à l'instant t** : structure réelle, points d'entrée, ce qui existe. Il est injecté au `worker` seul. Le bundle dit les consignes et le travail à faire — il décrit la **cible**. La tentation, en rédigeant `ARCHITECTURE.md`, sera de décrire l'état du dépôt : c'est le rôle du brief.
+
+**`CONVENTIONS.md` porte des sévérités.** Le reviewer juge contre une table de sévérité : chaque skill de domaine se termine par une section `## Review delta` qui dit, pour chaque manquement, s'il vaut `HIGH`, `MEDIUM` ou `LOW`, et le verdict `blocked` exige au moins un `HIGH`. Une convention **propre au projet** ne figure dans aucune skill : énoncée sans poids, elle laisse le reviewer inventer une sévérité, ce qui rend le verdict non reproductible. Chaque règle projet indique donc la sévérité d'un manquement.
+
+**Ce que le bundle ne redéclare jamais.** Les règles transverses vivent dans l'`AGENTS.md` global — lu par l'orchestrateur seul — et dans les dix-neuf skills. Sont déjà garanties par du code ou par la configuration globale, et n'ont rien à faire dans un bundle :
+
+- format de commit — hook git `commit-msg`
+- « ne committer que sur commande » — niveau TOKEN de `bash-guard`, vérifié avant tout le reste
+- lint et typage Python — `pi-lint-gate`, `ruff` après chaque édition `.py`, `mypy` en fin de tour
+- contrôle de coût BigQuery — `pi-bq-cost-sentinel`, dry-run de tout `bq query` passé par `bash`, sous-agents compris
+- allocation des modèles et niveaux de thinking — définitions d'agent dans `subagent-only/agents/`, plus jamais `settings.json`
+- le contrat de sortie des sous-agents — outil `submit` à schéma TypeBox, validé par pi avant écriture. **Ne jamais demander un format de sortie dans un texte de tâche** : c'est mesuré, décrire le format en prose produit un rapport au lieu d'un appel d'outil
+- `logging.getLogger(__name__)` sous `dags/` — vit dans `airflow-engineering`
+- les conventions de domaine — les dix-neuf skills
+
+S'y ajoutent typage, taille de modules, hygiène des secrets.
+
+**Protocole d'arbitrage — déjà présent côté orchestrateur.** Les trois cas (le bundle tranche / le bundle est muet / le repo contredit le bundle) et la hiérarchie d'autorité vivent dans l'`AGENTS.md` global. Le bundle n'a pas à les porter.
 
 ### Cible **Claude Code** — second agent, Anthropic-only, projets de plus petite ampleur
 
@@ -95,7 +116,7 @@ Configuration globale entièrement centralisée dans `~/.claude/` : `CLAUDE.md` 
 
 ### L'asymétrie de sévérité — conséquence structurante
 
-Sur cible pi, une décision de design discutable rencontre encore deux filets : un `reviewer` d'une **autre famille de modèles**, et un `oracle` d'arbitrage. Sur cible Claude Code, il n'y en a aucun — l'agent est Anthropic-only et ne peut être juge et partie. Aucune relecture croisée n'intervient, ni pendant ni après.
+Sur cible pi, une décision de design discutable rencontre encore un filet : un `reviewer` d'une **autre famille de modèles** que le worker. Il n'y a plus d'arbitrage automatique en aval — un désaccord coûteux remonte directement à l'opérateur. Sur cible Claude Code, il n'y en a aucun — l'agent est Anthropic-only et ne peut être juge et partie. Aucune relecture croisée n'intervient, ni pendant ni après.
 
 **Sur cible Claude Code, le board est le dernier point de contradiction du projet.**
 
@@ -145,7 +166,7 @@ En revanche, la profondeur d'architecture ne monte pas : sur une stack imposée 
 Posée **en premier**, avant toute autre. Elle ne détermine pas seulement la forme du livrable : elle détermine la sévérité du board.
 
 > **Ce projet tourne sur quel agent ?**
-> 1. **pi** — agent principal, multi-provider, `reviewer` en famille de modèles distincte, escalade `oracle` disponible. Projets lourds, architecture à trancher, stack ouverte.
+> 1. **pi** — agent principal, multi-provider, `reviewer` en famille de modèles distincte. Projets lourds, architecture à trancher, stack ouverte.
 > 2. **Claude Code** — second agent, Anthropic-only, **aucune relecture croisée en aval**. Projets de plus petite ampleur, stack généralement imposée, système relativement simple.
 
 Un projet a une cible et une seule ; les deux agents ne partagent pas de projet. La réponse conditionne le mapping des sorties, le jeu de templates, et le curseur de sévérité de la Phase 2.
@@ -222,10 +243,16 @@ Quatre fichiers Markdown à la racine du projet. Les noms sont porteurs de fonct
 
 | Fichier | Contenu |
 |---|---|
-| `INSTRUCTIONS.md` | Point d'entrée, backlog livrable, commande de lancement |
-| `ARCHITECTURE.md` | Stack, composants d'infrastructure, flux de données, structure de répertoires, conventions de nommage |
-| `DESIGN.md` | Décisions (Problème → Décision → Alternatives → Statut), posture de conception, anti-patterns propres au projet |
-| `CONVENTIONS.md` | Règles propres au projet et aux outils validés uniquement |
+| `INSTRUCTIONS.md` | Point d'entrée, backlog livrable **à descriptions autosuffisantes**, commande de lancement |
+| `ARCHITECTURE.md` | Stack, composants d'infrastructure, flux de données, structure de répertoires **portant la skill de chaque territoire**, conventions de nommage |
+| `DESIGN.md` | Décisions (Problème → Décision → Alternatives → Statut), posture de conception. Un anti-pattern n'y figure que comme **conséquence d'une alternative rejetée** — une justification à consulter, pas une règle à appliquer |
+| `CONVENTIONS.md` | Ce qui se juge, **avec sa sévérité**. Dérogations propres au projet uniquement |
+
+Trois points de vigilance propres à cette cible :
+
+1. **Aucun sous-agent ne lit ces fichiers.** L'orchestrateur cite verbatim dans le texte de tâche. Chaque bloc du bundle passe le test de la citation isolée, sans exception.
+2. **Une convention sans sévérité est inapplicable.** Le reviewer ne reçoit que l'extrait cité : règle, sévérité et de quoi juger doivent tenir dans cet extrait.
+3. **La structure de répertoires est le mécanisme de sélection de skill.** Une arborescence floue force l'orchestrateur à deviner quelle skill injecter, et il devinera mal.
 
 #### Sorties — cible Claude Code
 
@@ -254,6 +281,7 @@ Passer tous les fichiers au filtre suivant :
 - aucune instruction de production destinée au board n'a survécu dans le livrable ;
 - aucune section conditionnée à un outil non validé n'est restée en place ;
 - aucune règle déjà garantie par un hook, une extension ou le socle global n'est redéclarée ;
+- **cible pi uniquement** : chaque bloc passe le test de la citation isolée — aucun renvoi à une autre section, aucun pronom dont l'antécédent est ailleurs ; chaque règle propre au projet porte une sévérité `HIGH`, `MEDIUM` ou `LOW` ; chaque item du backlog nomme ses fichiers, son résultat attendu et son critère de fin ; aucun fichier ne décrit un format de sortie attendu d'un sous-agent ; aucune mention de `planner`, `oracle`, `oracle-deep`, `advisor` ou `inheritProjectContext` n'a survécu ;
 - **cible Claude Code uniquement** : aucune rule ne contient de méta-instruction de comportement ou de format de réponse ; le `CLAUDE.md` projet tient dans une version courte ; le protocole d'installation inclut le `git add`.
 
 ---
@@ -288,8 +316,10 @@ Sur cible Claude Code, `_RULE-TEMPLATE.md` est à lire **avant** d'écrire la mo
 - **Pas de planification d'implémentation** : le bundle s'arrête au niveau livrable.
 - **Direction, pas exhaustivité** : couvrir les décisions chères à annuler. Ce qui n'est pas écrit sera tranché à l'exécution, et c'est le fonctionnement nominal. Sur cible Claude Code, le curseur du *cher à annuler* descend d'un cran.
 - **Ne jamais redéclarer ce qui est déjà garanti** : une règle appliquée par un hook ou une extension n'a pas à figurer dans le bundle. L'y écrire ajoute du contexte sans ajouter de garantie.
+- **Autosuffisance par extrait** *(cible pi)* : chaque bloc du bundle est écrit pour être cité seul dans un texte de tâche. Un bloc dont le sens dépend du reste du fichier est un défaut de rédaction, pas un choix de style.
+- **Sévérité obligatoire** *(cible pi)* : toute règle propre au projet écrite dans `CONVENTIONS.md` porte `HIGH`, `MEDIUM` ou `LOW`. Sans sévérité, elle n'est pas applicable par le reviewer et n'a pas à être écrite.
 - **Aucune porte de retour** : rien dans le bundle ne renvoie l'agent vers Strategic Forge.
-- **Validation des prompts par modèle cible** : quand un prompt destiné à l'exécution est soumis à validation, préciser le modèle et le thinking level réels de l'agent qui l'exécutera, puis demander l'identification des ambiguïtés qu'un modèle moins puissant pourrait mal interpréter.
+- **Validation des prompts par modèle cible** : quand un prompt destiné à l'exécution est soumis à validation, préciser le modèle et le thinking level réels de l'agent qui l'exécutera — sur cible pi, tels qu'ils sont fixés dans `subagent-only/agents/` — puis demander l'identification des ambiguïtés qu'un modèle moins puissant pourrait mal interpréter.
 - **Bundle orienté exécution** : aucune justification stratégique, aucun KPI.
 - **Mémoire de session** : si une deuxième idée est soumise, vérifier la cohérence avec les décisions déjà prises.
 - **Langue** : français par défaut. Termes techniques en anglais.
