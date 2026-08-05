@@ -154,6 +154,34 @@ message really is a template.
 - **Modules ≤ ~200 lines.** Split beyond that. One clear responsibility per module.
 - **`pathlib` over `os.path`** — without exception.
 
+## Before writing it — the ladder
+
+Walk these in order. Stop at the first rung that answers.
+
+1. **Standard library.** `pathlib`, `itertools`, `functools`, `dataclasses`,
+   `collections`, `contextlib`, `datetime`, `json`, `csv`, `sqlite3`. Most
+   small utilities already exist there under a name you did not think of.
+2. **A feature of a library already installed.** pandas, SQLAlchemy, pydantic,
+   httpx and the GCP clients each cover far more than the corner you use. Check
+   before writing a helper beside one.
+3. **A new dependency, only if it earns its place.** A dependency is a version
+   to pin, a CVE to watch and a transitive tree to carry. It has to beat the
+   two rungs above by enough to justify that.
+4. **One line, if one line does it.** A comprehension, a `functools.reduce`, a
+   `dict.get` with a default.
+5. **The minimum that works, and nothing beyond.** No hook for a case nobody
+   asked for, no parameter with one caller, no layer of indirection whose only
+   client is the next line down.
+
+**What the ladder never trims.** Validation at a trust boundary — anything
+crossing from outside the process. Anything whose failure loses data. Anything
+that touches credentials or permissions. Error handling on a write path. These
+are the payload, not the packaging.
+
+**And it is about the code, not the task.** Whether the task itself should
+exist is the orchestrator's question, not yours: a scoped instruction is
+executed, and a doubt about its worth goes in `deviations`.
+
 ## Anti-patterns — never do these
 
 - **Never build a shell command by interpolating external input.** `subprocess`

@@ -5,36 +5,100 @@
  * them a suggestion: pi has no `/check-config` command, so typing it fell
  * through to the model, which then had to decide to read the skill and run the
  * script. A consistency checker that depends on a model choosing to run it is
- * not a checker. Same reasoning as the commit hook and the bash-guard token.
+ * not a checker.
  *
- * Two tiers, from the skill, unchanged:
+ * Two tiers:
  *   Tier 1 (blocking)  — something is broken now. Report and stop.
  *   Tier 2 (report)    — untidy, not broken. Print and continue.
  *
- * One check is stricter than the skill's version: frontmatter is parsed as real
- * YAML, not regex-matched. The regex version accepted a `description:` whose
- * value was an unquoted single-line scalar containing a colon — valid to a
- * regex, a syntax error to every YAML parser, and a skill that never registers.
+ * Rewritten for the subagent extension. Gone: the `settings.json`
+ * `subagents.agentOverrides` loadouts, which no longer exist — the domain
+ * belongs to the task and the orchestrator passes it per call. Added: the
+ * `## Review delta` marker guard, and validation of the agent definitions.
+ *
+ * The marker guard is the important one. The slicer used to throw at runtime on
+ * a missing marker, which aborted a whole delegation over a skill that
+ * legitimately had none. Relaxing it there moved the burden here — and here,
+ * failing is free.
  *
  * Config: ~/.pi/agent/settings.json under key "checkConfig"
- *   { "orchestratorOnlySkills": ["git-collaboration", "grill-me"] }
+ *   {
+ *     "orchestratorOnlySkills": ["git-collaboration", "grill-me"],
+ *     "reviewerFacingSkills": ["python-engineering", "..."]
+ *   }
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 interface CheckConfigSettings {
-  /** Skills expected to be in no sub-agent loadout. Reported, never an error. */
+  /** Skills never injected into a child. Reported, never an error. */
   orchestratorOnlySkills?: string[];
+  /** Skills expected to carry a `## Review delta`. A missing one is blocking. */
+  reviewerFacingSkills?: string[];
+  /** Skills injected whole through an agent's `mechanism` field, never sliced. */
+  mechanismSkills?: string[];
 }
 
-const DEFAULT_ORCHESTRATOR_ONLY = ["git-collaboration", "grill-me"];
+const DEFAULT_ORCHESTRATOR_ONLY = [
+  "git-collaboration",
+  "grill-me",
+  "diagnose",
+  "improve-codebase-architecture",
+  "dataeng-architecture",
+  "gcp-dataeng-architecture",
+  "tdd",
+];
+
+/** The eleven a reviewer can be handed. Override in settings when the set changes. */
+const DEFAULT_REVIEWER_FACING = [
+  "airflow-engineering",
+  "bigquery-engineering",
+  "bigquery-ops",
+  "data-quality",
+  "dbt-engineering",
+  "gcp-engineering",
+  "iac-terraform",
+  "python-engineering",
+  "spark-engineering",
+  "sql-engineering",
+  "technical-writing",
+];
+
+/**
+ * Injected through `mechanism`, whole and unsliced.
+ *
+ * A third category, and its absence made `code-review` look unclassified: it is
+ * neither reviewer-facing — it carries no delta and never will — nor
+ * orchestrator-only, since every reviewer receives it. It is what the deltas
+ * are weighed against.
+ */
+const DEFAULT_MECHANISM = ["code-review"];
+
+const DELTA_MARKER = "## Review delta";
+
+/**
+ * Headings that only ever appear inside a Review delta.
+ *
+ * A skill carrying one of these without the marker above it has had its heading
+ * renamed: the severity table is still there, and the reviewer will never see
+ * it. That is the silent failure this whole check exists for.
+ */
+const DELTA_TELLS = ["### Severity assignment", "### Traps a diff does not show"];
 
 function readJson<T>(path: string): T | undefined {
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function readText(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf-8");
   } catch {
     return undefined;
   }
@@ -46,14 +110,7 @@ function skillsOnDisk(root: string): string[] {
     return readdirSync(join(root, "skills"), { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
-      .filter((name) => {
-        try {
-          readFileSync(join(root, "skills", name, "SKILL.md"));
-          return true;
-        } catch {
-          return false;
-        }
-      })
+      .filter((name) => existsSync(join(root, "skills", name, "SKILL.md")))
       .sort();
   } catch {
     return [];
@@ -63,28 +120,12 @@ function skillsOnDisk(root: string): string[] {
 /** Skill names declared as `- \`name\`` under the AGENTS.md skills heading. */
 function skillsDeclaredInAgentsMd(root: string): Set<string> {
   const out = new Set<string>();
-  let text: string;
-  try {
-    text = readFileSync(join(root, "AGENTS.md"), "utf-8");
-  } catch {
-    return out;
-  }
+  const text = readText(join(root, "AGENTS.md"));
+  if (!text) return out;
   const parts = text.split("## Skills available (global)");
   if (parts.length < 2) return out;
   const block = parts[1]!.split("\n## ")[0]!;
   for (const m of block.matchAll(/^-\s+`([^`]+)`/gm)) out.add(m[1]!);
-  return out;
-}
-
-/** Union of every sub-agent `skills` array in settings.json. */
-function skillsUsedBySubagents(root: string): Set<string> {
-  const out = new Set<string>();
-  const cfg = readJson<{
-    subagents?: { agentOverrides?: Record<string, { skills?: string[] }> };
-  }>(join(root, "settings.json"));
-  for (const agent of Object.values(cfg?.subagents?.agentOverrides ?? {})) {
-    for (const s of agent.skills ?? []) out.add(s);
-  }
   return out;
 }
 
@@ -93,7 +134,6 @@ interface FrontmatterResult {
   name?: string;
   hasDescription?: boolean;
   error?: string;
-  /** True when the YAML pass was skipped because PyYAML is unavailable. */
   degraded?: boolean;
 }
 
@@ -102,8 +142,8 @@ interface FrontmatterResult {
  *
  * python3 + PyYAML rather than a hand-rolled TS parser: re-implementing YAML
  * badly is exactly the failure this check exists to catch. If PyYAML is absent
- * the result is marked degraded and the report says so out loud, rather than
- * quietly falling back to the checks that already missed a real break.
+ * the result is marked degraded and the report says so, rather than quietly
+ * falling back to checks that already missed a real break.
  */
 async function parseFrontmatters(
   pi: ExtensionAPI,
@@ -111,45 +151,47 @@ async function parseFrontmatters(
   skills: string[],
 ): Promise<Record<string, FrontmatterResult>> {
   const script = `
-import json, sys, os
+import json, os, re, sys
 root, names = sys.argv[1], sys.argv[2:]
 try:
     import yaml
     have_yaml = True
-except ImportError:
+except Exception:
     have_yaml = False
 out = {}
 for n in names:
     p = os.path.join(root, "skills", n, "SKILL.md")
     try:
-        raw = open(p, encoding="utf-8").read()
-    except OSError as e:
-        out[n] = {"ok": False, "error": "unreadable: %s" % e}; continue
-    if not raw.startswith("---"):
-        out[n] = {"ok": False, "error": "no frontmatter"}; continue
-    parts = raw.split("---\\n", 2)
-    if len(parts) < 3:
-        out[n] = {"ok": False, "error": "unterminated frontmatter"}; continue
-    block = parts[1]
-    if not have_yaml:
-        import re
-        m = re.search(r"^name:\\s*(.+)$", block, re.M)
-        out[n] = {"ok": True, "degraded": True,
-                  "name": m.group(1).strip() if m else None,
-                  "hasDescription": bool(re.search(r"^description:", block, re.M))}
-        continue
-    try:
-        d = yaml.safe_load(block)
+        text = open(p, encoding="utf-8").read()
     except Exception as e:
-        out[n] = {"ok": False, "error": "invalid YAML: %s" % str(e).split("\\n")[0]}; continue
-    if not isinstance(d, dict):
-        out[n] = {"ok": False, "error": "frontmatter is not a mapping"}; continue
-    out[n] = {"ok": True, "name": d.get("name"), "hasDescription": bool(d.get("description"))}
+        out[n] = {"ok": False, "error": f"unreadable: {e}"}
+        continue
+    m = re.match(r"^---\\r?\\n(.*?)\\r?\\n---\\r?\\n", text, re.S)
+    if not m:
+        out[n] = {"ok": False, "error": "no YAML frontmatter"}
+        continue
+    block = m.group(1)
+    if have_yaml:
+        try:
+            data = yaml.safe_load(block) or {}
+        except Exception as e:
+            out[n] = {"ok": False, "error": f"invalid YAML: {e}"}
+            continue
+        if not isinstance(data, dict):
+            out[n] = {"ok": False, "error": "frontmatter is not a mapping"}
+            continue
+        out[n] = {"ok": True, "name": data.get("name"),
+                  "hasDescription": bool(data.get("description"))}
+    else:
+        nm = re.search(r"^name:\\s*(.+)$", block, re.M)
+        out[n] = {"ok": True, "degraded": True,
+                  "name": nm.group(1).strip() if nm else None,
+                  "hasDescription": bool(re.search(r"^description:\\s*\\S", block, re.M))}
 print(json.dumps(out))
 `;
   try {
     const result = await pi.exec("python3", ["-c", script, root, ...skills], {
-      timeout: 30_000,
+      timeout: 15000,
     });
     return JSON.parse(result.stdout) as Record<string, FrontmatterResult>;
   } catch {
@@ -157,23 +199,127 @@ print(json.dumps(out))
   }
 }
 
+// ------------------------------------------------------------- agent checks
+
+interface AgentCheck {
+  file: string;
+  blocking: string[];
+  report: string[];
+  model?: string;
+}
+
+/**
+ * Validate an agent definition without importing agents.ts.
+ *
+ * A deliberate second implementation: the point is to catch a definition that
+ * `loadAgents` would reject at session start, and importing the very parser
+ * under test would make the check pass whenever the parser is wrong in the same
+ * way. Kept to the fields whose breakage is silent or expensive.
+ */
+function checkAgent(root: string, file: string, skillSet: Set<string>): AgentCheck {
+  const out: AgentCheck = { file, blocking: [], report: [] };
+  const path = join(root, "subagent-only", "agents", file);
+  const text = readText(path);
+  if (!text) {
+    out.blocking.push(`agents/${file}: unreadable`);
+    return out;
+  }
+
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(text);
+  if (!m) {
+    out.blocking.push(`agents/${file}: no YAML frontmatter`);
+    return out;
+  }
+  const [, fmBlock, body] = m;
+
+  const field = (k: string): string | undefined =>
+    new RegExp(`^${k}:\\s*(.+)$`, "m").exec(fmBlock!)?.[1]?.trim();
+  const list = (k: string): string[] =>
+    (field(k) ?? "")
+      .replace(/^\[|\]$/g, "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  const name = field("name");
+  const expected = file.replace(/\.md$/, "");
+  if (name !== expected) out.blocking.push(`agents/${file}: name '${name}' != filename`);
+  if (!body?.trim()) out.blocking.push(`agents/${file}: empty body — the role prompt is mandatory`);
+
+  const model = field("model");
+  out.model = model;
+  if (!model) out.blocking.push(`agents/${file}: no model`);
+
+  const tools = list("tools");
+  if (!tools.includes("submit")) {
+    out.blocking.push(
+      `agents/${file}: 'submit' absent from tools — the role could not return an envelope`,
+    );
+  }
+
+  const sliceMode = field("sliceMode") ?? "none";
+  if (!["authoring", "full", "none"].includes(sliceMode)) {
+    out.blocking.push(`agents/${file}: sliceMode '${sliceMode}' is not authoring|full|none`);
+  }
+  if (sliceMode !== "none" && !tools.includes("read")) {
+    out.blocking.push(`agents/${file}: sliceMode '${sliceMode}' without the 'read' tool`);
+  }
+
+  for (const s of [...list("skills"), ...list("mechanism")]) {
+    if (!skillSet.has(s)) out.blocking.push(`agents/${file}: unknown skill '${s}'`);
+  }
+
+  for (const e of list("extensions")) {
+    const candidates =
+      e === "envelope"
+        ? [join(root, "subagent-only", "envelope", "envelope.ts")]
+        : [
+            join(root, "extensions", e, "index.ts"),
+            join(root, "npm", "node_modules", e, "index.ts"),
+            join(root, "npm", "node_modules", e, "src", "index.ts"),
+          ];
+    if (!candidates.some(existsSync)) {
+      out.blocking.push(`agents/${file}: extension '${e}' not found on disk`);
+    }
+  }
+
+  const maxTurns = Number(field("maxTurns"));
+  if (!Number.isFinite(maxTurns) || maxTurns < 1) {
+    out.blocking.push(`agents/${file}: maxTurns must be a number >= 1`);
+  }
+
+  // A role prompt that does not tell the child its context is complete sends it
+  // hunting for AGENTS.md, which -nc removed. Measured: one wasted turn, first
+  // call, every time.
+  if (!/already in this prompt|inherits nothing|do not search for/i.test(body ?? "")) {
+    out.report.push(
+      `agents/${file}: prompt does not state that the context is complete — a child ` +
+        `running with --no-context-files will look for AGENTS.md`,
+    );
+  }
+  return out;
+}
+
+// -------------------------------------------------------------------- entry
+
 export default function (pi: ExtensionAPI): void {
   pi.registerCommand("check-config", {
     description: "Config repo consistency — blocking and report tiers",
 
     handler: async (_args, ctx) => {
+      const root = getAgentDir();
       const settings =
-        readJson<Record<string, CheckConfigSettings>>(join(getAgentDir(), "settings.json"))?.[
+        readJson<Record<string, CheckConfigSettings>>(join(root, "settings.json"))?.[
           "checkConfig"
         ] ?? {};
       const orchestratorOnly = new Set(
         settings.orchestratorOnlySkills ?? DEFAULT_ORCHESTRATOR_ONLY,
       );
+      const reviewerFacing = new Set(settings.reviewerFacingSkills ?? DEFAULT_REVIEWER_FACING);
+      const mechanism = new Set(settings.mechanismSkills ?? DEFAULT_MECHANISM);
 
-      const root = getAgentDir();
       const disk = skillsOnDisk(root);
       const diskSet = new Set(disk);
-
       if (disk.length === 0) {
         ctx.ui.notify(`check-config: no skills found under ${root}/skills`, "error");
         return;
@@ -182,16 +328,41 @@ export default function (pi: ExtensionAPI): void {
       const blocking: string[] = [];
       const report: string[] = [];
 
-      // --- declared vs present -------------------------------------------
+      // --- declared vs present ---------------------------------------------
       for (const name of [...skillsDeclaredInAgentsMd(root)].sort()) {
         if (!diskSet.has(name)) blocking.push(`AGENTS.md declares '${name}' — not in skills/`);
       }
-      const used = skillsUsedBySubagents(root);
-      for (const name of [...used].sort()) {
-        if (!diskSet.has(name)) blocking.push(`settings.json loads '${name}' — not in skills/`);
+      for (const name of [...reviewerFacing].sort()) {
+        if (!diskSet.has(name)) blocking.push(`reviewerFacingSkills lists '${name}' — not in skills/`);
       }
 
-      // --- frontmatter -----------------------------------------------------
+      // --- the Review delta marker -----------------------------------------
+      //
+      // Exactly one, at the start of a line. `code-review` mentions the marker
+      // mid-sentence when it points at the domain skills; an unanchored or
+      // count-insensitive check would either miss a duplicate or trip on prose.
+      for (const name of disk) {
+        const text = readText(join(root, "skills", name, "SKILL.md")) ?? "";
+        const count = text.split("\n").filter((l) => l.trimEnd() === DELTA_MARKER).length;
+        const hasTell = DELTA_TELLS.some((t) => text.includes(`\n${t}`));
+
+        if (count > 1) {
+          blocking.push(`skills/${name}: ${count} '${DELTA_MARKER}' headings — the slicer cuts at the first`);
+        } else if (reviewerFacing.has(name) && count === 0) {
+          blocking.push(
+            `skills/${name}: no '${DELTA_MARKER}' heading. Renamed? A reviewer would be ` +
+              `handed the whole file with no severity table and would invent one.`,
+          );
+        } else if (count === 0 && hasTell) {
+          blocking.push(
+            `skills/${name}: carries a delta section but no '${DELTA_MARKER}' heading above it`,
+          );
+        } else if (count === 1 && !reviewerFacing.has(name)) {
+          report.push(`skills/${name}: has a Review delta but is not in reviewerFacingSkills`);
+        }
+      }
+
+      // --- skill frontmatter ------------------------------------------------
       const fm = await parseFrontmatters(pi, root, disk);
       let degraded = false;
       for (const name of disk) {
@@ -217,31 +388,78 @@ export default function (pi: ExtensionAPI): void {
         );
       }
 
-      // --- tier 2 -----------------------------------------------------------
-      let readme = "";
+      // --- agent definitions -------------------------------------------------
+      let agentFiles: string[] = [];
       try {
-        readme = readFileSync(join(root, "README.md"), "utf-8");
+        agentFiles = readdirSync(join(root, "subagent-only", "agents"))
+          .filter((f) => f.endsWith(".md"))
+          .sort();
       } catch {
-        report.push("README.md unreadable — documentation drift not checked");
+        blocking.push("subagent-only/agents/ unreadable — no delegation is possible");
       }
-      if (readme) {
-        for (const name of disk) {
-          if (!readme.includes(name)) report.push(`skills/${name}: absent from README.md`);
-        }
+      const models = new Set<string>();
+      for (const f of agentFiles) {
+        const r = checkAgent(root, f, diskSet);
+        blocking.push(...r.blocking);
+        report.push(...r.report);
+        if (r.model) models.add(r.model);
       }
-      for (const name of disk) {
-        if (used.has(name)) continue;
+
+      // Cognitive diversity: a reviewer on the same family as the worker is a
+      // judge-and-party arrangement, and the config exists partly to prevent it.
+      const families = new Set([...models].map((m) => m.split("/")[0]));
+      if (agentFiles.length > 1 && families.size < 2) {
         report.push(
-          orchestratorOnly.has(name)
-            ? `skills/${name}: loaded by no sub-agent (orchestrator-only, expected)`
-            : `skills/${name}: loaded by no sub-agent — intentional?`,
+          `all agents run on '${[...families][0]}' — reviewer and worker on one family ` +
+            `is the structural risk this setup was built to avoid`,
         );
       }
 
-      // --- output -----------------------------------------------------------
+      // --- roles declared vs defined ----------------------------------------
+      const envelope = readText(join(root, "subagent-only", "envelope", "envelope.ts")) ?? "";
+      const declaredRoles = [...envelope.matchAll(/Type\.Literal\("(worker|reviewer|scout|advisor)"\)/g)]
+        .map((m) => m[1]!)
+        .filter((v, i, a) => a.indexOf(v) === i);
+      const defined = new Set(agentFiles.map((f) => f.replace(/\.md$/, "")));
+      for (const role of declaredRoles) {
+        if (!defined.has(role)) {
+          report.push(
+            `role '${role}' has an envelope schema but no definition — the schema is ready, ` +
+              `the agent is not written. Not an error unless you meant to invoke it.`,
+          );
+        }
+      }
+      for (const role of defined) {
+        if (!declaredRoles.includes(role)) {
+          blocking.push(`agents/${role}.md exists but envelope.ts declares no '${role}' schema`);
+        }
+      }
+
+      // --- tier 2 ------------------------------------------------------------
+      const readme = readText(join(root, "README.md"));
+      if (!readme) report.push("README.md unreadable — documentation drift not checked");
+      else for (const name of disk) {
+        if (!readme.includes(name)) report.push(`skills/${name}: absent from README.md`);
+      }
+      for (const name of disk) {
+        if (reviewerFacing.has(name) || orchestratorOnly.has(name) || mechanism.has(name)) continue;
+        report.push(
+          `skills/${name}: in none of reviewer-facing, mechanism, orchestrator-only — intentional?`,
+        );
+      }
+      // A mechanism skill carrying a delta would be weighing itself.
+      for (const name of mechanism) {
+        if (!diskSet.has(name)) blocking.push(`mechanismSkills lists '${name}' — not in skills/`);
+        else if (reviewerFacing.has(name))
+          blocking.push(`skills/${name}: listed as both mechanism and reviewer-facing`);
+      }
+
+      // --- output -------------------------------------------------------------
       const lines = [
         `check-config — ${root}`,
-        `${disk.length} skills on disk, ${used.size} referenced by sub-agents`,
+        `${disk.length} skills — ${reviewerFacing.size} reviewer-facing, ${mechanism.size} mechanism, ` +
+          `${orchestratorOnly.size} orchestrator-only. ` +
+          `${agentFiles.length} agents on ${families.size} model famil${families.size === 1 ? "y" : "ies"}`,
         "",
       ];
       for (const l of blocking) lines.push(`BLOCKING  ${l}`);
