@@ -67,17 +67,36 @@ Pour chaque flèche : volume attendu, fréquence, et mode de déclenchement.
 ### Répertoires structurants
 
 > La colonne `Skill` est le mécanisme de sélection : l'orchestrateur passe la skill de
-> domaine par appel — `task({ agent: "worker", skills: ["<skill>"], task: "..." })` — et
+> domaine par appel — `task({ agent: "reviewer", skills: ["<skill>"], task: "..." })` — et
 > la choisit d'après le territoire que la tâche touche. Un répertoire sans skill
 > correspondante est légitime : l'orchestrateur n'en passe aucune.
+>
+> **Cette colonne ne prend qu'une skill orientée relecture.** Onze skills portent un
+> `## Review delta` et sont les seules qu'un reviewer puisse recevoir avec sa table de
+> sévérité : `python-engineering`, `sql-engineering`, `bigquery-engineering`,
+> `bigquery-ops`, `spark-engineering`, `airflow-engineering`, `dbt-engineering`,
+> `data-quality`, `gcp-engineering`, `iac-terraform`, `technical-writing`.
+>
+> Les autres — `tdd`, `code-review`, `diagnose`, `grill-me`, `git-collaboration`,
+> `dataeng-architecture`, `gcp-dataeng-architecture`, `improve-codebase-architecture` —
+> ne s'écrivent jamais ici. Elles servent l'orchestrateur, ou constituent la mécanique de
+> verdict. Injectée à un reviewer, une skill sans delta le fait juger sans barème et le
+> résultat porte `(no severity table for: <skill>)`.
+>
+> **Le mapping suit le type de fichier, pas l'intention du répertoire.** `tests/` contient
+> du Python : sa skill est `python-engineering`, quand bien même la stratégie de test
+> relève de `tdd`. `sql/` contient du SQL BigQuery : `bigquery-engineering`, quand bien
+> même l'administration relève de `bigquery-ops`. Un répertoire dont le type de fichier ne
+> correspond à aucune des onze reçoit `—`.
 
 | Répertoire | Rôle | Skill |
 |---|---|---|
 | `[répertoire]` | [ce qu'il contient, en une phrase] | `[skill]` \| — |
 
-Skills disponibles : `python-engineering`, `sql-engineering`, `bigquery-engineering`,
-`bigquery-ops`, `spark-engineering`, `airflow-engineering`, `dbt-engineering`,
-`data-quality`, `gcp-engineering`, `iac-terraform`, `technical-writing`.
+Valeurs admissibles, et aucune autre : `python-engineering`, `sql-engineering`,
+`bigquery-engineering`, `bigquery-ops`, `spark-engineering`, `airflow-engineering`,
+`dbt-engineering`, `data-quality`, `gcp-engineering`, `iac-terraform`,
+`technical-writing`, ou `—`.
 
 Règles :
 - Nommer explicitement les répertoires structurants et leur rôle. Éviter les `...` :
