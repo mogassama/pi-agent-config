@@ -19,7 +19,7 @@
  * child. That is intended — the role prompt is the child's whole instruction.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { sliceSkillFile } from "./slicer.js";
@@ -140,7 +140,116 @@ const CLOSING_INSTRUCTION =
   "Return your result by calling the submit tool, exactly once, as your final action. " +
   "Do not answer in prose: an answer that is not a submit call is discarded, " +
   "whatever its quality. Every array field has a legal empty form — return [] " +
-  "rather than omitting the field or inventing an entry.";
+  "rather than inventing an entry, and leave an optional field out rather than " +
+  "padding it.";
+
+/**
+ * Data files that exist in the working tree and are not named in the task.
+ *
+ * "Name every file the work depends on" is stated in AGENTS.md, and again in
+ * the `task` parameter's own description, with the incident that produced it.
+ * It did not hold. Measured on run 3ed33e: `data/orders.csv` was named in 0 of
+ * 15 tasks and read 0 times across 104 reads. The worker declared a
+ * four-column schema against a five-column file, every test passed against the
+ * invented schema, and seven reviews did not catch it — a reviewer reads what
+ * it is named. `.gitignore` carried `data/`, so `pi-project-brief`, which
+ * enumerates through `git ls-files`, could not surface it either. Every layer
+ * that could have shown the file was blind to it.
+ *
+ * No judgment is made here about whether the task needs the data: only whether
+ * the file exists and whether its path appears in the text. A rule that must
+ * hold unconditionally does not live in prose.
+ */
+const DATA_EXTENSIONS = new Set([
+  ".csv", ".tsv", ".psv", ".jsonl", ".ndjson", ".parquet", ".avro", ".orc",
+]);
+
+/** Line-oriented enough to have a readable first line. */
+const HEADED_EXTENSIONS = /\.(csv|tsv|psv|jsonl|ndjson)$/i;
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".venv", "venv", ".git", "dist", "build", "target",
+  "__pycache__", ".pi", ".pi-subagent-runs", ".ruff_cache", ".pytest_cache",
+  ".mypy_cache", "site-packages",
+]);
+
+/** Bounded on both axes: a scan that can dump a tree is the scout's mistake in another costume. */
+const MAX_DATA_FILES = 10;
+const MAX_DEPTH = 2;
+const MAX_HEAD_CHARS = 300;
+
+function describeDataFile(abs: string, rel: string): string {
+  let size = 0;
+  try {
+    size = statSync(abs).size;
+  } catch {
+    /* ignore */
+  }
+  const shown =
+    size >= 1_048_576 ? `${(size / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1024))} kB`;
+
+  // First line only, and only where there is one. A columnar file has no
+  // readable head, and reading it to find out would cost more than the note.
+  if (!HEADED_EXTENSIONS.test(rel)) return `${rel} (${shown})`;
+
+  let head = "";
+  try {
+    const fd = openSync(abs, "r");
+    const buf = Buffer.alloc(4096);
+    const n = readSync(fd, buf, 0, 4096, 0);
+    closeSync(fd);
+    head = (buf.subarray(0, n).toString("utf-8").split(/\r?\n/)[0] ?? "").trim();
+    if (head.length > MAX_HEAD_CHARS) head = `${head.slice(0, MAX_HEAD_CHARS)}…`;
+  } catch {
+    /* ignore */
+  }
+  return head ? `${rel} (${shown}, first line: ${head})` : `${rel} (${shown})`;
+}
+
+export function unnamedDataFiles(cwd: string, task: string): string[] {
+  const found: string[] = [];
+
+  const walk = (dir: string, rel: string, depth: number): void => {
+    if (found.length >= MAX_DATA_FILES || depth > MAX_DEPTH) return;
+    let entries: ReturnType<typeof readdirSync>;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }) as never;
+    } catch {
+      return;
+    }
+    for (const entry of entries as unknown as Array<{ name: string; isDirectory(): boolean }>) {
+      if (found.length >= MAX_DATA_FILES) return;
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+          walk(join(dir, entry.name), relPath, depth + 1);
+        }
+        continue;
+      }
+      const dot = entry.name.lastIndexOf(".");
+      if (dot === -1 || !DATA_EXTENSIONS.has(entry.name.slice(dot).toLowerCase())) continue;
+      // Named already — by relative path or by basename. Either is enough:
+      // the point is that the child has been pointed at it.
+      if (task.includes(relPath) || task.includes(entry.name)) continue;
+      found.push(describeDataFile(join(dir, entry.name), relPath));
+    }
+  };
+
+  walk(cwd, "", 0);
+  return found;
+}
+
+function dataNote(cwd: string, task: string): string {
+  const unnamed = unnamedDataFiles(cwd, task);
+  if (unnamed.length === 0) return "";
+  return (
+    "Data files present in the working tree and NOT named in this task:\n" +
+    unnamed.map((d) => `  - ${d}`).join("\n") +
+    "\n\nIf the work depends on the shape of external data — a schema, a header, " +
+    "a column list, a parser, a validation — read the file rather than inferring " +
+    "it. If it does not, ignore this list.\n\n"
+  );
+}
 
 export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildContext): SpawnPlan {
   const args: string[] = ["--mode", "json", "-p"];
@@ -209,7 +318,9 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // orchestrator writes "return findings, severity, verdict…" — a description
   // of the envelope's contents, never of the tool that carries it — and the
   // model answers in prose. One run cost 5102 output tokens that way.
-  args.push(`Task: ${task}\n\n${CLOSING_INSTRUCTION}`);
+  // The note sits between the task and the closing instruction: after the work
+  // it qualifies, before the line that must stay last.
+  args.push(`Task: ${task}\n\n${dataNote(process.cwd(), task)}${CLOSING_INSTRUCTION}`);
 
   return {
     args,

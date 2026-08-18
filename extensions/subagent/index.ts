@@ -34,6 +34,16 @@ const RUN_ID = randomBytes(3).toString("hex");
  */
 let CALL_SEQ = 0;
 
+/**
+ * Scout calls so far in this session.
+ *
+ * Not for accounting — for one nudge. Measured on run `3ed33e`: 15 delegations,
+ * 0 scouts, while the only repo-wide search of the run happened inside a
+ * reviewer. A routing rule read at turn 1 does not fire at turn 40; a line
+ * attached to the result that proves the rule was needed does.
+ */
+let SCOUT_CALLS = 0;
+
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
 
@@ -95,8 +105,9 @@ export default function (pi: ExtensionAPI) {
       promptGuidelines: [
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
+        "A task asking whether something is consistent, complete, or has a single source is a where-question. Scout it first and name the locations, or you are buying a search at the reviewer's rate.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
-        "Do not delegate a change you could make inline in fewer turns than composing the instruction would take.",
+        "Do not delegate a write you could make inline in fewer turns than composing the instruction would take. This never applies to a scout: a search is delegated because it is a search, not because it is large.",
         "The child sees only the task text. Anything implicit here is absent there.",
       ],
       parameters,
@@ -131,9 +142,23 @@ export default function (pi: ExtensionAPI) {
         // The model is named only when it is not the declared one: a fallback
         // took over, and the orchestrator should know which answer it is reading.
         const via = result.modelUsed === agent.model ? "" : ` via ${result.modelUsed}`;
+
+        // The outcome, not the completion. `status` is `ok` on every run that
+        // reached submit, a rejected review included — measured on run 3ed33e,
+        // four reviews returned `needs_rework` and all four arrived here as
+        // `ok`. The counts follow so the artefact is opened when there is
+        // something in it, rather than on every review to find out.
+        const outcome = result.verdict ?? result.status;
+        const counts = [
+          result.findings ? `${result.findings} finding${result.findings > 1 ? "s" : ""}` : "",
+          result.outOfScope ? `${result.outOfScope} out-of-scope` : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
+
         const head = result.failure
           ? `[${result.role}: ${result.failure}${via}]`
-          : `[${result.role}: ${result.status}, next=${result.next}${via}]`;
+          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]`;
 
         // Say which skills came without a severity table. The review still
         // ran; the operator should know one domain was judged on the generic
@@ -142,17 +167,29 @@ export default function (pi: ExtensionAPI) {
           ? `\n(no severity table for: ${result.withoutDelta.join(", ")})`
           : "";
 
+        // One nudge per session, fired only on evidence: a reviewer reporting
+        // something outside the file it was given has answered a where-question
+        // the expensive way, in the one role forbidden from weighing the answer.
+        const scoutHint =
+          SCOUT_CALLS === 0 && result.role === "reviewer" && (result.outOfScope ?? 0) > 0
+            ? "\n(out_of_scope is a where-question answered inside a review. A scout resolves it for a fraction of the cost, and the locations it returns are files the next review may weigh.)"
+            : "";
+        if (params.agent === "scout") SCOUT_CALLS++;
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `${head} ${result.summary}${note}\n${result.artifact}`,
+              text: `${head} ${result.summary}${note}${scoutHint}\n${result.artifact}`,
             },
           ],
           details: {
             role: result.role,
             model: result.modelUsed,
             status: result.status,
+            verdict: result.verdict ?? null,
+            findings: result.findings ?? null,
+            outOfScope: result.outOfScope ?? null,
             next: result.next,
             turns: result.turns,
             usage: result.usage,

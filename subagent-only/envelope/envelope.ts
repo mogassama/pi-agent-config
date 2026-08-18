@@ -23,19 +23,19 @@ import { Type, type Static } from "typebox";
 
 // ---------------------------------------------------------------- envelope
 
-const Next = Type.Union(
-  [
-    Type.Literal("scout"),
-    Type.Literal("worker"),
-    Type.Literal("reviewer"),
-    Type.Literal("advisor"),
-    Type.Literal("orchestrator"),
-    Type.Literal("done"),
-  ],
-  {
-    description: "What should run next. `done` ends the loop; `orchestrator` hands the decision back.",
-  },
-);
+/*
+ * There is no `next` field, and there was one.
+ *
+ * It asked a role that has just been told it holds no orchestration authority
+ * to decide what runs next. Measured on run 3ed33e: three of the four reviews
+ * that returned `needs_rework` returned `next: "done"` with it, and every
+ * other role returned `done` unconditionally — a field wrong where it could be
+ * wrong and constant everywhere else. It also carried a `"advisor"` literal
+ * for a role that has no definition and cannot be spawned.
+ *
+ * It is now derived in dispatch.ts from the verdict, where the same fact is
+ * already known. Removing it removes half of the validation failures below.
+ */
 
 /** Fields every role must supply, whatever its payload. */
 const envelopeFields = {
@@ -45,7 +45,6 @@ const envelopeFields = {
   summary: Type.String({
     description: "One line, human readable. This is the only field that reaches the parent context.",
   }),
-  next: Next,
 };
 
 // ------------------------------------------------------------ role payloads
@@ -142,9 +141,28 @@ const payloads = {
     tooling: Type.Array(ToolingEntry, {
       description: "Empty array is legal — say so rather than claiming checks that did not run.",
     }),
-    out_of_scope: Type.Array(Type.String(), {
-      description: "Anything noticed outside the reviewed file. Keeps findings honest about scope.",
-    }),
+    /*
+     * Optional, and it was required.
+     *
+     * Required, it was the single largest cost in the reviewer. Measured on
+     * run 3ed33e: five of seven reviews failed their first `submit` on a
+     * missing required field, `out_of_scope` in four of them — 203k tokens of
+     * re-read context and re-emitted envelope, 25% of the reviewer's total.
+     *
+     * The forcing bought nothing. Of the four envelopes that emitted it only
+     * after being rejected, two were empty and two were scope disclaimers
+     * ("__main__.py and README.md were not reviewed here"). The one
+     * substantive entry of the whole run — a staging identifier built two
+     * different ways in two modules — came from a reviewer that emitted the
+     * field unprompted. A model with something to say here says it; a model
+     * forced to fill the array pads it.
+     */
+    out_of_scope: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Anything noticed outside the reviewed file. Keeps findings honest about scope. Omit rather than pad.",
+      }),
+    ),
   }),
 
   advisor: Type.Object({

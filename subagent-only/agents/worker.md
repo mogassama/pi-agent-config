@@ -10,7 +10,7 @@ skills: []
 sliceMode: authoring
 contextFiles: false
 projectBrief: true
-session: persistent
+session: ephemeral
 maxTurns: 20
 timeoutMs: 1200000
 ---

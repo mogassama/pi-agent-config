@@ -120,8 +120,8 @@ See authoring skills for canonical rules. Applies only where the project bundle 
 
 ## Tooling habits
 
-- **`bash` tool** — use it freely for: file discovery (`fd`, `rg`), running tests, formatters, `gcloud --help`, `python -c "import x; help(x.y)"`. Synchronous only — for long-running things (dev servers, `airflow webserver`), use tmux from the user terminal, not `bash`.
-- **`read` tool** — for individual files. Use `bash` + `rg` when you need to search across many files.
+- **`bash` tool** — use it freely for: running tests, formatters, `gcloud --help`, `python -c "import x; help(x.y)"`. Not for repo-wide search: `rg`, `fd` and `find` across the tree are the scout's, whatever tool carries them. Synchronous only — for long-running things (dev servers, `airflow webserver`), use tmux from the user terminal, not `bash`.
+- **`read` tool** — for individual files, by path. A question that spans files — where is this, who calls it, is it consistent — is a `task({ agent: "scout" })`, not an `rg` you run yourself. See "Searching is scout work".
 - **`edit`** preferred over `write` for existing files. Reserve `write` for new files or full rewrites.
 - **No `cd` in a long pipeline** — it doesn't persist between `bash` calls in pi (each call is a new shell). Use absolute paths or `cd X && cmd` in the same call.
 - **Commits:** never commit on your own initiative. A commit happens only through an explicit `/skill:git-collaboration` invocation — which stands as intent through to push, so don't re-ask for confirmation at each step. Enforced by `bash-guard`; workarounds fail.
@@ -227,6 +227,18 @@ guess.
 What comes back is a list of paths and line ranges. Read those ranges yourself
 if you need the content — that is a named read, and it is inline again.
 
+**A completeness question is a search, wherever it appears.** "Is this applied
+everywhere", "does this have a single source", "did the fix reach every caller",
+"is this consistent between the two paths" — the shape is *where*, even when it
+is phrased as a review and handed to a reviewer. Doing that buys a search at the
+reviewer's rate, run by a role whose own prompt forbids it from weighing
+anything outside the file it was given. Measured on run `3ed33e`: the only
+repo-wide search of fifteen delegations was a Sonnet reviewer grepping
+`staging_table|compose_merge_sql|_staging_table_id`; it found the divergence at
+`schema.py:58`, filed it under `out_of_scope`, and nothing read it. Scout first,
+quote the locations it returns into the review task — a location named is a file
+the reviewer may weigh.
+
 ### Composing a task
 
 **Delegating replaces reading.** Do not read the file you are about to hand off:
@@ -268,6 +280,15 @@ operator confirmation, forks where the operator has not been consulted.
 >10 min of focused work; the task needs a different model or a different tool
 set. An explicit operator instruction to delegate overrides the threshold — say
 so in the routing line, so the cost is attributable.
+
+**The threshold governs writers. It does not govern reconnaissance.** A scout
+question fails all three tests by construction — one search is never 20% of a
+context window and never ten minutes of work — so applying the threshold to it
+excludes the role entirely. Measured on run `3ed33e`: fifteen delegations, zero
+scouts, on a run whose only repo-wide search was issued by a Sonnet reviewer.
+The scout's own prompt says it is "the cheapest role and the most often called";
+that is only true if nothing upstream asks whether a search is big enough to
+delegate. Never ask that. Ask only whether it is a search.
 
 **Orchestrator always owns:** all operator-facing communication, all decision
 points, subagent output synthesis, skill loading for inline work, conversation

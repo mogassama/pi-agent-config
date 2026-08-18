@@ -25,6 +25,19 @@ export interface RunResult {
   status: "ok" | "blocked" | "failed";
   summary: string;
   next: string;
+  /**
+   * The role's own outcome, when it has one, and the two counts that decide
+   * whether the artefact is worth opening.
+   *
+   * `status` answers "did the delegation complete", and it is `ok` on every run
+   * that reached submit — including a review that rejects the change. Measured
+   * on run 3ed33e: four of seven reviews returned `needs_rework` and all four
+   * reached the orchestrator as `[reviewer: ok, next=done]`. The verdict was
+   * computed one line above, for the footer, and never left this file.
+   */
+  verdict?: string;
+  findings?: number;
+  outOfScope?: number;
   /** Where the full envelope was written. The orchestrator reads it only if it needs to. */
   artifact: string;
   turns: number;
@@ -247,7 +260,9 @@ async function runOnce(
         providerError: state.providerError,
         // Rebuilt here rather than demanded of the model: the split is useful
         // to read on disk and was a liability to ask for at the tool boundary.
-        envelope: envelope ? splitEnvelope(envelope) : null,
+        // `next` is derived, not submitted, and is written in so the artefact
+        // shape does not change when the field leaves the schema.
+        envelope: envelope ? splitEnvelope({ ...envelope, next: deriveNext(envelope) }) : null,
         stderr: failure ? state.stderr.join("").slice(-4000) : undefined,
       },
       null,
@@ -290,12 +305,34 @@ async function runOnce(
     role: agent.name,
     status: (envelope.status as RunResult["status"]) ?? "ok",
     summary: String(envelope.summary ?? "").trim() || "(empty summary)",
-    next: String(envelope.next ?? "orchestrator"),
+    next: deriveNext(envelope),
+    verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
+    findings: Array.isArray(envelope.findings) ? envelope.findings.length : undefined,
+    outOfScope: Array.isArray(envelope.out_of_scope) ? envelope.out_of_scope.length : undefined,
     artifact,
     turns: state.turns,
     usage: state.usage,
     failure,
   };
+}
+
+/**
+ * What runs next, decided here rather than asked of the child.
+ *
+ * Measured on run 3ed33e: three of the four reviews that returned
+ * `needs_rework` also returned `next: "done"`. The field asked a role that has
+ * just been told it holds no orchestration authority — "A subagent has no
+ * channel to the operator", AGENTS.md — to decide what runs next, and it was
+ * wrong three times out of four. Every role returned `done` otherwise, so the
+ * field carried no information it did not already get wrong. The verdict
+ * carries the answer; a `blocked` status carries the rest.
+ */
+function deriveNext(envelope: Record<string, unknown>): string {
+  if (envelope.status !== "ok") return "orchestrator";
+  if (typeof envelope.verdict === "string") {
+    return envelope.verdict === "approved" ? "done" : "orchestrator";
+  }
+  return "done";
 }
 
 /** A failure the orchestrator can act on, not a stack trace it has to parse. */
