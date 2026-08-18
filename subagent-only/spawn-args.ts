@@ -97,10 +97,16 @@ const BUILTIN_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-code
  * what we hand it. The native anthropic provider costs ~0.11 $ per review and
  * gives the system prompt back.
  *
- * Kept as a mechanism: the next non-builtin provider will need it, and
- * deriving it from the model string is what stops it being forgotten.
+ * The mechanism earned its place on 18 August 2026: moving the scout to
+ * DeepSeek failed at load time with exactly the error it was written to give,
+ * before a single delegation was spawned.
  */
-const PROVIDER_PACKAGE: Record<string, string> = {};
+const PROVIDER_PACKAGE: Record<string, string> = {
+  // Declared in settings.json as a git source; pi installs it under
+  // <agentDir>/npm/node_modules/ like any other package, so resolveExtension
+  // finds it by its package.json name.
+  deepseek: "pi-deepseek-provider",
+};
 
 export function providerExtensionFor(model: string): string | null {
   const provider = model.includes("/") ? model.split("/")[0] : "";

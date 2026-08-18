@@ -63,6 +63,16 @@ interface StreamState {
    * declined to call submit.
    */
   providerError: string | null;
+  /**
+   * The last thing the child said, kept so a ceiling does not return nothing.
+   *
+   * Measured on run `ac451a`: a scout hit its turn ceiling after 112,683 tokens
+   * and the orchestrator received one failure line and `envelope: null`. The
+   * prompts now ask each role to converge early, but a prompt is a request; a
+   * child that ignores it should still leave the orchestrator something to act
+   * on rather than a bill.
+   */
+  lastText: string;
 }
 
 /**
@@ -100,6 +110,15 @@ function consume(line: string, state: StreamState): void {
 
   if (e.type === "message" || e.type === "message_end") {
     const m = e.message ?? e;
+    if (m?.role === "assistant" && Array.isArray(m.content)) {
+      const said = m.content
+        .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+        .map((b: any) => String(b.text).trim())
+        .filter(Boolean)
+        .join("\n");
+      if (said) state.lastText = said;
+    }
+
     if (m?.role === "assistant" && m.usage) {
       state.usage.input += m.usage.input ?? 0;
       state.usage.output += m.usage.output ?? 0;
@@ -156,7 +175,14 @@ async function runOnce(
   const seq = String(opts.seq ?? 0).padStart(2, "0");
   const artifact = join(artifactDir, `${opts.ctx.runId}-${seq}-${agent.name}.json`);
 
-  const state: StreamState = { turns: 0, submit: null, usage: emptyUsage(), stderr: [], providerError: null };
+  const state: StreamState = {
+    turns: 0,
+    submit: null,
+    usage: emptyUsage(),
+    stderr: [],
+    providerError: null,
+    lastText: "",
+  };
 
   // The child's raw stream, kept beside the artefact.
   //
@@ -341,13 +367,18 @@ function failureSummary(
   failure: NonNullable<RunResult["failure"]>,
   state: StreamState,
 ): string {
+  // Whatever the child last said, when it said anything. Unvalidated and
+  // unstructured, and still the difference between a failure the orchestrator
+  // can act on and 112k tokens that returned a single line.
+  const salvage = state.lastText ? ` Last thing it said: ${state.lastText.slice(-600).trim()}` : "";
+
   switch (failure) {
     case "max_turns":
-      return `${agent.name} hit its ${agent.maxTurns}-turn ceiling without calling submit. The task is likely too broad for one delegation, or the scope was ambiguous.`;
+      return `${agent.name} hit its ${agent.maxTurns}-turn ceiling without calling submit. The task is likely too broad for one delegation, or the scope was ambiguous.${salvage}`;
     case "timeout":
-      return `${agent.name} exceeded ${Math.round(agent.timeoutMs / 1000)}s after ${state.turns} turn(s).`;
+      return `${agent.name} exceeded ${Math.round(agent.timeoutMs / 1000)}s after ${state.turns} turn(s).${salvage}`;
     case "no_submit":
-      return `${agent.name} exited cleanly after ${state.turns} turn(s) without calling submit. Its answer, if any, is in the artifact and was not validated.`;
+      return `${agent.name} exited cleanly after ${state.turns} turn(s) without calling submit. Its answer, if any, is in the artifact and was not validated.${salvage}`;
     case "aborted":
       return `${agent.name} was aborted after ${state.turns} turn(s).`;
     case "provider_error":
@@ -406,7 +437,17 @@ export async function dispatch(
  * and a provider-level rate reported a Flash scout as costing more than a
  * Sonnet review. Matched longest-prefix first.
  */
-const RATES: Array<[string, { in: number; out: number }]> = [
+/**
+ * Per-model rates, longest prefix wins.
+ *
+ * `cacheWrite` and `cacheRead` are multipliers of the input rate and default to
+ * Anthropic's 1.25 and 0.1. They are not universal: DeepSeek writes its prefix
+ * cache for free and reads it at ~1/30 of input, so charging it the Anthropic
+ * multipliers overstates a scout run several-fold — the same class of mistake
+ * as the per-provider table that once reported a Flash scout as cheaper than a
+ * Sonnet review.
+ */
+const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cacheRead?: number }]> = [
   ["anthropic/claude-opus", { in: 5, out: 25 }],
   ["anthropic/claude-haiku", { in: 0.8, out: 4 }],
   ["anthropic/claude-sonnet", { in: 2, out: 10 }],
@@ -421,6 +462,14 @@ const RATES: Array<[string, { in: number; out: number }]> = [
   ["google/gemini-3.5-flash", { in: 1.5, out: 9 }],
   ["google/gemini-3.1-pro", { in: 2, out: 12 }],
   ["google/gemini", { in: 2, out: 12 }],
+  // Peak rate, deliberately. The published tariff is peak/off-peak since
+  // 2026-08-16, and the peak window (01:00-04:00 and 06:00-10:00 UTC) covers
+  // most of a Paris working morning. A cost table that reports less than the
+  // bill is worse than one that reports more, so this encodes the ceiling:
+  // 0.44/1.32 peak, against 0.22/0.66 off-peak. Cache write is free and cache
+  // read is 0.007/M, i.e. 0.016 of the peak input rate.
+  ["deepseek/deepseek-v4-flash", { in: 0.44, out: 1.32, cacheWrite: 0, cacheRead: 0.016 }],
+  ["deepseek/deepseek-v4-pro", { in: 0.88, out: 2.64, cacheWrite: 0, cacheRead: 0.016 }],
   ["anthropic/", { in: 2, out: 10 }],
 ];
 
@@ -435,8 +484,8 @@ function estimateCost(
   const M = 1_000_000;
   return (
     (u.input * r.in) / M +
-    (u.cacheWrite * r.in * 1.25) / M +
-    (u.cacheRead * r.in * 0.1) / M +
+    (u.cacheWrite * r.in * (r.cacheWrite ?? 1.25)) / M +
+    (u.cacheRead * r.in * (r.cacheRead ?? 0.1)) / M +
     ((u.output + u.reasoning) * r.out) / M
   );
 }

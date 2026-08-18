@@ -44,6 +44,75 @@ let CALL_SEQ = 0;
  */
 let SCOUT_CALLS = 0;
 
+/**
+ * Delegations so far in this session, oldest first.
+ *
+ * Measured on run `ac451a`: the sequence ended `reviewer, reviewer, reviewer,
+ * reviewer, scout, scout, scout` — four reviews with no worker between them,
+ * then three completeness inventories of the same backlog. Seventeen
+ * delegations, and nobody decided it was finished. `INSTRUCTIONS.md` already
+ * said the session ends when every item has passed its end criterion; the rule
+ * was prose and did not fire.
+ */
+interface Delegation {
+  agent: string;
+  /** False when the child returned no envelope. A delegation that answered nothing must not block its own retry. */
+  produced: boolean;
+  readOnly: boolean;
+}
+const HISTORY: Delegation[] = [];
+
+/**
+ * A role that cannot change a file.
+ *
+ * Derived from the tool list rather than named, so a role added later is
+ * classified by what it can do rather than by having been remembered here.
+ * `bash` does not count as mutation: the scout has it, and what stops it
+ * mutating is its prompt, not this function.
+ */
+function isReadOnly(tools: readonly string[]): boolean {
+  return !tools.includes("edit") && !tools.includes("write");
+}
+
+function refuse(agentName: string, tools: readonly string[]): string | null {
+  const last = HISTORY[HISTORY.length - 1];
+  const before = HISTORY[HISTORY.length - 2];
+
+  // Unconditional on the verdict: no worker has run, so not one line of code
+  // differs. Reading the verdict would make the guard depend on an envelope
+  // field being parsed correctly; this does not. The exception is a review
+  // that returned nothing — refusing its replacement would trap the session —
+  // and two failures in a row still stop, so the retry is bounded at one.
+  if (
+    agentName === "reviewer" &&
+    last?.agent === "reviewer" &&
+    (last.produced || before?.agent === "reviewer")
+  ) {
+    return (
+      "Refused: a review already ran and no worker has run since. The code is " +
+      "unchanged, so this review would read the same files and reach the same verdict. " +
+      "If an item still needs work, delegate it to the worker. If every item has passed " +
+      "its end criterion, the session is finished — say so and stop."
+    );
+  }
+
+  const trailing = [...HISTORY].reverse().findIndex((d) => !d.readOnly);
+  const streak = trailing === -1 ? HISTORY.length : trailing;
+  if (isReadOnly(tools) && streak >= 2) {
+    const roles = HISTORY.slice(-streak)
+      .map((d) => d.agent)
+      .join(", ");
+    return (
+      `Refused: ${streak} read-only delegations already ran back to back (${roles}). ` +
+      "None of them can change a file, so a third gathers information that nothing has " +
+      "acted on. Act on what you have — delegate to the worker, answer the operator, or " +
+      "declare the backlog complete."
+    );
+  }
+
+  return null;
+}
+
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
 
@@ -118,6 +187,14 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text" as const, text: `unknown agent: ${params.agent}` }], isError: true };
         }
 
+        // Before anything is spawned. A refusal costs one tool result; the
+        // delegation it replaces cost between 28k and 306k tokens on the
+        // measured run.
+        const blocked = refuse(params.agent, agent.tools);
+        if (blocked) {
+          return { content: [{ type: "text" as const, text: blocked }], isError: true };
+        }
+
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
         // depend on how pi isolates them.
@@ -136,6 +213,12 @@ export default function (pi: ExtensionAPI) {
           onProgress: publish,
         });
         publish();
+
+        HISTORY.push({
+          agent: params.agent,
+          produced: !result.failure,
+          readOnly: isReadOnly(agent.tools),
+        });
 
         // Only the summary crosses back. The envelope stays on disk; the
         // orchestrator reads the artifact when it actually needs the findings.

@@ -241,6 +241,13 @@ the reviewer may weigh.
 
 ### Composing a task
 
+**Check the question fits the role before you write the task.** A badly framed
+delegation costs more than one not made: asked for a "final completeness
+inventory", a role built to report locations read the same nine files three
+times and returned nothing. The scout finds, the reviewer judges against a
+severity table, the worker implements an approved direction. A task that asks a
+role for something outside that is not a hard task — it is the wrong role.
+
 **Delegating replaces reading.** Do not read the file you are about to hand off:
 the child reads it anyway, and reading it here pays for it twice. Read only what
 is needed to decide *whether* to delegate — and if deciding requires a search,
@@ -302,11 +309,40 @@ orchestrator's own. Note that `Verdict` is also a section heading in
 
 ### Reading a result
 
-The tool returns one line — `[role: status, next=…] summary` — plus the artefact
-path. Deliberate: returning the whole payload would rebuild, one delegation at a
+The tool returns one line — `[role: verdict, N findings] summary` — plus the
+artefact path. Deliberate: returning the whole payload would rebuild, one delegation at a
 time, the context bloat this exists to remove. Read the artefact only when the
 summary is not enough to act. A failure returns its own explanation; do not
 paraphrase it, act on it.
+
+### Knowing when to stop
+
+**Delegation is not the work.** A delegation that changes no file has to earn
+its place: it must answer a question you are about to act on. Three read-only
+delegations in a row means nobody acted on the first two, and the extension
+refuses the third.
+
+**Two delegations of the same read-only role in sequence are already suspect.**
+A second review with no worker between reads the same code and reaches the same
+verdict — the extension refuses it outright. A second completeness inventory
+returns the same inventory.
+
+**The backlog's end criteria are the stop condition.** When every item has
+passed its criterion, the session is over: say so and stop. Do not delegate a
+verification of the verification. A criterion that cannot be evaluated is noted
+`unavailable` and the item still counts as done — waiting for it is not a reason
+to keep the session alive.
+
+**Write the synthesis yourself, before the next delegation.** After a round of
+reviews, put in your own answer: blockers or decisions that need Mo, fixes worth
+doing now, optional improvements, and what you are deliberately deferring with a
+short reason. That is orchestration, not a delegation — a synthesis delegated to
+a read-only role is exactly the third inventory the guard refuses. Do not apply
+every reviewer suggestion.
+
+Measured on run `ac451a`: seventeen delegations, of which the last seven changed
+no file — four reviews back to back, then three inventories of the same backlog.
+Every one returned `ok`. Nobody decided it was finished.
 
 ### Turn budgets
 
@@ -314,6 +350,14 @@ paraphrase it, act on it.
 extension — pi has no native turn cap. It is a backstop, not a scoping tool: a
 writer stopped mid-task leaves the working tree unverified. For writers, use a
 narrow task scope; the ceiling exists only to bound a runaway.
+
+**Reaching a ceiling does not save partial work — it loses all of it.** The
+child is killed without calling `submit`, so the envelope is `null` and the
+delegation returns one failure line plus whatever the child last said. Measured
+on `ac451a`: a scout reached its ceiling after 112,683 tokens. Each role's
+prompt now tells it to converge before the cap, but that is a request, not a
+guarantee: a task that plausibly needs more than half a role's turns is a task
+to split, not to launch and hope.
 
 ## Output discipline
 
