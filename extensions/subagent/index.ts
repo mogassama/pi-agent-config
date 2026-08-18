@@ -28,6 +28,12 @@ const SELF_DIR = join(AGENT_DIR, "subagent-only");
  */
 const RUN_ID = randomBytes(3).toString("hex");
 
+/**
+ * Call counter, so successive artefacts of the same role do not overwrite each
+ * other. Session-scoped like RUN_ID; only the artefact filename uses it.
+ */
+let CALL_SEQ = 0;
+
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
 
@@ -64,10 +70,18 @@ export default function (pi: ExtensionAPI) {
     task: Type.String({
       description:
         "The complete instruction. The child inherits nothing: no AGENTS.md, no " +
-        "conversation history, no prior tool calls. Name the files, state the " +
-        "goal, and quote any context the child cannot read for itself. Describe " +
-        "the work, not the output format — the envelope is imposed by the tool " +
-        "schema and does not need to be requested.",
+        "conversation history, no prior tool calls. Describe the work, not the " +
+        "output format — the envelope is imposed by the tool schema and does not " +
+        "need to be requested.\n\n" +
+        "Name every file the work depends on, by path. A child cannot see what " +
+        "you have not named: asked to write a schema without being told which " +
+        "data file it describes, it will invent one that is internally " +
+        "consistent, passes its own tests, and does not match reality. That has " +
+        "happened. Input data, configuration, fixtures, an existing module whose " +
+        "interface must be honoured — name them.\n\n" +
+        "Quote what the child cannot reach at all: anything from this " +
+        "conversation, from a bundle file, or from .pi/BRIEF.md must be pasted " +
+        "verbatim, not referred to.",
     }),
   });
 
@@ -79,6 +93,7 @@ export default function (pi: ExtensionAPI) {
         "Run one scoped task in a fresh pi process with its own model, tools and " +
         "conventions. Returns a one-line summary; the full result is written to disk.",
       promptGuidelines: [
+        "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a change you could make inline in fewer turns than composing the instruction would take.",
@@ -105,6 +120,7 @@ export default function (pi: ExtensionAPI) {
 
         const result = await dispatch(effective, params.task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
+          seq: ++CALL_SEQ,
           signal,
           onProgress: publish,
         });

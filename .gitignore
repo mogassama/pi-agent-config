@@ -15,6 +15,7 @@ extensions/pi-session-journal/
 journal.md
 
 # Local settings
+models.json
 
 # Node / TypeScript
 node_modules/

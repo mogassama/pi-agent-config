@@ -110,6 +110,17 @@ function consume(line: string, state: StreamState): void {
 
 export interface DispatchOptions {
   ctx: BuildContext;
+  /**
+   * Distinguishes artefacts of successive calls to the same role.
+   *
+   * The runId stays per session, not per call: the child's `--session-id`
+   * derives from it, and a worker called twice in one task keeps its provider
+   * cache affinity across both. But an artefact filename built from the runId
+   * alone made each call overwrite the previous one — measured on a real run,
+   * thirteen delegations left two files on disk, and the other eleven were only
+   * recoverable from the orchestrator's own session log.
+   */
+  seq?: number;
   /** Directory for full envelopes, relative to the project. */
   artifactDir?: string;
   /** Path to the pi executable. */
@@ -129,7 +140,8 @@ async function runOnce(
 ): Promise<RunResult> {
   const plan = buildSpawnPlan({ ...agent, model }, task, opts.ctx);
   const artifactDir = opts.artifactDir ?? join(process.cwd(), ".pi-subagent-runs");
-  const artifact = join(artifactDir, `${opts.ctx.runId}-${agent.name}.json`);
+  const seq = String(opts.seq ?? 0).padStart(2, "0");
+  const artifact = join(artifactDir, `${opts.ctx.runId}-${seq}-${agent.name}.json`);
 
   const state: StreamState = { turns: 0, submit: null, usage: emptyUsage(), stderr: [], providerError: null };
 

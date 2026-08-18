@@ -106,16 +106,20 @@ def main() -> None:
 
     args = sys.argv[1:]
     if args and args[0] == "--all":
+        tot = 0
         for f in files:
             a = analyse(f)
             u = a["usage"]
+            n = u["input"] + u["cacheRead"] + u["output"] + u["reasoning"] + u["cacheWrite"]
+            tot += n
             print(
-                f"{f.stem:<28} {a['turns']:>2} tours  "
-                f"{sum(a['per_turn']):>3} appels  "
-                f"{fmt(u['input'] + u['cacheRead'] + u['output']):>7}"
+                f"{f.stem:<30} {a['turns']:>2} tours  "
+                f"{sum(a['per_turn']):>3} appels  {fmt(n):>8}"
             )
+        print(f"\n{len(files)} délégation(s), {fmt(tot)} tokens au total")
         return
 
+    # Match on the run id, the sequence number or the role: 3f2a, 07, reviewer.
     targets = [f for f in files if args[0] in f.stem] if args else [files[-1]]
     for f in targets:
         report(analyse(f))

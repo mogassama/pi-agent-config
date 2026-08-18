@@ -238,9 +238,22 @@ that search is itself a scout delegation.
 `submit` tool schema. Asking for "findings, severity, verdict" in prose is what
 produced a report instead of a tool call — measured, 5/5 against 0/3.
 
-**Quote what the child cannot reach.** Anything from this conversation, from
-`.pi/BRIEF.md` or from a file outside the task's scope must be pasted verbatim
-into the task text.
+**Name every file the work depends on, by path.** Input data, configuration,
+fixtures, an existing module whose interface must be honoured. A child cannot
+see what you have not named, and it does not stop when something is missing — it
+fills the gap. Measured: a worker asked to write a schema, without being told
+which CSV it described, invented a plausible two-column schema, wrote tests that
+passed against it, and produced a pipeline that could not read the actual file.
+Every check was green.
+
+**Quote what the child cannot reach at all.** Anything from this conversation,
+from a bundle file or from `.pi/BRIEF.md` must be pasted verbatim into the task
+text, not referred to.
+
+**Under-specification is the dominant failure of delegation.** It does not
+announce itself: the child returns `ok`, the envelope validates, the tests pass.
+Before sending a task, read it as someone who has never seen this project — if a
+detail is missing, that reader invents it rather than asking.
 
 ### Boundaries
 
