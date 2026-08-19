@@ -189,8 +189,10 @@ Aucun timestamp, session ID ou valeur variable en tête d'un fichier du bundle :
 Extension `subagent`, one tool: `task({ agent, task })`. Each call spawns a fresh
 `pi` process with its own model, tool allowlist, hooks and skill slices.
 
-**A child inherits nothing.** No AGENTS.md, no conversation history, no prior
-tool calls, no `.pi/BRIEF.md`, no `APPEND_SYSTEM.md`. What is not in the task
+**A child inherits nothing it was not given.** No AGENTS.md, no conversation
+history, no prior tool calls, no `APPEND_SYSTEM.md`. One exception, declared per
+role: `.pi/BRIEF.md` is injected to roles carrying `projectBrief: true` — the
+worker today, and it alone. What is not in the task
 text or injected by the extension does not exist for it. Write the task as if
 to someone who has never seen this session — because that is the case.
 
