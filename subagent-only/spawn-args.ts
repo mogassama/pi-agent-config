@@ -54,8 +54,47 @@ export interface SpawnPlan {
  * That is not a limitation to work around — a child has no business loading
  * pi-subagents or the powerline footer.
  */
+/**
+ * Roots of a package installed from a git source.
+ *
+ * They do not land in `npm/node_modules`. A `packages` entry that is a URL is
+ * cloned to `<agentDir>/git/<host>/<owner>/<repo>` — found by looking, after the
+ * scout moved to a git-sourced provider and the resolver reported the extension
+ * as missing while it sat on disk. Host and owner are discovered rather than
+ * named: the next one will not be on github.com under the same account, and a
+ * hardcoded path is something one only fixes twice.
+ */
+function gitPackageRoots(agentDir: string, name: string): string[] {
+  const base = join(agentDir, "git");
+  const roots: string[] = [];
+  let hosts: string[];
+  try {
+    hosts = readdirSync(base);
+  } catch {
+    return roots;
+  }
+  for (const host of hosts) {
+    let owners: string[];
+    try {
+      owners = readdirSync(join(base, host));
+    } catch {
+      continue;
+    }
+    for (const owner of owners) {
+      const p = join(base, host, owner, name);
+      if (existsSync(p)) roots.push(p);
+    }
+  }
+  return roots;
+}
+
 export function resolveExtension(name: string, ctx: BuildContext): string {
   const npmRoot = join(ctx.agentDir, "npm", "node_modules", name);
+  const entries = (root: string) => [
+    join(root, "index.ts"),
+    join(root, "src", "index.ts"),
+    join(root, "dist", "index.js"),
+  ];
   const candidates =
     name === "envelope"
       ? [join(ctx.selfDir, "envelope", "envelope.ts"), join(ctx.selfDir, "envelope.ts")]
@@ -64,9 +103,8 @@ export function resolveExtension(name: string, ctx: BuildContext): string {
           // npm-installed packages live on disk under <agentDir>/npm/node_modules
           // (core/package-manager.js:1677), so -e reaches them even though
           // discovery — which -ne disables — is how they normally load.
-          join(npmRoot, "index.ts"),
-          join(npmRoot, "src", "index.ts"),
-          join(npmRoot, "dist", "index.js"),
+          ...entries(npmRoot),
+          ...gitPackageRoots(ctx.agentDir, name).flatMap(entries),
         ];
 
   for (const p of candidates) if (existsSync(p)) return p;
