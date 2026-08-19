@@ -498,7 +498,16 @@ function estimateCost(
     (u.input * r.in) / M +
     (u.cacheWrite * r.in * (r.cacheWrite ?? 1.25)) / M +
     (u.cacheRead * r.in * (r.cacheRead ?? 0.1)) / M +
-    ((u.output + u.reasoning) * r.out) / M
+    // `reasoning` is a subset of `output`, not a line of its own: the provider
+    // counts thinking tokens inside output_tokens. Adding them charged the same
+    // tokens twice. Measured on run 8c88c5, four reviews: output 18,219 of which
+    // reasoning 13,986, leaving 4,233 tokens of text — 1,058 per review, which
+    // matches envelopes of roughly 750. Were the two disjoint, each review would
+    // have emitted 4,555 tokens of text, which no envelope in the run comes near.
+    // The sum estimated 0.582 $ against a real bill of 0.40 $; output alone gives
+    // 0.442 $. It stays in the artefact and in subagent-trace — how much of the
+    // output was thinking is worth knowing — but it never enters the cost.
+    (u.output * r.out) / M
   );
 }
 

@@ -17,11 +17,17 @@ timeoutMs: 900000
 
 You are reviewing one change, read-only. You modify nothing.
 
-**Everything you need is already in this prompt.** There is no AGENTS.md, no
-CLAUDE.md and no project brief to find. Do not search for configuration files,
-conventions files or instructions elsewhere in the repository — they are not
-there, and looking for them wastes a turn. Read only the files named in the
-task, plus what is strictly required to confirm a finding.
+**Everything you need is in this prompt.** No AGENTS.md, no CLAUDE.md, no
+conversation history: whatever this repository contains, none of it was loaded
+into your context.
+
+**Do not open the project's instruction files.** A bundled project keeps
+`INSTRUCTIONS.md`, `ARCHITECTURE.md`, `DESIGN.md` and `CONVENTIONS.md` at its
+root. They exist, they are frozen, and whatever you need from them has been
+quoted into your task verbatim. Opening them costs turns and returns what you
+were already given. The severity table you judge against is
+in this prompt already. Read only the files named in the task, plus what is
+strictly required to confirm a finding.
 
 Judge against the conventions above and weigh each breach with the severity
 table that accompanies them. A defect outside the reviewed file goes in

@@ -17,8 +17,17 @@ timeoutMs: 1200000
 
 You implement one scoped change and write it directly to the working tree.
 
-**Everything you need is already in this prompt.** There is no AGENTS.md, no
-CLAUDE.md and no project brief to find. Do not search for configuration files.
+**Everything you need is in this prompt.** No AGENTS.md, no CLAUDE.md, no
+conversation history: whatever this repository contains, none of it was loaded
+into your context.
+
+**Do not open the project's instruction files.** A bundled project keeps
+`INSTRUCTIONS.md`, `ARCHITECTURE.md`, `DESIGN.md` and `CONVENTIONS.md` at its
+root. They exist, they are frozen, and whatever you need from them has been
+quoted into your task verbatim. Opening them costs turns and returns what you
+were already given. Measured on run `8c88c5`: a worker spent six
+turns reading before its first write, four of those reads on bundle files whose
+relevant content was already in its task text.
 
 **Verification floor.** `pi-lint-gate` runs ruff after every `.py` edit and
 mypy at turn end — do not re-run them by hand. Compilation checks, AST
