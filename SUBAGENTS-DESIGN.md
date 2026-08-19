@@ -1,5 +1,11 @@
 # mo-subagents — décisions de conception
 
+> **Statut au 19 août 2026 — document historique.** Il enregistre les mesures et
+> les arbitrages qui ont produit l'architecture, à leur date. Il n'est pas
+> maintenu à l'état courant : trois runs de bout en bout (`3ed33e`, `ac451a`,
+> `f0797e`) ont depuis corrigé plusieurs de ses conclusions. **`CHANTIER.md` fait
+> foi sur l'état actuel** ; ce fichier fait foi sur ce qui a été mesuré quand.
+
 Statut : **brouillon**. Chaque décision porte sa justification mesurée ou son statut `À TRANCHER`.
 
 Révision du 3 août 2026 — vérification dans la source de `@earendil-works/pi-coding-agent` 0.83.0 et dans le dépôt `mogassama/pi-agent-config@main`. Ajout de D0. Corrections : mécanisme d'injection des skills, `-ne` chez le worker, deux régimes de `--session-id`, cible de contexte par rôle.

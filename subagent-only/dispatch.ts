@@ -38,6 +38,15 @@ export interface RunResult {
   verdict?: string;
   findings?: number;
   outOfScope?: number;
+  /**
+   * Paths the delegation says it wrote.
+   *
+   * Two consumers: the diff handed to the next review, and the loop guard's
+   * notion of a material change. A worker that returns an empty list has run
+   * without altering the tree, which resets the read-only streak today and lets
+   * a review of unchanged code through.
+   */
+  changedFiles?: string[];
   /** Where the full envelope was written. The orchestrator reads it only if it needs to. */
   artifact: string;
   turns: number;
@@ -335,6 +344,9 @@ async function runOnce(
     verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
     findings: Array.isArray(envelope.findings) ? envelope.findings.length : undefined,
     outOfScope: Array.isArray(envelope.out_of_scope) ? envelope.out_of_scope.length : undefined,
+    changedFiles: Array.isArray(envelope.changed_files)
+      ? envelope.changed_files.filter((f: unknown): f is string => typeof f === "string")
+      : undefined,
     artifact,
     turns: state.turns,
     usage: state.usage,

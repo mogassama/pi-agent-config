@@ -51,7 +51,7 @@ Corollaire de rédaction, valable pour les deux cibles : **aucun fichier du bund
 
 ### Cible **pi** — agent principal, multi-provider
 
-Outils natifs `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` ; extensions `subagent` (l'outil `task`), `subagent-footer`, `bash-guard`, `pi-bq-cost-sentinel`, `pi-lint-gate`, `pi-check-config`, `pi-diff-review`, `pi-project-brief`, `@tmustier/pi-raw-paste`.
+Outils natifs `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` ; extensions `subagent` (l'outil `task`), `subagent-footer`, `bash-guard`, `pi-bq-cost-sentinel`, `pi-lint-gate`, `pi-check-config`, `pi-project-brief`, `@tmustier/pi-raw-paste`.
 
 **Aucun sous-agent ne lit le bundle. Jamais. Seul l'orchestrateur le lit.**
 

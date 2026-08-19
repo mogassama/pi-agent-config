@@ -1,5 +1,11 @@
 # Plan de remédiation v2 — après mesure
 
+> **Statut au 19 août 2026 — document historique.** Il enregistre les mesures et
+> les arbitrages qui ont produit l'architecture, à leur date. Il n'est pas
+> maintenu à l'état courant : trois runs de bout en bout (`3ed33e`, `ac451a`,
+> `f0797e`) ont depuis corrigé plusieurs de ses conclusions. **`CHANTIER.md` fait
+> foi sur l'état actuel** ; ce fichier fait foi sur ce qui a été mesuré quand.
+
 Remplace le plan v1 sur tout ce qui touche aux priorités. Le v1 reste utile pour le détail des 44 constats de récolte.
 
 *Révision du 3 août 2026 — trois planchers de contexte mesurés directement, décomposition déclarée non additive, coût déclaré notionnel, ligne `thinking` corrigée, quatre comptages de l'étape D rectifiés.*

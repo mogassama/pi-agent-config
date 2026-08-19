@@ -24,7 +24,6 @@ from a run, not from a guess.
 │   ├── bash-guard/                  # Confirmation on destructive commands
 │   ├── pi-bq-cost-sentinel/         # BigQuery cost gate on every `bq query`
 │   ├── pi-check-config/             # /check-config — consistency, two tiers
-│   ├── pi-diff-review/              # /diff-review — commits and PRs
 │   ├── pi-lint-gate/                # ruff after .py edits, mypy at turn end
 │   └── pi-project-brief/            # /brief — .pi/BRIEF.md orientation note
 ├── subagent-only/                   # Loaded into children, never the orchestrator
@@ -76,17 +75,28 @@ so a reviewer once accused the orchestrator of fabricating its own delegations.
 
 ### Agents
 
-| Agent | Model | Fallback | Thinking | Tools |
-|---|---|---|---|---|
-| `worker` | `openai-codex/gpt-5.6-sol` (subscription) | `gpt-5.6-terra` | medium | read, grep, find, ls, bash, edit, write |
-| `reviewer` | `anthropic/claude-sonnet-5` (API, ~0.06 $/review) | `gemini-3.1-pro-preview` | medium | read, grep, find, ls |
-| `scout` | `google/gemini-3.1-flash-lite` (< 0.01 $/search) | `gemini-3.5-flash-lite`, `gpt-5.6-sol` | low | read, grep, find, ls, bash |
+| Agent | Model | Fallback | Thinking | Tools | Turns |
+|---|---|---|---|---|--:|
+| `worker` | `openai-codex/gpt-5.6-sol` (subscription) | `gpt-5.6-terra` | medium | read, grep, find, ls, bash, edit, write | 20 |
+| `reviewer` | `anthropic/claude-sonnet-5` (API) | `gemini-3.1-pro-preview` | medium | read, ls | 6 |
+| `scout` | `deepseek/deepseek-v4-flash` | `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite` | low | read, grep, find, ls, bash | 12 |
+
+Every role runs ephemeral. `--session-id` is passed either way, so provider cache
+affinity does not depend on carrying history — and history, measured, was carried
+and not used: 24 re-reads of byte-identical content already in the session.
 
 Three model families, deliberately. A reviewer on the worker's family is a
 judge-and-party arrangement; `/check-config` reports it if it ever happens.
 
-`advisor` has a schema in `envelope.ts` and no definition. Writing it waits on
-real usage: its trigger condition is not measurable yet.
+The reviewer has neither `bash` nor `grep`: it judges files, the scout finds them,
+the orchestrator decides which. It is handed the diff instead — built by the
+extension from the previous worker envelope's `changed_files`, since workers never
+commit and `HEAD~1` fails on a single-commit bundle repo. Above 15 files or 32 kB
+the task carries the file list and the reviewer reads.
+
+`advisor` has a schema in `envelope.ts` and no definition. Planned with Sonnet 5
+while the reviewer moves to Qwen 3.8 Max — the better model goes where a mistake
+costs most, not where it runs most. Entry conditions are in `CHANTIER.md` §6.
 
 Definitions live in `subagent-only/agents/*.md` — frontmatter for the wiring,
 body for the role prompt. Every failure is raised at load time, not mid-task: a
@@ -177,7 +187,6 @@ legitimately has no delta costs a whole run.
 | `pi-bq-cost-sentinel/` | Dry-runs every `bq query` issued through `bash`, subagents included. <1 GB passes, 1 GB–1 TB warns, >1 TB blocks. |
 | `pi-lint-gate/` | `ruff` after every `.py` edit, appended to the tool result the agent reads next. `mypy` once per turn on the files touched. |
 | `pi-check-config/` | `/check-config` — blocking and report tiers over skills, agent definitions, the `## Review delta` marker, and model-family diversity. |
-| `pi-diff-review/` | `/diff-review` — review commits and PRs. |
 | `pi-project-brief/` | `/brief` — writes `.pi/BRIEF.md`, a ≤40-line orientation note. The extension itself does not reach children (`-ne` is active); the file is injected directly by `spawn-args` for roles declaring `projectBrief: true` — the worker only. |
 | `@tmustier/pi-raw-paste` | Raw paste handling (npm). |
 

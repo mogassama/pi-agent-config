@@ -340,6 +340,17 @@ short reason. That is orchestration, not a delegation — a synthesis delegated 
 a read-only role is exactly the third inventory the guard refuses. Do not apply
 every reviewer suggestion.
 
+**A review that surfaces an unapproved decision stops the loop.** Scope, product
+or architecture choices that the bundle does not settle are not yours to take on
+a reviewer's suggestion. Put the question to Mo and wait; do not launch a fix
+worker to make the decision by implementing it.
+
+**Say why the loop stopped.** When the session ends, state it in one line —
+rounds run, fixes applied, what is deferred, and which of the stop conditions
+fired. Across three measured runs the orchestrator never once had to name its
+stop condition, and `ac451a` ended on three identical inventories because
+nothing obliged it to.
+
 Measured on run `ac451a`: seventeen delegations, of which the last seven changed
 no file — four reviews back to back, then three inventories of the same backlog.
 Every one returned `ok`. Nobody decided it was finished.
