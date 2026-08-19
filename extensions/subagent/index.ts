@@ -8,7 +8,7 @@
  * and costs 5468 tokens of the orchestrator's 14528.
  */
 
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -261,6 +261,38 @@ export default function (pi: ExtensionAPI) {
     ui = ctx.ui;
   });
 
+  /**
+   * The orchestrator's own writes, recorded as if they were a delegation.
+   *
+   * Measured on run `adee82`: the orchestrator wrote seven modules and made two
+   * edits itself, then delegated one worker and one review. The review returned
+   * `needs_rework`, the fix was made inline, and no second review ran — it could
+   * not have. `HISTORY` only ever saw delegations, so after that review the
+   * guard's first rule fired unconditionally, and a review that had run would
+   * have been handed no diff, `lastWrite` finding no delegation with changed
+   * files. The guard was rewarding the bypass: the more the orchestrator wrote
+   * itself, the less its work could be reviewed.
+   *
+   * This does not forbid anything. It makes an inline write count as what it is
+   * — a material change to the tree — so the material-change rule stays true,
+   * the next review gets its diff, and the refusal log shows who wrote what.
+   */
+  pi.on("tool_call", async (event) => {
+    const path =
+      isToolCallEventType("write", event) || isToolCallEventType("edit", event)
+        ? (event.input as { path?: string })?.path
+        : undefined;
+    if (!path) return undefined;
+
+    const last = HISTORY[HISTORY.length - 1];
+    if (last?.agent === "orchestrator") {
+      if (!last.changedFiles.includes(path)) last.changedFiles.push(path);
+    } else {
+      HISTORY.push({ agent: "orchestrator", produced: true, readOnly: false, changedFiles: [path] });
+    }
+    return undefined;
+  });
+
   if (agents.size === 0) {
     // Loud, and only in the orchestrator's console: a delegation primitive
     // that registers nothing would look like a model refusing to delegate.
@@ -314,7 +346,7 @@ export default function (pi: ExtensionAPI) {
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
-        "Do not delegate a write you could make inline in fewer turns than composing the instruction would take. This never applies to a scout: a search is delegated because it is a search, not because it is large.",
+        "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of a backlog deliverable: both are delegated for what they are, not for how large they are.",
         "The child sees only the task text. Anything implicit here is absent there.",
       ],
       parameters,

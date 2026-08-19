@@ -281,6 +281,19 @@ detail is missing, that reader invents it rather than asking.
 **Handle inline — never delegate:** conversational answers, single-line edits,
 reading one file, coordinating subagent results, the decision to delegate itself.
 
+**Never handle inline — always delegate:** the code of a backlog deliverable.
+Whatever the threshold says, whatever the bundle has already settled, a
+deliverable is written by a worker and judged by a reviewer. The reason is
+structural, not economic, so it does not lose to a cost calculation: code you
+write yourself is judged against a task you also wrote, by a reviewer whose diff
+is built from a worker envelope that does not exist. Measured on run `adee82`:
+the orchestrator wrote seven modules and made two edits itself, one review ran,
+it returned `needs_rework`, and the fix was never judged by anyone. The run was
+the cheapest of six and the only one whose last verdict stayed open.
+
+A single-line edit stays inline. A module does not become one because the bundle
+made it obvious what to write.
+
 **Never delegate regardless of agent:** secret rotation, prod credentials, IAM
 grants on production, `terraform apply` on prod, production data without explicit
 operator confirmation, forks where the operator has not been consulted.
