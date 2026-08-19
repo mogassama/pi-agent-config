@@ -194,6 +194,25 @@ function gitDiffFor(paths: string[]): string {
   return chunks.join("\n");
 }
 
+/**
+ * Every path written since the last review, oldest first.
+ *
+ * Not "whatever wrote last". `f0797e` ran `worker, worker, reviewer`, where the
+ * last-writer rule would have shown the review only the second worker's files;
+ * and since inline writes are recorded, an orchestrator marking `DESIGN.md`
+ * implemented between a worker and its review would have shadowed the code
+ * entirely, handing the reviewer a diff of a status field. Neither had bitten
+ * yet, which is the only reason this is a correction and not an incident.
+ */
+function changedSinceLastReview(): string[] {
+  const paths: string[] = [];
+  for (let i = HISTORY.length - 1; i >= 0; i--) {
+    if (HISTORY[i].agent === "reviewer") break;
+    paths.unshift(...HISTORY[i].changedFiles);
+  }
+  return [...new Set(paths)];
+}
+
 function diffSection(paths: string[]): string {
   const files = paths.filter(Boolean);
   if (files.length === 0) return "";
@@ -366,13 +385,19 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text" as const, text: blocked }], isError: true };
         }
 
-        // The reviewer judges a change, so it is handed the change. Sourced from
-        // the last writer's own envelope, not from a git revision the worker
-        // never created.
-        const lastWrite = [...HISTORY].reverse().find((d) => d.changedFiles.length > 0);
+        // The reviewer judges a change, so it is handed the change: everything
+        // written since the last review, not merely whatever wrote last.
+        //
+        // Two ways the old "last writer wins" was wrong, neither of which had
+        // bitten yet. `f0797e` ran `worker, worker, reviewer` — the review would
+        // have seen only the second worker's files. And since inline writes
+        // started being recorded, an orchestrator marking `DESIGN.md` as
+        // implemented between a worker and its review would have shadowed the
+        // code entirely, handing the reviewer a diff of a status field.
+        const changed = changedSinceLastReview();
         const task =
-          params.agent === "reviewer" && lastWrite
-            ? `${diffSection(lastWrite.changedFiles)}${params.task}`
+          params.agent === "reviewer" && changed.length > 0
+            ? `${diffSection(changed)}${params.task}`
             : params.task;
 
         // Publish run state for the footer. getExtensionStatuses() is the
