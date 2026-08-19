@@ -11,6 +11,8 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
@@ -59,6 +61,8 @@ interface Delegation {
   /** False when the child returned no envelope. A delegation that answered nothing must not block its own retry. */
   produced: boolean;
   readOnly: boolean;
+  /** Paths the delegation wrote. Empty for a read-only role, and for a writer that changed nothing. */
+  changedFiles: string[];
 }
 const HISTORY: Delegation[] = [];
 
@@ -96,21 +100,155 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
     );
   }
 
-  const trailing = [...HISTORY].reverse().findIndex((d) => !d.readOnly);
-  const streak = trailing === -1 ? HISTORY.length : trailing;
+  // The same rule, one step further out: a worker that wrote nothing leaves the
+  // tree exactly as the last review found it, so the review that follows it is
+  // the same review. pi-subagents states the criterion as "run another review
+  // round only when it made material changes"; changed_files is what makes it
+  // computable rather than a judgement call.
+  const sinceReview = [...HISTORY].reverse().findIndex((d) => d.agent === "reviewer");
+  if (agentName === "reviewer" && sinceReview > 0) {
+    const between = HISTORY.slice(HISTORY.length - sinceReview);
+    if (between.every((d) => d.produced && d.changedFiles.length === 0)) {
+      const roles = between.map((d) => d.agent).join(", ");
+      return (
+        `Refused: nothing has changed on disk since the last review (${roles} ran and ` +
+        "reported no changed files). The review would read the same tree and reach the same " +
+        "verdict. Act on the last review's findings, or declare the item done."
+      );
+    }
+  }
+
+  // Same role, not merely same innocuousness. "Cannot mutate" groups two things
+  // that share only their harmlessness: a reviewer runs after work and a second
+  // one reads the same code, while a scout runs before it and three scouts can
+  // be three different questions. What ac451a actually showed was three
+  // *identical* inventories — same role, back to back — and that is what this
+  // counts. A scout following a reviewer is not a streak.
+  const streak = HISTORY.reduce(
+    (n, d) => (d.agent === agentName ? n + 1 : 0),
+    0,
+  );
   if (isReadOnly(tools) && streak >= 2) {
-    const roles = HISTORY.slice(-streak)
-      .map((d) => d.agent)
-      .join(", ");
     return (
-      `Refused: ${streak} read-only delegations already ran back to back (${roles}). ` +
-      "None of them can change a file, so a third gathers information that nothing has " +
-      "acted on. Act on what you have — delegate to the worker, answer the operator, or " +
-      "declare the backlog complete."
+      `Refused: ${streak} ${agentName} delegations already ran back to back, and the role ` +
+      "cannot change a file. A third gathers information that nothing has acted on. Act on " +
+      "what you have — delegate to the worker, answer the operator, or declare the backlog " +
+      "complete."
     );
   }
 
   return null;
+}
+
+/**
+ * The change a review is about to judge, as a diff.
+ *
+ * A reviewer that receives paths has no definition of "the change": it cannot
+ * tell what was just written from what was already there, so it reads
+ * everything and re-judges everything. Measured across three runs — 22k tokens
+ * ingested per review on a 271-line project — and it is the reason the six
+ * admission criteria in reviewer.md are worth writing at all: "introduced in
+ * patch" has no meaning without a patch boundary.
+ *
+ * `git diff HEAD~1` is not usable here. Workers never commit, and a bundle repo
+ * has a single commit, so HEAD~1 fails and the fallback returns everything since
+ * the bundle — growing with each deliverable. The boundary that is actually
+ * correct is the previous worker's own `changed_files`.
+ */
+const DIFF_MAX_CHARS = 32_000; // ≈ 8k tokens, the whole frozen bundle's worth
+const DIFF_MAX_FILES = 15;
+
+function gitDiffFor(paths: string[]): string {
+  const run = (args: string[]): string => {
+    try {
+      return execFileSync("git", args, {
+        cwd: process.cwd(),
+        encoding: "utf-8",
+        maxBuffer: 8 * 1024 * 1024,
+      });
+    } catch (err) {
+      // `git diff --no-index` exits 1 when the files differ, which is the
+      // normal case for a new file. The output is on stdout either way.
+      const out = (err as { stdout?: string })?.stdout;
+      return typeof out === "string" ? out : "";
+    }
+  };
+
+  const chunks: string[] = [];
+  for (const path of paths) {
+    let tracked = true;
+    try {
+      execFileSync("git", ["ls-files", "--error-unmatch", "--", path], {
+        cwd: process.cwd(),
+        stdio: "ignore",
+      });
+    } catch {
+      tracked = false;
+    }
+    // An untracked file has no diff against HEAD. --no-index against /dev/null
+    // produces the new-file diff git would have produced, without touching the
+    // index — `git add -N` would work too and would mutate state the worker owns.
+    const out = tracked ? run(["diff", "HEAD", "--", path]) : run(["diff", "--no-index", "--", "/dev/null", path]);
+    if (out.trim()) chunks.push(out.trimEnd());
+  }
+  return chunks.join("\n");
+}
+
+function diffSection(paths: string[]): string {
+  const files = paths.filter(Boolean);
+  if (files.length === 0) return "";
+
+  if (files.length > DIFF_MAX_FILES) {
+    return (
+      `Changed files (${files.length}, too many to inline):\n` +
+      files.map((f) => `  - ${f}`).join("\n") +
+      "\n\nRead these files to see the change. Judge only what this change introduced.\n\n"
+    );
+  }
+
+  const diff = gitDiffFor(files);
+  if (!diff.trim()) return "";
+
+  if (diff.length > DIFF_MAX_CHARS) {
+    return (
+      `Changed files (${files.length}, diff too large to inline at ${Math.round(diff.length / 1000)}kB):\n` +
+      files.map((f) => `  - ${f}`).join("\n") +
+      "\n\nRead these files to see the change. Judge only what this change introduced.\n\n"
+    );
+  }
+
+  return (
+    "The change under review, as a diff. Do not reconstruct it — it is here.\n" +
+    "You may read any file for context, including files this diff does not touch;\n" +
+    "judge only what the diff introduced.\n\n" +
+    `<diff>\n${diff}\n</diff>\n\n`
+  );
+}
+
+/**
+ * Refusals, on disk, next to the artefacts.
+ *
+ * A refusal returns and does not write, so after run `f0797e` there was no way
+ * to tell whether the guard had fired or simply never needed to. An empty file
+ * is a measurement; a missing file is a supposition.
+ */
+function logRefusal(runId: string, agentName: string, reason: string): void {
+  try {
+    const dir = join(process.cwd(), ".pi-subagent-runs");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(
+      join(dir, `${runId}-refusals.jsonl`),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        refused: agentName,
+        reason,
+        history: HISTORY.map((d) => ({ agent: d.agent, changed: d.changedFiles.length })),
+      }) + "\n",
+      "utf-8",
+    );
+  } catch {
+    // A guard that cannot journal still guards.
+  }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -174,7 +312,7 @@ export default function (pi: ExtensionAPI) {
       promptGuidelines: [
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
-        "A task asking whether something is consistent, complete, or has a single source is a where-question. Scout it first and name the locations, or you are buying a search at the reviewer's rate.",
+        "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a write you could make inline in fewer turns than composing the instruction would take. This never applies to a scout: a search is delegated because it is a search, not because it is large.",
         "The child sees only the task text. Anything implicit here is absent there.",
@@ -192,8 +330,18 @@ export default function (pi: ExtensionAPI) {
         // measured run.
         const blocked = refuse(params.agent, agent.tools);
         if (blocked) {
+          logRefusal(RUN_ID, params.agent, blocked);
           return { content: [{ type: "text" as const, text: blocked }], isError: true };
         }
+
+        // The reviewer judges a change, so it is handed the change. Sourced from
+        // the last writer's own envelope, not from a git revision the worker
+        // never created.
+        const lastWrite = [...HISTORY].reverse().find((d) => d.changedFiles.length > 0);
+        const task =
+          params.agent === "reviewer" && lastWrite
+            ? `${diffSection(lastWrite.changedFiles)}${params.task}`
+            : params.task;
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
@@ -206,7 +354,7 @@ export default function (pi: ExtensionAPI) {
         const effective =
           params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : agent;
 
-        const result = await dispatch(effective, params.task, {
+        const result = await dispatch(effective, task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
           seq: ++CALL_SEQ,
           signal,
@@ -218,6 +366,7 @@ export default function (pi: ExtensionAPI) {
           agent: params.agent,
           produced: !result.failure,
           readOnly: isReadOnly(agent.tools),
+          changedFiles: result.changedFiles ?? [],
         });
 
         // Only the summary crosses back. The envelope stays on disk; the
