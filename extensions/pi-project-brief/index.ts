@@ -19,11 +19,15 @@
  *      into ≤ maxLines of prose, once per project, and again only when the
  *      structure moves. Staleness is a git call, not a model call.
  *
- *   3. Injection follows inheritProjectContext. pi-subagents exports it as
- *      PI_SUBAGENT_INHERIT_PROJECT_CONTEXT, so the extension honours the choice
- *      already made per agent in settings.json rather than inventing its own.
- *      scout is denied on top of that: it ships with inheritProjectContext true
- *      and is called 50–200 times a session.
+ *   3. One reader: the orchestrator. Children run with --no-extensions, so this
+ *      extension is never loaded in one — a subagent that receives the brief
+ *      receives it from spawn-args, by its own `projectBrief` field. The
+ *      orchestrator is the right reader anyway: it composes task texts and must
+ *      know what exists in order to name it, and its curiosity costs its own
+ *      context rather than a delegation. A worker given the same summary stops
+ *      going to look, which is the one thing a worker must not stop doing.
+ *      (An earlier version routed injection through pi-subagents' env vars.
+ *      That package is gone; so is the code that read them.)
  *
  *   4. The deterministic guarantees stay in code. The model writes the prose;
  *      this extension enforces the line cap, writes the sidecar, and adds the
@@ -34,14 +38,14 @@
  *     "enabled": true,
  *     "maxLines": 40,
  *     "staleAfterDays": 90,
- *     "denyAgents": ["scout"],
  *     "commitBrief": false
  *   }
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, isWriteToolResult } from "@earendil-works/pi-coding-agent";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -52,7 +56,6 @@ interface ProjectBriefSettings {
   enabled?: boolean;
   maxLines?: number;
   staleAfterDays?: number;
-  denyAgents?: string[];
   /** True = the brief is meant to be versioned; no git exclusion is written. */
   commitBrief?: boolean;
 }
@@ -60,7 +63,6 @@ interface ProjectBriefSettings {
 const DEFAULTS = {
   maxLines: 40,
   staleAfterDays: 90,
-  denyAgents: ["scout"],
 };
 
 function loadSettings(): ProjectBriefSettings {
@@ -80,8 +82,13 @@ const briefPath = (cwd: string) => join(cwd, ".pi", "BRIEF.md");
 const metaPath = (cwd: string) => join(cwd, ".pi", "brief.meta.json");
 
 interface BriefMeta {
-  /** Commit the brief was generated from. */
+  /** Commit the brief was generated from. Kept for provenance; not used for staleness. */
   commit?: string;
+  /**
+   * Fingerprint of the working tree at generation: sorted tracked paths plus
+   * untracked data files. Compared against the disk, not against history.
+   */
+  treeHash?: string;
   generatedAt?: string;
   /** "later" = ask again when structure moves. "never" = stop asking. */
   declined?: "later" | "never";
@@ -110,22 +117,14 @@ function writeMeta(cwd: string, meta: BriefMeta): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Orchestrator → yes. Subagent → whatever its inheritProjectContext says,
- * minus the deny list. No new configuration surface: settings.json already
- * carries this decision per agent.
+ * The orchestrator, and only it.
+ *
+ * There was a `shouldInject` here reading PI_SUBAGENT_INHERIT_PROJECT_CONTEXT
+ * and PI_SUBAGENT_CHILD_AGENT, with a `denyAgents` list on top. Both variables
+ * were exported by pi-subagents, removed since; nothing sets them. And children
+ * spawn with --no-extensions, so this file is never loaded in one. Thirty lines
+ * decided who among readers that could not reach them got the brief.
  */
-function shouldInject(deny: string[]): boolean {
-  const inherit = process.env["PI_SUBAGENT_INHERIT_PROJECT_CONTEXT"];
-  if (inherit === "0") return false;
-  const agent = process.env["PI_SUBAGENT_CHILD_AGENT"];
-  if (agent && deny.includes(agent)) return false;
-  return true;
-}
-
-/** Only a real interactive session may generate. Subagents read, never write. */
-function isOrchestrator(): boolean {
-  return process.env["PI_SUBAGENT_CHILD_AGENT"] === undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Freshness — one git call, no model
@@ -147,27 +146,57 @@ async function freshness(pi: ExtensionAPI, cwd: string, staleAfterDays: number):
     }
   }
 
-  if (!meta.commit) return { state: "fresh" };
+  if (!meta.treeHash) return { state: "fresh" }; // generated before fingerprints existed
 
-  // A file added or deleted moved the structure. A file merely edited did not.
-  try {
-    const res = await pi.exec("git", ["diff", "--name-status", meta.commit, "HEAD"], {
-      timeout: 10_000,
-    });
-    if ((res.code ?? 1) !== 0) return { state: "fresh" }; // unknown commit — do not nag
-    const lines = (res.stdout || "").trim().split("\n").filter(Boolean);
-    const moved = lines.filter((l) => {
-      const [status, path = ""] = l.split("\t");
-      if (status?.startsWith("A") || status?.startsWith("D") || status?.startsWith("R")) return true;
-      return STRUCTURAL.test(path.split("/").pop() ?? "");
-    });
-    if (moved.length > 0) {
-      return { state: "stale", reason: `${moved.length} structural change(s) since generation` };
-    }
-  } catch {
-    /* no git, or not a repo — treat as fresh */
+  // The tree as it is, not the history as it was recorded.
+  //
+  // This compared `git diff meta.commit HEAD`, which cannot fire where it
+  // matters: workers never commit, and a bundle project has a single commit, so
+  // meta.commit equals HEAD from the first delegation to the last and the diff
+  // is empty however far the working tree has moved. Measured on csv-to-bq: the
+  // brief described `src/`, `sql/`, entry points and operational traps of a repo
+  // whose only commit contains four Markdown files and a .gitignore — it had
+  // survived the reset, `.pi/` being excluded from git, and was reported fresh
+  // through seven runs.
+  const now = await treeFingerprint(pi, cwd);
+  if (now && now !== meta.treeHash) {
+    return { state: "stale", reason: "the working tree has moved since generation" };
   }
   return { state: "fresh" };
+}
+
+/**
+ * What the brief describes, hashed: the tracked paths and the untracked data
+ * files. Names only — a file whose contents changed did not move the structure,
+ * and re-generating on every edit would defeat the point of a stable prefix.
+ */
+async function treeFingerprint(_pi: ExtensionAPI, cwd: string): Promise<string> {
+  // The working tree, walked. Not `git ls-files`: on a bundle project the code
+  // is never committed, so the tracked list is the four bundle files from the
+  // first delegation to the last and a fingerprint built on it never moves —
+  // the same blindness the digest was just corrected for, one function later.
+  const names: string[] = [];
+  const walk = (dir: string, rel: string, depth: number): void => {
+    if (names.length >= 5000 || depth > 6) return;
+    let entries: Array<{ name: string; isDirectory(): boolean }>;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }) as never;
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (names.length >= 5000) return;
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!DIGEST_SKIP.has(entry.name)) walk(join(dir, entry.name), path, depth + 1);
+        continue;
+      }
+      names.push(path);
+    }
+  };
+  walk(cwd, "", 0);
+  if (names.length === 0) return "";
+  return createHash("sha1").update(names.sort().join("\n")).digest("hex").slice(0, 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +232,82 @@ function head(path: string, lines: number): string {
  * Condense the repo into something a model can read in one pass. Everything
  * here is cheap shell and file reads; nothing is sent anywhere yet.
  */
+/**
+ * Data files present on disk that git does not track.
+ *
+ * Every other section of the digest enumerates through `git ls-files`, so every
+ * other section is blind to whatever git does not follow. Measured on run
+ * `3ed33e`: `data/` sat in the .gitignore, the input CSV never reached the
+ * brief, the worker declared a four-column schema against a five-column file,
+ * every test passed against the invented schema, and seven reviews did not catch
+ * it. The one artefact whose job is to describe the repo as it is could not see
+ * the data a data pipeline exists to read.
+ *
+ * The header answers the question; a sample would not. Bounded on both axes,
+ * because a digest that can dump a tree is the failure it was written against.
+ */
+const DATA_EXT = /\.(csv|tsv|psv|jsonl|ndjson|parquet|avro|orc)$/i;
+const HEADED_EXT = /\.(csv|tsv|psv|jsonl|ndjson)$/i;
+const DIGEST_SKIP = new Set([
+  ".git", "node_modules", ".venv", "venv", "dist", "build", "target",
+  "__pycache__", ".pi", ".pi-subagent-runs", ".ruff_cache", ".pytest_cache", ".mypy_cache",
+]);
+
+async function untrackedData(pi: ExtensionAPI, cwd: string): Promise<string> {
+  const found: string[] = [];
+
+  const walk = (dir: string, rel: string, depth: number): void => {
+    if (found.length >= 10 || depth > 3) return;
+    let entries: Array<{ name: string; isDirectory(): boolean }>;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }) as never;
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= 10) return;
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!DIGEST_SKIP.has(entry.name) && !entry.name.startsWith(".")) {
+          walk(join(dir, entry.name), path, depth + 1);
+        }
+        continue;
+      }
+      if (!DATA_EXT.test(entry.name)) continue;
+      found.push(path);
+    }
+  };
+  walk(cwd, "", 0);
+  if (found.length === 0) return "";
+
+  const tracked = new Set(
+    (await sh(pi, "git ls-files", cwd)).split("\n").map((l) => l.trim()).filter(Boolean),
+  );
+
+  const lines: string[] = [];
+  for (const path of found) {
+    if (tracked.has(path)) continue;
+    let size = 0;
+    try {
+      size = statSync(join(cwd, path)).size;
+    } catch {
+      /* ignore */
+    }
+    const shown =
+      size >= 1_048_576 ? `${(size / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1024))} kB`;
+    let headLine = "";
+    if (HEADED_EXT.test(path)) {
+      try {
+        headLine = (readFileSync(join(cwd, path), "utf-8").split(/\r?\n/)[0] ?? "").trim().slice(0, 200);
+      } catch {
+        /* ignore */
+      }
+    }
+    lines.push(headLine ? `${path} (${shown}) — first line: ${headLine}` : `${path} (${shown})`);
+  }
+  return lines.join("\n");
+}
+
 async function buildDigest(pi: ExtensionAPI, cwd: string): Promise<string> {
   const parts: string[] = [];
   const add = (title: string, body: string) => {
@@ -234,6 +339,8 @@ async function buildDigest(pi: ExtensionAPI, cwd: string): Promise<string> {
 
   add("Entry-point candidates", await sh(pi,
     `git ls-files | grep -Ei '(^|/)(main|__main__|cli|app|dag_|conftest)\\.py$|(^|/)dags/|Dockerfile|\\.tf$' | head -25`, cwd));
+
+  add("Untracked data files", await untrackedData(pi, cwd));
 
   return parts.join("\n\n");
 }
@@ -288,7 +395,6 @@ export default function (pi: ExtensionAPI): void {
 
   const maxLines = settings.maxLines ?? DEFAULTS.maxLines;
   const staleAfterDays = settings.staleAfterDays ?? DEFAULTS.staleAfterDays;
-  const denyAgents = settings.denyAgents ?? DEFAULTS.denyAgents;
 
   let brief: string | null = null;
   let injected = false;
@@ -301,15 +407,13 @@ export default function (pi: ExtensionAPI): void {
     brief = null;
     injected = false;
 
-    if (!shouldInject(denyAgents)) return;
-
     try {
       brief = readFileSync(briefPath(ctx.cwd), "utf-8");
     } catch {
       brief = null;
     }
 
-    if (!isOrchestrator() || !ctx.hasUI) return;
+    if (!ctx.hasUI) return;
 
     const state = await freshness(pi, ctx.cwd, staleAfterDays);
     if (state.state === "fresh") return;
@@ -379,7 +483,8 @@ export default function (pi: ExtensionAPI): void {
     }
 
     const commit = (await sh(pi, "git rev-parse HEAD", ctx.cwd, 5_000)) || undefined;
-    writeMeta(ctx.cwd, { commit, generatedAt: new Date().toISOString() });
+    const treeHash = (await treeFingerprint(pi, ctx.cwd)) || undefined;
+    writeMeta(ctx.cwd, { commit, treeHash, generatedAt: new Date().toISOString() });
 
     if (settings.commitBrief !== true) addGitExclusion(ctx.cwd);
 
