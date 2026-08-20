@@ -213,35 +213,63 @@ function changedSinceLastReview(): string[] {
   return [...new Set(paths)];
 }
 
-function diffSection(paths: string[]): string {
-  const files = paths.filter(Boolean);
-  if (files.length === 0) return "";
+/**
+ * Files a machine wrote and no reviewer can read.
+ *
+ * Measured on the Balance Agee run: a review was handed "diff too large to
+ * inline at 179kB" over four files, one of which was `uv.lock`. Nearly all of
+ * that weight was the lockfile; without it the diff would have fitted, and the
+ * review would have had the change in hand instead of a reading list. A
+ * generated file still deserves to be named — a dependency bump is a change —
+ * but naming it costs a line where diffing it costs the budget.
+ */
+const GENERATED = /(^|\/)(uv\.lock|poetry\.lock|Cargo\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|composer\.lock|Gemfile\.lock)$|\.min\.(js|css)$|\.(snap|lock)$/i;
 
-  if (files.length > DIFF_MAX_FILES) {
-    return (
-      `Changed files (${files.length}, too many to inline):\n` +
+export interface DiffPackage {
+  /** What goes into the task text. Empty when there is nothing to show. */
+  text: string;
+  /** True when the reviewer must find the change itself. */
+  degraded: boolean;
+}
+
+function diffSection(paths: string[]): DiffPackage {
+  const all = paths.filter(Boolean);
+  if (all.length === 0) return { text: "", degraded: false };
+
+  const files = all.filter((f) => !GENERATED.test(f));
+  const generated = all.filter((f) => GENERATED.test(f));
+  const alsoChanged = generated.length
+    ? `Also changed, generated, not diffed: ${generated.join(", ")}.\n\n`
+    : "";
+
+  const readingList = (why: string): DiffPackage => ({
+    text:
+      `Changed files (${files.length}, ${why}):\n` +
       files.map((f) => `  - ${f}`).join("\n") +
-      "\n\nRead these files to see the change. Judge only what this change introduced.\n\n"
-    );
-  }
+      "\n\nNo diff is inlined for this review: read these files and find the change " +
+      "yourself. You have grep and find for this delegation, and more turns than usual.\n\n" +
+      alsoChanged,
+    degraded: true,
+  });
+
+  if (files.length === 0) return { text: alsoChanged, degraded: false };
+  if (files.length > DIFF_MAX_FILES) return readingList("too many to inline");
 
   const diff = gitDiffFor(files);
-  if (!diff.trim()) return "";
-
+  if (!diff.trim()) return { text: alsoChanged, degraded: false };
   if (diff.length > DIFF_MAX_CHARS) {
-    return (
-      `Changed files (${files.length}, diff too large to inline at ${Math.round(diff.length / 1000)}kB):\n` +
-      files.map((f) => `  - ${f}`).join("\n") +
-      "\n\nRead these files to see the change. Judge only what this change introduced.\n\n"
-    );
+    return readingList(`diff too large to inline at ${Math.round(diff.length / 1000)}kB`);
   }
 
-  return (
-    "The change under review, as a diff. Do not reconstruct it — it is here.\n" +
-    "You may read any file for context, including files this diff does not touch;\n" +
-    "judge only what the diff introduced.\n\n" +
-    `<diff>\n${diff}\n</diff>\n\n`
-  );
+  return {
+    text:
+      "The change under review, as a diff. Do not reconstruct it — it is here.\n" +
+      "You may read any file for context, including files this diff does not touch;\n" +
+      "judge only what the diff introduced.\n\n" +
+      `<diff>\n${diff}\n</diff>\n\n` +
+      alsoChanged,
+    degraded: false,
+  };
 }
 
 /**
@@ -364,6 +392,7 @@ export default function (pi: ExtensionAPI) {
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
+        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it: three narrow scouts beat one exhaustive scout that dies.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of a backlog deliverable: both are delegated for what they are, not for how large they are.",
         "The child sees only the task text. Anything implicit here is absent there.",
@@ -395,10 +424,29 @@ export default function (pi: ExtensionAPI) {
         // implemented between a worker and its review would have shadowed the
         // code entirely, handing the reviewer a diff of a status field.
         const changed = changedSinceLastReview();
-        const task =
+        const pkg =
           params.agent === "reviewer" && changed.length > 0
-            ? `${diffSection(changed)}${params.task}`
-            : params.task;
+            ? diffSection(changed)
+            : { text: "", degraded: false };
+        const task = `${pkg.text}${params.task}`;
+
+        // Tools and ceiling follow the input package, not the role.
+        //
+        // Removing grep and find from the reviewer was paid for by handing it the
+        // diff: it does not need to find a change it has been given. When the
+        // diff does not fit, that payment is not made and the removal stands —
+        // which put the reviewer in its narrowest configuration exactly where the
+        // change was largest. Measured on the Balance Agee run: four reviews of
+        // fifteen died at the six-turn ceiling, and the one that crossed the
+        // inline threshold had to read four files, one of them a lockfile,
+        // without search and without the diff. So a degraded package restores
+        // both: the tools to find the change, and the turns to read it.
+        const effective =
+          params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : { ...agent };
+        if (pkg.degraded) {
+          effective.tools = [...new Set([...agent.tools, "grep", "find"])];
+          effective.maxTurns = Math.max(agent.maxTurns, 12);
+        }
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
@@ -408,9 +456,6 @@ export default function (pi: ExtensionAPI) {
         // The task decides which domain applies, not the role. A static list on
         // the definition hands a Terraform change python-engineering and
         // nothing useful; the definition's list is a default, not a constraint.
-        const effective =
-          params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : agent;
-
         const result = await dispatch(effective, task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
           seq: ++CALL_SEQ,
@@ -446,7 +491,7 @@ export default function (pi: ExtensionAPI) {
           .join(", ");
 
         const head = result.failure
-          ? `[${result.role}: ${result.failure}${via}]`
+          ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`
           : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]`;
 
         // Say which skills came without a severity table. The review still

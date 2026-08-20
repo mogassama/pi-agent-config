@@ -13,7 +13,7 @@
  *    time, the context bloat this exists to remove.
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
@@ -47,6 +47,11 @@ export interface RunResult {
    * a review of unchanged code through.
    */
   changedFiles?: string[];
+  /**
+   * True when `changedFiles` was read from the working tree because no envelope
+   * came back. The paths are real; nothing about them has been validated.
+   */
+  fromTree?: boolean;
   /** Where the full envelope was written. The orchestrator reads it only if it needs to. */
   artifact: string;
   turns: number;
@@ -184,6 +189,11 @@ async function runOnce(
   const seq = String(opts.seq ?? 0).padStart(2, "0");
   const artifact = join(artifactDir, `${opts.ctx.runId}-${seq}-${agent.name}.json`);
 
+  // Only for a role that can mutate: a read-only delegation cannot have changed
+  // anything, and a git call per scout is a cost for nothing.
+  const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
+  const before = mutates ? treeState(process.cwd()) : new Set<string>();
+
   const state: StreamState = {
     turns: 0,
     submit: null,
@@ -275,6 +285,12 @@ async function runOnce(
     failure = state.providerError ? "provider_error" : code === 0 ? "no_submit" : "spawn_error";
   }
 
+  // No envelope from a role that writes: ask the tree what it did.
+  const salvaged =
+    !envelope && mutates
+      ? [...treeState(process.cwd())].filter((p) => !before.has(p)).sort()
+      : [];
+
   mkdirSync(artifactDir, { recursive: true });
   if (agent.keepTranscript !== false) {
     writeFileSync(artifact.replace(/\.json$/, ".jsonl"), transcript.join("\n") + "\n", "utf-8");
@@ -325,11 +341,17 @@ async function runOnce(
       withoutDelta: plan.withoutDelta,
       role: agent.name,
       status: "failed",
-      summary: failureSummary(agent, failure!, state),
+      summary:
+        failureSummary(agent, failure!, state) +
+        (salvaged.length
+          ? ` Read from the working tree, not from the child, and not validated by anything: ${salvaged.join(", ")}.`
+          : ""),
       next: "orchestrator",
       artifact,
       turns: state.turns,
       usage: state.usage,
+      changedFiles: salvaged.length ? salvaged : undefined,
+      fromTree: salvaged.length > 0 || undefined,
       failure,
     };
   }
@@ -352,6 +374,41 @@ async function runOnce(
     usage: state.usage,
     failure,
   };
+}
+
+/**
+ * What the tree says changed, when the child could not say it itself.
+ *
+ * Measured on the Balance Agee run: `32-worker` hit its twenty-turn ceiling
+ * after 946,918 tokens on the deliverable that split `io.py` into three
+ * modules. The three modules were on disk at the end of the run. The
+ * orchestrator never learnt it: no envelope, so `changed_files` came back empty,
+ * so the next review was handed no diff at all. Nothing was lost on disk and
+ * everything was lost as information.
+ *
+ * Snapshotted before and after rather than read once, because nothing is
+ * committed during a run: a single `git status` would return every change since
+ * the bundle, not this delegation's. The list is reported as coming from the
+ * tree, never mixed with what an envelope claims — a child that did not submit
+ * did not validate anything, and the difference has to stay visible.
+ */
+function treeState(cwd: string): Set<string> {
+  try {
+    const out = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+      cwd,
+      encoding: "utf-8",
+      timeout: 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return new Set(
+      out
+        .split("\n")
+        .map((l) => l.slice(3).trim())
+        .filter(Boolean),
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 /**
