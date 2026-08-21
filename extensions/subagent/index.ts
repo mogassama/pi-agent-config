@@ -78,6 +78,40 @@ function isReadOnly(tools: readonly string[]): boolean {
   return !tools.includes("edit") && !tools.includes("write");
 }
 
+/**
+ * The scout's input contract, checked before anything is spawned.
+ *
+ * Every role has had a validated output contract since `submit` became a tool,
+ * and the output side has not failed since — the one problem it did have,
+ * required fields the model omitted, was found and fixed in the schema. The
+ * input side was one free string, and every measured defect of six runs landed
+ * there: a data file never named and a schema invented against it; a "final
+ * completeness inventory" that cost 112,683 tokens and returned nothing; a scout
+ * sent to inventory a repository containing only its bundle; four
+ * reconciliations that reached the ceiling across two Balance Agee runs. Each
+ * was corrected with prose, and prose is read or it is not.
+ *
+ * `find` takes one question, `scope` takes the paths. That is the whole
+ * contract, and it is enough for the failure it addresses: "check that every .py
+ * file appears in the modules section" has no single question to put in `find`,
+ * so it has to be written as two lookups or as one named location — which is
+ * what it should have been. The scout first, because five of the six defects are
+ * its own and it is the cheapest role to be wrong about.
+ */
+function checkScoutInput(params: { find?: string; scope?: string[] }): string | null {
+  const find = (params.find ?? "").trim();
+  const scope = (params.scope ?? []).map((p) => p.trim()).filter(Boolean);
+  if (find && scope.length > 0) return null;
+
+  const missing = [!find ? "`find`" : "", scope.length === 0 ? "`scope`" : ""].filter(Boolean);
+  return (
+    `Refused: a scout call needs ${missing.join(" and ")}. \`find\` is the single thing to ` +
+    "locate, as one question — where X is defined, who calls Y, which module owns Z. " +
+    "`scope` is the paths to search. If the question is a comparison between two sets, it " +
+    "is two scouts and a subtraction you do yourself: ask for each list, compare them here."
+  );
+}
+
 function refuse(agentName: string, tools: readonly string[]): string | null {
   const last = HISTORY[HISTORY.length - 1];
   const before = HISTORY[HISTORY.length - 2];
@@ -216,20 +250,23 @@ function changedSinceLastReview(): string[] {
 /**
  * Files a machine wrote and no reviewer can read.
  *
- * Measured on the Balance Agee run: a review was handed "diff too large to
+ * Measured on the first Balance Agee run: a review was handed "diff too large to
  * inline at 179kB" over four files, one of which was `uv.lock`. Nearly all of
  * that weight was the lockfile; without it the diff would have fitted, and the
  * review would have had the change in hand instead of a reading list. A
  * generated file still deserves to be named — a dependency bump is a change —
  * but naming it costs a line where diffing it costs the budget.
  */
-const GENERATED = /(^|\/)(uv\.lock|poetry\.lock|Cargo\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|composer\.lock|Gemfile\.lock)$|\.min\.(js|css)$|\.(snap|lock)$/i;
+const GENERATED =
+  /(^|\/)(uv\.lock|poetry\.lock|Cargo\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|composer\.lock|Gemfile\.lock)$|\.min\.(js|css)$|\.(snap|lock)$/i;
 
 export interface DiffPackage {
   /** What goes into the task text. Empty when there is nothing to show. */
   text: string;
   /** True when the reviewer must find the change itself. */
   degraded: boolean;
+  /** Size of the inlined diff, when one was inlined. The budget follows it. */
+  diffChars?: number;
 }
 
 function diffSection(paths: string[]): DiffPackage {
@@ -269,6 +306,7 @@ function diffSection(paths: string[]): DiffPackage {
       `<diff>\n${diff}\n</diff>\n\n` +
       alsoChanged,
     degraded: false,
+    diffChars: diff.length,
   };
 }
 
@@ -363,6 +401,23 @@ export default function (pi: ExtensionAPI) {
           "agent's declared default.",
       }),
     ),
+    find: Type.Optional(
+      Type.String({
+        description:
+          "Scout only, and required for it: the single thing to locate, as one " +
+          "question. Where X is defined, who calls Y, which module owns Z. One " +
+          "question — not a list, not \"every occurrence of\", not \"check that A " +
+          "matches B\". A comparison between two sets is two scouts and a " +
+          "subtraction you do yourself: ask for each list, compare them here.",
+      }),
+    ),
+    scope: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Scout only, and required for it: the paths to search, by directory or " +
+          "file. The whole repository is not a scope.",
+      }),
+    ),
     task: Type.String({
       description:
         "The complete instruction. The child inherits nothing: no AGENTS.md, no " +
@@ -408,7 +463,9 @@ export default function (pi: ExtensionAPI) {
         // Before anything is spawned. A refusal costs one tool result; the
         // delegation it replaces cost between 28k and 306k tokens on the
         // measured run.
-        const blocked = refuse(params.agent, agent.tools);
+        const blocked =
+          (params.agent === "scout" ? checkScoutInput(params) : null) ??
+          refuse(params.agent, agent.tools);
         if (blocked) {
           logRefusal(RUN_ID, params.agent, blocked);
           return { content: [{ type: "text" as const, text: blocked }], isError: true };
@@ -427,26 +484,15 @@ export default function (pi: ExtensionAPI) {
         const pkg =
           params.agent === "reviewer" && changed.length > 0
             ? diffSection(changed)
-            : { text: "", degraded: false };
-        const task = `${pkg.text}${params.task}`;
+            : { text: "", degraded: false, diffChars: 0 };
 
-        // Tools and ceiling follow the input package, not the role.
-        //
-        // Removing grep and find from the reviewer was paid for by handing it the
-        // diff: it does not need to find a change it has been given. When the
-        // diff does not fit, that payment is not made and the removal stands —
-        // which put the reviewer in its narrowest configuration exactly where the
-        // change was largest. Measured on the Balance Agee run: four reviews of
-        // fifteen died at the six-turn ceiling, and the one that crossed the
-        // inline threshold had to read four files, one of them a lockfile,
-        // without search and without the diff. So a degraded package restores
-        // both: the tools to find the change, and the turns to read it.
-        const effective =
-          params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : { ...agent };
-        if (pkg.degraded) {
-          effective.tools = [...new Set([...agent.tools, "grep", "find"])];
-          effective.maxTurns = Math.max(agent.maxTurns, 12);
-        }
+        // For a scout, the contract is also the head of its task text: the child
+        // reads the same one question and the same paths the schema enforced.
+        const scoutHeader =
+          params.agent === "scout" && params.find
+            ? `Find: ${params.find.trim()}\nScope: ${(params.scope ?? []).join(", ")}\n\n`
+            : "";
+        const task = `${pkg.text}${scoutHeader}${params.task}`;
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
@@ -456,6 +502,27 @@ export default function (pi: ExtensionAPI) {
         // The task decides which domain applies, not the role. A static list on
         // the definition hands a Terraform change python-engineering and
         // nothing useful; the definition's list is a default, not a constraint.
+        // Tools and ceiling follow the input package, not the role.
+        //
+        // Removing grep and find from the reviewer was paid for by handing it the
+        // diff: it does not need to find a change it has been given. When the
+        // diff does not fit, that payment is not made and the removal stands —
+        // which put the reviewer in its narrowest configuration exactly where the
+        // change was largest. Measured on the first Balance Agee run: four
+        // reviews of fifteen died at the six-turn ceiling. And a diff that does
+        // fit can still be large: on the second run, 47-reviewer died at six
+        // turns holding its diff, 285,449 tokens at 47,574 per turn, where the
+        // other thirteen concluded in 4.1 turns each. Six is a number calibrated
+        // on a 360-line project's diffs, with nothing about it that scales.
+        const effective =
+          params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : { ...agent };
+        if (pkg.degraded) {
+          effective.tools = [...new Set([...agent.tools, "grep", "find"])];
+          effective.maxTurns = Math.max(agent.maxTurns, 12);
+        } else if ((pkg.diffChars ?? 0) > DIFF_MAX_CHARS / 2) {
+          effective.maxTurns = Math.max(agent.maxTurns, 10);
+        }
+
         const result = await dispatch(effective, task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
           seq: ++CALL_SEQ,
