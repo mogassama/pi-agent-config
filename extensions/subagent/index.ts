@@ -189,7 +189,27 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
  * the bundle — growing with each deliverable. The boundary that is actually
  * correct is the previous worker's own `changed_files`.
  */
-const DIFF_MAX_CHARS = 32_000; // ≈ 8k tokens, the whole frozen bundle's worth
+/*
+ * The inline threshold, and why it moved.
+ *
+ * It was 32,000 characters — about 8k tokens, the weight of csv-to-bq's whole
+ * frozen bundle, which is what it was calibrated against. On an eleven-module
+ * project it is the most expensive number in the chain. Measured across two
+ * Balance Agee runs, the four reviews that crossed it ran 7, 5, 7 and 11 turns
+ * against a median of four, and the two of run 4 order monotonically with size:
+ * 38 kB gave seven turns, 71 kB gave eleven.
+ *
+ * The arithmetic is not close. A reviewer runs at 48,328 tokens per turn, so the
+ * 11-turn review cost about 531,000 tokens; inlining its diff would have added
+ * 17,750 written once. Reading twelve whole files to reconstruct 71 kB of
+ * changes necessarily costs more than the 71 kB.
+ *
+ * 80,000 rather than 64,000 because 64,000 converts only one of the two observed
+ * cases, and a threshold that leaves the worst one degraded fixes the cheaper
+ * half of the problem. 20k tokens of diff still sits well under what a review
+ * already carries per turn.
+ */
+const DIFF_MAX_CHARS = 80_000;
 const DIFF_MAX_FILES = 15;
 
 function gitDiffFor(paths: string[]): string {

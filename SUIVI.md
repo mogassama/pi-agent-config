@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `1de8292` + lot `b9baad`.
+Branche `feat/subagent-extension`. État courant : lot `2cab6c`.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -43,7 +43,8 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 | `csv-to-bq` | `f414d3` | 13 | 57 | 0,68 $ | 0 |
 | **dispersion mesurée** | | **8 %** | **2 %** | **13 %** | |
 | Balance Âgée (2 978 l.) | run 2 `6fcfbb` | 53 | 369 | ~3 $ | 3 |
-| Balance Âgée | **run 3 `b9baad`** | **39** | **296** | **~3 $** | **0** |
+| Balance Âgée | run 3 `b9baad` | 39 | 296 | ~3 $ | 0 |
+| Balance Âgée | **run 4 `2cab6c`** | **40** | **303** | **~3,5 $** | **0** |
 | Balance Âgée — Claude Code | — | — | — | — | 1 h 12, 165 tests |
 
 **Aucune conclusion ne tient sous ces écarts.** Un gain de 13 % sur `csv-to-bq` est du bruit.
@@ -111,6 +112,22 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       *Non corrigé, délibérément :* le contrat `find`. Dix des douze en portent plus d'une
       question et neuf ont réussi — vérifier l'unicité rejetterait neuf délégations qui
       marchent pour attraper un échec qui avait une autre cause.
+- [x] **run 4 `2cab6c`** — 40 délégations, 303 tours, **zéro échec de toute nature** : ni
+      `max_turns`, ni `no_submit`, ni `timeout`. Première fois en quatre runs. 158 tests,
+      zéro régression.
+      *Les quatre relevés :* le worker s'étale — `[6,7,8,8,8,10,10,11,12,14,15,16,18,27]`,
+      un seul au-dessus de 20, aucun sur 26 ni 30 : **le plafond de 20 bridait bien**, et 30
+      ne mord plus. Son exploration est à **88 % en première moitié** de délégation, ce qui
+      écarte définitivement l'hypothèse de la redécouverte et donc la réécriture du bundle.
+      Le retry n'a pas eu à tirer. Le reviewer tient son plafond plat, **sauf deux revues
+      dégradées** à 7 et 11 tours.
+      → **Corrigé** : seuil d'inline du diff porté de 32 000 à 80 000 caractères.
+      *Ce que la mesure a établi :* quatre revues dégradées sur deux runs — 7, 5, 7, 11 tours
+      contre une médiane de 4 — et un ordre monotone avec la taille, 38 kO → 7 tours,
+      71 kO → 11. Le reviewer tourne à 48 328 tokens par tour, donc la revue à 11 tours a
+      coûté ~531 000 tokens là où son diff en pesait 17 750. Lire douze fichiers entiers pour
+      reconstruire 71 kO de changements coûte nécessairement plus que les 71 kO.
+      *80 000 et non 64 000 :* 64 000 ne convertit qu'un des deux cas observés.
 
 ### Hors run
 
@@ -127,31 +144,27 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 
 ### En cours
 
-- [ ] **Balance Âgée run 4** — un seul changement sur le worker : le budget, 20 → 30 avec
-      consigne de conclure à 26. `thinking: high` est **déjà mesuré** dans le run 3, ce n'est
-      pas une variable du prochain.
-      *Trois issues distinguables sur la distribution des tours worker :*
-      un pic à 21-24 → le plafond était la contrainte, fixer à 25 ;
-      un atterrissage à 26 → la consigne de marge fonctionne ;
-      un étalement jusqu'à 30 → le budget est lu comme une cible, il faut le **baisser**.
-      *Et trois autres relevés :* `grep -l 'retried after an empty' .pi-subagent-runs/*.json`
-      pour voir si le retry a servi ; les tours du reviewer, pour savoir si 8 couvre celles qui
-      prenaient 7 ; la distribution des outils première moitié contre seconde chez le worker,
-      qui tranche si l'exploration en fin de délégation est une vérification ou une
-      redécouverte.
-      *Deux mesures séparables :*
-      `cat .pi-subagent-runs/*refusals.jsonl | wc -l` — adoption de `find`/`scope`
-      `python3 -c "import json,glob; w=[json.load(open(f)) for f in glob.glob('.pi-subagent-runs/*worker.json')]; print(len(w),'délég,',sum(x['turns'] for x in w),'tours')"` — contre 14 / 142
-      *Décide :* si les tours worker baissent, le `high` reste. Si les réconciliations
-      disparaissent des tâches scout (référence 4 sur 25), le contrat tient.
+- [ ] **Balance Âgée run 5** — un seul changement : le seuil d'inline du diff, 32 000 → 80 000.
+      *Attendu :* zéro revue dégradée — les deux du run 4, à 38 et 71 kO, passent en inline.
+      *Mesurer :* `grep -c 'No diff is inlined' .pi-subagent-runs/*reviewer.json` doit valoir 0,
+      et les tours du reviewer se comparer à `[2,2,2,3,4,4,5,5,6,6,7,8,8,11]`. Si la queue à
+      8 et 11 disparaît, le seuil était la cause ; si elle demeure, elle est ailleurs.
+      *Surveiller :* le coût du reviewer — 2,86 → 2,94 → **3,49 $**, seul poste qui ne baisse
+      pas. Son coût *par tour* est plat à ~0,049 $ : il coûte plus parce qu'il tourne plus,
+      pas parce qu'il est devenu cher.
+      *Et le rendement du worker :* 3,58 → 3,95 tours par test ajouté. Un run de plus avant
+      d'en tirer quoi que ce soit — l'écart est dans la dispersion.
 
 ### Après le run 4
 
-- [ ] **Règle de découpage des tâches worker**, si et seulement si le run 4 montre un
-      étalement jusqu'à 30. Le critère d'`AGENTS.md:385` — « plus de la moitié des tours » —
+- [ ] ~~Règle de découpage des tâches worker~~ — **sans objet**. Le run 4 montre un étalement
+      sans concentration sur le plafond, et l'exploration à 88 % en première moitié écarte la
+      redécouverte. Ne rien réécrire du bundle.
+      *Ancien libellé, conservé :* si et seulement si un run montre un étalement jusqu'à 30. Le critère d'`AGENTS.md:385` — « plus de la moitié des tours » —
       condamne la tâche médiane (11,5 tours sur 20 au run 3). La version proposée porte sur le
       nombre de fichiers qu'on s'apprête à nommer, pas sur une prédiction de tours.
-- [ ] **Second run worker à `thinking: medium`**, si et seulement si le run 4 est ambigu.
+- [ ] **Second run worker à `thinking: medium`**, si et seulement si le rendement continue de
+      se dégrader sur un run de plus.
       Repère mesuré au run 3 : 161 tours pour 45 tests ajoutés, contre 142 pour 41 au run 2 —
       soit 3,58 tours par test contre 3,46. Le rendement est plat ; le worker a fait plus, pas
       moins bien.
