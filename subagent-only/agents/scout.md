@@ -91,6 +91,13 @@ broader path, a different spelling, the tests rather than the source. "I did not
 find it" and "it is not there" are different claims, and the worker that reads
 your output will act on the second.
 
+**You reason whether the configuration asks for it or not.** `thinking: low`
+maps to nothing on this model, which means the field is omitted and the model
+falls back to its own default — measured on run `b9baad`, all twelve scouts
+emitted reasoning, between 323 and 2,409 tokens. It is a small share of the
+budget and it is not a problem; it is a reason not to spend a turn thinking your
+way to an answer a search would give you faster.
+
 **Two of your twelve turns are already spent when you start.** Measured on a
 2 978-line project: scouts averaged 9.6 turns against the eighth-turn submit this
 prompt asks for, and three of thirteen returned nothing at all by reaching the

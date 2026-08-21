@@ -475,8 +475,36 @@ export async function dispatch(
   const chain = [agent.model, ...agent.fallbackModels];
   let last: RunResult | null = null;
 
+  // A read-only role may write nothing, so running it twice cannot corrupt
+  // anything — and one class of failure is worth exactly one retry.
+  const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
+
   for (const model of chain) {
-    const result = await runOnce(agent, model, task, opts);
+    let result = await runOnce(agent, model, task, opts);
+
+    /*
+     * One retry on `no_submit`, for a read-only role only.
+     *
+     * Measured on `b9baad-18-scout`: nine turns of twelve, 90,240 tokens, and
+     * the last message carried a `thinking` block and nothing else — no text,
+     * no tool call. Then `agent_end`, a normal termination. It did not hit a
+     * ceiling, did not time out, and the provider did not refuse: the model
+     * produced a turn of pure reasoning and stopped. No guard covers that, and
+     * the whole delegation was lost.
+     *
+     * It is stochastic, so a fresh process on the same input is worth trying,
+     * and it is bounded at one so a role that cannot answer does not answer
+     * twice as expensively. Never for a writer: re-running one that stopped
+     * mid-edit would redo edits against a tree it already changed.
+     */
+    if (result.failure === "no_submit" && !mutates && !opts.signal?.aborted) {
+      const retry = await runOnce(agent, model, task, opts);
+      if (!retry.failure) {
+        return { ...retry, summary: `${retry.summary} (retried after an empty first attempt)` };
+      }
+      result = retry;
+    }
+
     if (!result.failure || !RETRYABLE.has(result.failure)) return result;
     last = result;
     if (opts.signal?.aborted) break;

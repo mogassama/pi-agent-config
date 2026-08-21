@@ -519,9 +519,16 @@ export default function (pi: ExtensionAPI) {
         if (pkg.degraded) {
           effective.tools = [...new Set([...agent.tools, "grep", "find"])];
           effective.maxTurns = Math.max(agent.maxTurns, 12);
-        } else if ((pkg.diffChars ?? 0) > DIFF_MAX_CHARS / 2) {
-          effective.maxTurns = Math.max(agent.maxTurns, 10);
         }
+        // There was a second branch here raising the ceiling for a large inlined
+        // diff. Measured on run b9baad, ten reviews: turns were 1, 3, 3, 4, 5, 5,
+        // 5, 7, 7, 7 and did not follow diff size at all — 27,615 characters
+        // concluded in one turn, 2,214 took seven. What the tail showed is
+        // simpler: six was too tight for a review that needs seven, whatever it
+        // was handed. The ceiling is eight now, flat, and the conditional is
+        // gone rather than kept as insurance for a correlation that is not there.
+        // The degraded branch above stays: both reviews given no diff ran five
+        // and seven turns, against a median of four.
 
         const result = await dispatch(effective, task, {
           ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },

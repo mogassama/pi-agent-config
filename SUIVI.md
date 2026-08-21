@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `1de8292`.
+Branche `feat/subagent-extension`. État courant : `1de8292` + lot `b9baad`.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -13,14 +13,22 @@ et ce qui reste.
 
 | Rôle | Modèle | Thinking | Session | Tours | Outils |
 |:--|:--|:--|:--|--:|:--|
-| worker | `openai-codex/gpt-5.6-sol` | `high` ¹ | éphémère | 20 | read, grep, find, ls, bash, edit, write |
-| reviewer | `anthropic/claude-sonnet-5` | medium | éphémère | 6 ² | read, ls |
+| worker | `openai-codex/gpt-5.6-sol` | `high` | éphémère | **30** ¹ | read, grep, find, ls, bash, edit, write |
+| reviewer | `anthropic/claude-sonnet-5` | medium | éphémère | **8** ² | read, ls |
 | scout | `deepseek/deepseek-v4-flash` | low ³ | éphémère | 12 | read, grep, find, ls, bash |
 | advisor | — | — | — | — | **non écrit** |
 
-¹ Sur disque depuis le 21 août, **pas encore commité**.
-² 10 si le diff dépasse 16 kO, 12 si aucun diff n'a pu être fourni — le budget suit l'entrée.
-³ `deepseek-v4-flash` mappe `minimal|low|medium` sur `null` : le scout tourne sans raisonnement.
+¹ Monté de 20 à 30 après le run `b9baad`, où quatre workers sur quatorze ont soumis au tour
+exact du plafond en étant encore en train d'éditer. Consigne : conclure quatre tours avant.
+² Plafond plat depuis `b9baad`. 12 si aucun diff n'a pu être fourni, avec `grep` et `find`
+rendus — le budget suit l'entrée. Le conditionnel sur la *taille* du diff a été retiré :
+mesuré sur dix revues, les tours ne suivent pas la taille (27 615 caractères en un tour,
+2 214 en sept).
+³ **Correction du 22 août.** `minimal|low|medium → null` ne veut pas dire « pas de
+raisonnement » mais « champ omis », donc le modèle retombe sur son défaut — et
+`deepseek-v4-flash` est hybride. Les douze scouts du run `b9baad` ont émis entre 323 et
+2 409 tokens de raisonnement, 1,3 % de leur budget. Les trois niveaux bas sont un seul et
+même réglage ; seuls `high` et `max` déplacent quelque chose.
 
 Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-lint-gate`,
 `pi-project-brief`, `subagent`, `subagent-footer`.
@@ -35,6 +43,7 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 | `csv-to-bq` | `f414d3` | 13 | 57 | 0,68 $ | 0 |
 | **dispersion mesurée** | | **8 %** | **2 %** | **13 %** | |
 | Balance Âgée (2 978 l.) | run 2 `6fcfbb` | 53 | 369 | ~3 $ | 3 |
+| Balance Âgée | **run 3 `b9baad`** | **39** | **296** | **~3 $** | **0** |
 | Balance Âgée — Claude Code | — | — | — | — | 1 h 12, 165 tests |
 
 **Aucune conclusion ne tient sous ces écarts.** Un gain de 13 % sur `csv-to-bq` est du bruit.
@@ -89,6 +98,19 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       Un reviewer tué à 6 tours **avec** son diff.*
       → **Corrigé** : plafond du reviewer indexé sur la taille du diff, contrat d'entrée du
       scout (`find` + `scope`, refus mécanique).
+- [x] **run 3 `b9baad`** — 39 délégations, 296 tours, **zéro `max_turns`**, zéro perte,
+      159 tests contre 156, scout divisé par 3,3 en tokens et par 2 en délégations.
+      *Premier run avec worker en `thinking: high`.* Trois constats des mesures :
+      quatre workers sur quatorze ont soumis au tour 20 sur 20 **en étant encore en train
+      d'éditer** ; les tours du reviewer ne suivent pas la taille du diff ; un scout a terminé
+      normalement sur un tour de raisonnement pur, sans enveloppe — classe d'échec que
+      ni `max_turns`, ni `timeout`, ni `provider_error` ne couvre.
+      → **Corrigé** : worker à 30 tours avec consigne de conclure quatre tours avant, plafond
+      reviewer plat à 8 et conditionnel de taille retiré, retry unique sur `no_submit` pour un
+      rôle en lecture seule.
+      *Non corrigé, délibérément :* le contrat `find`. Dix des douze en portent plus d'une
+      question et neuf ont réussi — vérifier l'unicité rejetterait neuf délégations qui
+      marchent pour attraper un échec qui avait une autre cause.
 
 ### Hors run
 
@@ -105,21 +127,34 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 
 ### En cours
 
-- [ ] **Balance Âgée run 3** — worker en `high` + contrat d'entrée du scout.
+- [ ] **Balance Âgée run 4** — un seul changement sur le worker : le budget, 20 → 30 avec
+      consigne de conclure à 26. `thinking: high` est **déjà mesuré** dans le run 3, ce n'est
+      pas une variable du prochain.
+      *Trois issues distinguables sur la distribution des tours worker :*
+      un pic à 21-24 → le plafond était la contrainte, fixer à 25 ;
+      un atterrissage à 26 → la consigne de marge fonctionne ;
+      un étalement jusqu'à 30 → le budget est lu comme une cible, il faut le **baisser**.
+      *Et trois autres relevés :* `grep -l 'retried after an empty' .pi-subagent-runs/*.json`
+      pour voir si le retry a servi ; les tours du reviewer, pour savoir si 8 couvre celles qui
+      prenaient 7 ; la distribution des outils première moitié contre seconde chez le worker,
+      qui tranche si l'exploration en fin de délégation est une vérification ou une
+      redécouverte.
       *Deux mesures séparables :*
       `cat .pi-subagent-runs/*refusals.jsonl | wc -l` — adoption de `find`/`scope`
       `python3 -c "import json,glob; w=[json.load(open(f)) for f in glob.glob('.pi-subagent-runs/*worker.json')]; print(len(w),'délég,',sum(x['turns'] for x in w),'tours')"` — contre 14 / 142
       *Décide :* si les tours worker baissent, le `high` reste. Si les réconciliations
       disparaissent des tâches scout (référence 4 sur 25), le contrat tient.
 
-- [ ] **Commiter `worker.md` en `thinking: high`** — sur disque, absent du dépôt.
+### Après le run 4
 
-### Après le run 3
-
-- [ ] **Règle de découpage des tâches worker**, si et seulement si un `max_turns` worker
-      réapparaît. Le critère actuel d'`AGENTS.md:385` — « plus de la moitié des tours » —
-      condamne la tâche médiane (10,1 tours sur 20). La version proposée porte sur le nombre de
-      fichiers qu'on s'apprête à nommer, pas sur une prédiction de tours.
+- [ ] **Règle de découpage des tâches worker**, si et seulement si le run 4 montre un
+      étalement jusqu'à 30. Le critère d'`AGENTS.md:385` — « plus de la moitié des tours » —
+      condamne la tâche médiane (11,5 tours sur 20 au run 3). La version proposée porte sur le
+      nombre de fichiers qu'on s'apprête à nommer, pas sur une prédiction de tours.
+- [ ] **Second run worker à `thinking: medium`**, si et seulement si le run 4 est ambigu.
+      Repère mesuré au run 3 : 161 tours pour 45 tests ajoutés, contre 142 pour 41 au run 2 —
+      soit 3,58 tours par test contre 3,46. Le rendement est plat ; le worker a fait plus, pas
+      moins bien.
 
 - [ ] **Run avec `/brief`** — première mesure du dispositif dans son domaine de validité : du
       code existant, une vraie histoire git.
