@@ -142,7 +142,15 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
   const sinceReview = [...HISTORY].reverse().findIndex((d) => d.agent === "reviewer");
   if (agentName === "reviewer" && sinceReview > 0) {
     const between = HISTORY.slice(HISTORY.length - sinceReview);
-    if (between.every((d) => d.produced && d.changedFiles.length === 0)) {
+    // A writer that wrote nothing leaves the tree as the last review found it.
+    // A scout does too, and that is not the same thing: reviewer.md tells a
+    // reviewer to put a where-question in `open_risks` and promises it "comes
+    // back to you as named files in the next task", which is the sequence
+    // reviewer → scout → reviewer. Refusing it on the grounds that no file
+    // moved made that promise unkeepable — the scout changes what the next task
+    // can name, which is the whole point of running it.
+    const wroteNothing = between.some((d) => !d.readOnly) && between.every((d) => d.produced && d.changedFiles.length === 0);
+    if (wroteNothing) {
       const roles = between.map((d) => d.agent).join(", ");
       return (
         `Refused: nothing has changed on disk since the last review (${roles} ran and ` +

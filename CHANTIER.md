@@ -59,9 +59,14 @@ tout, et rejugeait tout.
 
 | Rôle | Modèle | Session | Outils | `maxTurns` |
 |:--|:--|:--|:--|--:|
-| `worker` | `openai-codex/gpt-5.6-sol` (abonnement) | éphémère | read, grep, find, ls, bash, edit, write, submit | 20 |
-| `reviewer` | `anthropic/claude-sonnet-5` (API) | éphémère | **read, ls, submit** | **6** |
+| `worker` | `openai-codex/gpt-5.6-sol` (abonnement), `thinking: high` | éphémère | read, grep, find, ls, bash, edit, write, submit | **30** |
+| `reviewer` | `anthropic/claude-sonnet-5` (API) | éphémère | **read, ls, submit** | **12** |
 | `scout` | `deepseek/deepseek-v4-flash` | éphémère | read, grep, find, ls, bash, submit | 12 |
+
+*Les quatre nombres de cette table et le seuil d'inline du diff ont tous été
+calibrés sur `csv-to-bq` — 360 lignes — et ont tous dû être relevés pour un
+projet huit fois plus gros. Ce sont les seules valeurs de la configuration qui
+portent une taille de projet.*
 
 Trois familles de modèles, vérifiées par `pi-check-config`. **Aucun rôle n'est en
 session persistante** : le régime a été coupé après `3ed33e`, et `spawn-args`

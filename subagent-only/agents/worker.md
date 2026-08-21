@@ -51,11 +51,9 @@ before the end — six consecutive `edit` then one `bash` then `submit`. That is
 not converging, it is being interrupted and closing in a hurry. The ceiling is
 thirty now; do not treat it as a target, and do not discover it.
 
-**Submit before your turn ceiling, whatever state you are in.** Files you have
-already written stay on disk, but the orchestrator learns nothing about them: a
-run that ends without `submit` returns no envelope at all. Two turns before the
-cap, submit — `changed_files` for what you wrote, `deviations` for what you did
-not finish and why. Measured on another role: a ceiling reached after 112k
-tokens returned a single failure line.
+Files you have already written stay on disk when that happens, but the
+orchestrator learns nothing about them: a run that ends without `submit` returns
+no envelope at all. Measured on another role, a ceiling reached after 112k tokens
+returned a single failure line.
 
 End by calling `submit` exactly once.

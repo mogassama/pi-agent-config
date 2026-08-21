@@ -361,9 +361,13 @@ async function runOnce(
     withoutDelta: plan.withoutDelta,
     role: agent.name,
     status: (envelope.status as RunResult["status"]) ?? "ok",
-    summary: String(envelope.summary ?? "").trim() || "(empty summary)",
+    summary:
+      (String(envelope.summary ?? "").trim() || "(empty summary)") +
+      (envelope.verdict === "needs_rework" && effectiveVerdict(envelope) === "approved"
+        ? " (rework asked on LOW findings only — not blocking, recorded in the artefact)"
+        : ""),
     next: deriveNext(envelope),
-    verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
+    verdict: effectiveVerdict(envelope),
     findings: Array.isArray(envelope.findings) ? envelope.findings.length : undefined,
     outOfScope: Array.isArray(envelope.out_of_scope) ? envelope.out_of_scope.length : undefined,
     changedFiles: Array.isArray(envelope.changed_files)
@@ -409,6 +413,41 @@ function treeState(cwd: string): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+/**
+ * The verdict, with a rework that only cosmetics justify downgraded to approved.
+ *
+ * A review that follows a rework sees the whole deliverable again, not just the
+ * patch — the fix can be locally right and globally wrong, which is exactly what
+ * happened on run 3ed33e where a review approved two correct fixes while the
+ * same identifier was still built two different ways in another module. But
+ * widening what a review looks at widens what counts as introduced by the
+ * change, and every fix cycle measured on that run produced a fresh finding on
+ * freshly written code — the last one a LOW on code written two minutes earlier.
+ * That tail is what stops a loop converging, not the real defects.
+ *
+ * So severity decides whether the loop continues. LOW findings are returned,
+ * written to the artefact, and do not block; anything MEDIUM or above does. The
+ * reviewer is not told this rule, which is why it cannot game it: it grades on
+ * the domain's severity table exactly as before, and the loop reads the grade.
+ *
+ * The visible half stays visible: the head still carries the finding count, so
+ * `[reviewer: approved, 2 findings]` says plainly that something was seen and
+ * judged not worth another pass.
+ */
+function effectiveVerdict(envelope: Record<string, unknown>): string | undefined {
+  const verdict = typeof envelope.verdict === "string" ? envelope.verdict : undefined;
+  if (verdict !== "needs_rework") return verdict;
+
+  const findings = Array.isArray(envelope.findings) ? envelope.findings : [];
+  if (findings.length === 0) return verdict;
+
+  const blocking = findings.some((f: unknown) => {
+    const sev = String((f as { severity?: unknown })?.severity ?? "").toUpperCase();
+    return sev !== "LOW";
+  });
+  return blocking ? verdict : "approved";
 }
 
 /**

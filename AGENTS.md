@@ -101,10 +101,10 @@ No frozen artefact. Architecture is decided in-session, grounded in the repo's a
 Applies in both regimes. Replace the word "bundle" with "the frozen artefacts, if any".
 
 1. **The bundle decides.** Apply it. No question, no restatement, no summary.
-2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, record the decision in the commit body (`why`, not `what`), ask nothing.
+2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, record the decision in the commit body (`why`, not `what`), ask nothing. **One exception, and it is the free regime's whole subject:** an expensive or irreversible choice — new service, new dependency, schema shape, storage layout, directory restructure — is not silence to be filled by a skill. It goes to the operator with two options and a recommendation, per "Free regime" above. Silence covers what is cheap to undo; nothing else.
 3. **The repo contradicts the bundle.** Stop. Emit a divergence note — observed state, expected state, options, no decision — and put it to **the operator**, through the orchestrator. A subagent has no channel to the operator: it returns `status: "blocked"` with the note in its summary, and the orchestrator owns the operator-facing question.
 
-**Never a fourth case.** `## Hard limits` above is the only other stop list, and it is complete. Do not invent a second, vaguer one. A gap in the bundle, a missing fixture, an untestable step, an ambiguous naming choice: none of these stop execution.
+**Never a fourth case.** `## Hard limits` above is the only other stop list, and it is complete. The irreversible-choice exception in case 2 is not a fourth case: it is a route to the operator inside case 2, and execution continues on everything else while the question is open. Do not invent a second, vaguer one. A gap in the bundle, a missing fixture, an untestable step, an ambiguous naming choice: none of these stop execution.
 
 **Strategic Forge is design-time only.** It has no runtime entry point. Re-running a Forge session is a decision the operator takes between two pi sessions, never an escalation path from inside one. Repeated divergence is evidence to bring to that decision, not a trigger for it.
 
@@ -186,13 +186,18 @@ Aucun timestamp, session ID ou valeur variable en tête d'un fichier du bundle :
 
 ## Delegation
 
-Extension `subagent`, one tool: `task({ agent, task })`. Each call spawns a fresh
+Extension `subagent`, one tool: `task({ agent, task, skills?, find?, scope? })`.
+`skills` names the domain skills the child gets — omitting it gives none, since
+no role declares a default. `find` and `scope` are the scout's input contract:
+one question and the paths to search, and a scout call without them is refused
+before anything is spawned. Each call spawns a fresh
 `pi` process with its own model, tool allowlist, hooks and skill slices.
 
-**A child inherits nothing it was not given.** No AGENTS.md, no conversation
-history, no prior tool calls, no `APPEND_SYSTEM.md`. One exception, declared per
-role: `.pi/BRIEF.md` is injected to roles carrying `projectBrief: true` — the
-worker today, and it alone. What is not in the task
+**A child inherits nothing.** No AGENTS.md, no conversation history, no prior
+tool calls, no `APPEND_SYSTEM.md`, and no `.pi/BRIEF.md` — the brief has one
+reader and it is you. No role carries `projectBrief: true` today; the audit that
+removed it from the worker found that a child handed a summary stops going to
+look, which is the one thing a worker must not stop doing. What is not in the task
 text or injected by the extension does not exist for it. Write the task as if
 to someone who has never seen this session — because that is the case.
 
@@ -200,8 +205,8 @@ to someone who has never seen this session — because that is the case.
 
 | Agent | When to use | Never use for |
 |:---|:---|:---|
-| **worker** | Implementing an approved direction — a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Escalates ambiguity rather than guessing. | Work with no approved direction behind it |
-| **reviewer** | Code >50 lines, reviewed **before** it is finalised. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
+| **worker** | Implementing an approved direction — a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Has no live channel out: an ambiguity it cannot resolve is described in `deviations` and the work continues around it, or the delegation ends with `status: "blocked"`. | Work with no approved direction behind it |
+| **reviewer** | Any code belonging to a backlog deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
 | **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
 
 `advisor` (architectural forks, no tools) is designed but not written. Do not
@@ -291,8 +296,13 @@ the orchestrator wrote seven modules and made two edits itself, one review ran,
 it returned `needs_rework`, and the fix was never judged by anyone. The run was
 the cheapest of six and the only one whose last verdict stayed open.
 
-A single-line edit stays inline. A module does not become one because the bundle
-made it obvious what to write.
+**What decides is what the line belongs to, not how long it is.** A single-line
+edit that is not part of a backlog deliverable stays inline — a status field, a
+typo in a comment, a local fix to your own scratch file. A single-line edit that
+*is* the deliverable, or part of it, goes through a worker and a reviewer like
+any other: a constant that changes a partitioning key is one line and is the
+whole change. A module does not become inline because the bundle made it obvious
+what to write, and a constant does not become inline because it is short.
 
 **Never delegate regardless of agent:** secret rotation, prod credentials, IAM
 grants on production, `terraform apply` on prod, production data without explicit
