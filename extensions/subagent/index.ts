@@ -522,7 +522,17 @@ export default function (pi: ExtensionAPI) {
         // The task decides which domain applies, not the role. A static list on
         // the definition hands a Terraform change python-engineering and
         // nothing useful; the definition's list is a default, not a constraint.
-        // Tools and ceiling follow the input package, not the role.
+        // Tools follow the input package, not the role.
+        //
+        // The ceiling used to follow it too, and that produced an inverted
+        // ladder: a degraded package bought twelve turns while an inlined diff,
+        // however large, kept the nominal eight. Raising DIFF_MAX_CHARS then
+        // moved the biggest changes out of the twelve and into the eight —
+        // measured on run 5, three reviews died at eight, all three holding
+        // their diff, and they were among the largest tasks of the run. The
+        // ceiling is twelve everywhere now, so the ladder cannot invert again.
+        // A ceiling only ever binds the tail: the median review still concludes
+        // in four turns and pays nothing for the headroom.
         //
         // Removing grep and find from the reviewer was paid for by handing it the
         // diff: it does not need to find a change it has been given. When the
@@ -538,7 +548,6 @@ export default function (pi: ExtensionAPI) {
           params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : { ...agent };
         if (pkg.degraded) {
           effective.tools = [...new Set([...agent.tools, "grep", "find"])];
-          effective.maxTurns = Math.max(agent.maxTurns, 12);
         }
         // There was a second branch here raising the ceiling for a large inlined
         // diff. Measured on run b9baad, ten reviews: turns were 1, 3, 3, 4, 5, 5,

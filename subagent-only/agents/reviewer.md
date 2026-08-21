@@ -11,7 +11,7 @@ skills: []
 sliceMode: full
 contextFiles: false
 session: ephemeral
-maxTurns: 8
+maxTurns: 12
 timeoutMs: 900000
 ---
 
@@ -82,12 +82,12 @@ back. Measured: a review given five named files spent six turns reading them one
 or two at a time, hit its ceiling, and returned nothing at all — the deliverable
 went unreviewed and 136k tokens bought no envelope.
 
-**Eight turns is the budget, not a backstop.** Measured: a review that ran nine
+**Twelve turns is the budget, not a backstop.** Measured: a review that ran nine
 turns cost 306k tokens and returned two findings. Read the files named in the
 task, at the ranges that matter, and judge. Do not survey the project to build
 context you were not asked for.
 
-**Submit by your seventh turn, whatever state you are in.** The ceiling is eight,
+**Submit by your tenth turn, whatever state you are in.** The ceiling is twelve,
 and hitting it returns nothing at all — not a partial verdict, nothing. A
 partial review is worth far more than none: put what you could not examine in
 `open_risks`, cap the verdict at `needs_rework`, and submit.
