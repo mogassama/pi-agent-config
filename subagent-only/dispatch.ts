@@ -596,6 +596,16 @@ const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cach
   // read is 0.007/M, i.e. 0.016 of the peak input rate.
   ["deepseek/deepseek-v4-flash", { in: 0.44, out: 1.32, cacheWrite: 0, cacheRead: 0.016 }],
   ["deepseek/deepseek-v4-pro", { in: 0.88, out: 2.64, cacheWrite: 0, cacheRead: 0.016 }],
+  // Qwen 3.8 Max, list price. The cache multipliers are deliberately left at the
+  // Anthropic defaults — 1.25 on write, 0.1 on read — because they are not
+  // known for this provider and overstating is the safe direction: a table that
+  // reports more than the bill costs a correction, one that reports less costs
+  // a decision. If DashScope writes its prefix cache free, as DeepSeek does,
+  // this entry overstates a review by roughly a tenth and the first console
+  // figure will say so. Reconcile it on the anime-etl run, before the reviewer
+  // moves here for real.
+  ["qwen-paygo/qwen3.8-max", { in: 2, out: 6 }],
+  ["qwen-paygo/", { in: 2, out: 6 }],
   ["anthropic/", { in: 2, out: 10 }],
 ];
 
