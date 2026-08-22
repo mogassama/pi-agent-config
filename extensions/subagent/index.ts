@@ -448,8 +448,8 @@ export default function (pi: ExtensionAPI) {
         description:
           "Domain skills to inject, by name — the domains the task touches, not " +
           "the ones the role usually needs. A .tf change wants iac-terraform, a " +
-          "query wants sql-engineering or bigquery-engineering. Omit to use the " +
-          "agent's declared default.",
+          "query wants sql-engineering or bigquery-engineering. Omit to give the " +
+          "child none: no role declares a default today.",
       }),
     ),
     find: Type.Optional(
@@ -503,8 +503,8 @@ export default function (pi: ExtensionAPI) {
         "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
         "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it: three narrow scouts beat one exhaustive scout that dies.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
-        "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of a backlog deliverable: both are delegated for what they are, not for how large they are.",
-        "The child sees only the task text. Anything implicit here is absent there.",
+        "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
+        "The child sees only the task text. Anything implicit here is absent there — including a project AGENTS.md, the most authoritative file on substance and one no child ever sees. Quote the rules that bear on the task.",
       ],
       parameters,
 

@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : lot `2cab6c`.
+Branche `feat/subagent-extension`. État courant : lot `5543d92` + corrections post-relecture.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -14,16 +14,16 @@ et ce qui reste.
 | Rôle | Modèle | Thinking | Session | Tours | Outils |
 |:--|:--|:--|:--|--:|:--|
 | worker | `openai-codex/gpt-5.6-sol` | `high` | éphémère | **30** ¹ | read, grep, find, ls, bash, edit, write |
-| reviewer | `anthropic/claude-sonnet-5` | medium | éphémère | **8** ² | read, ls |
+| reviewer | `anthropic/claude-sonnet-5` | medium | éphémère | **12** ² | read, ls |
 | scout | `deepseek/deepseek-v4-flash` | low ³ | éphémère | 12 | read, grep, find, ls, bash |
 | advisor | — | — | — | — | **non écrit** |
 
 ¹ Monté de 20 à 30 après le run `b9baad`, où quatre workers sur quatorze ont soumis au tour
 exact du plafond en étant encore en train d'éditer. Consigne : conclure quatre tours avant.
-² Plafond plat depuis `b9baad`. 12 si aucun diff n'a pu être fourni, avec `grep` et `find`
-rendus — le budget suit l'entrée. Le conditionnel sur la *taille* du diff a été retiré :
-mesuré sur dix revues, les tours ne suivent pas la taille (27 615 caractères en un tour,
-2 214 en sept).
+² Plafond plat à 12 depuis le run 5, où trois revues sont mortes à 8 en tenant leur diff.
+L'échelle s'était inversée : le chemin dégradé donnait 12 tours et le chemin inline 8, donc
+relever `DIFF_MAX_CHARS` avait fait sortir les plus gros changements du 12 pour les mettre
+dans le 8. Douze partout ne peut plus s'inverser. Le chemin dégradé garde `grep` et `find`.
 ³ **Correction du 22 août.** `minimal|low|medium → null` ne veut pas dire « pas de
 raisonnement » mais « champ omis », donc le modèle retombe sur son défaut — et
 `deepseek-v4-flash` est hybride. Les douze scouts du run `b9baad` ont émis entre 323 et
@@ -44,7 +44,9 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 | **dispersion mesurée** | | **8 %** | **2 %** | **13 %** | |
 | Balance Âgée (2 978 l.) | run 2 `6fcfbb` | 53 | 369 | ~3 $ | 3 |
 | Balance Âgée | run 3 `b9baad` | 39 | 296 | ~3 $ | 0 |
-| Balance Âgée | **run 4 `2cab6c`** | **40** | **303** | **~3,5 $** | **0** |
+| Balance Âgée | run 4 `2cab6c` | 40 | 303 | ~3,5 $ | 0 |
+| Balance Âgée | run 5 | 34 | 274 | ~4,4 $ | 3 |
+| Balance Âgée | **run 6 `48acec`** | **40** | **317** | **3,59 $** | **1** |
 | Balance Âgée — Claude Code | — | — | — | — | 1 h 12, 165 tests |
 
 **Aucune conclusion ne tient sous ces écarts.** Un gain de 13 % sur `csv-to-bq` est du bruit.
@@ -128,6 +130,28 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       coûté ~531 000 tokens là où son diff en pesait 17 750. Lire douze fichiers entiers pour
       reconstruire 71 kO de changements coûte nécessairement plus que les 71 kO.
       *80 000 et non 64 000 :* 64 000 ne convertit qu'un des deux cas observés.
+
+- [x] **run 5** — 34 délégations, **3 revues mortes à 8 tours en tenant leur diff**. Cause :
+      deux corrections qui se composent — le conditionnel de taille retiré, puis
+      `DIFF_MAX_CHARS` relevé, ce qui a fait passer les plus gros changements du chemin
+      dégradé à 12 tours au chemin inline à 8. Échelle inversée.
+      → **Corrigé** : plafond reviewer plat à 12.
+- [x] **run 6 `48acec`** — 40 délégations, 160 tests, meilleur livrable des six. Deux revues
+      à 10 et 11 tours **concluent** là où le run 5 en tuait trois. Coût reviewer 4,37 → 3,59 $,
+      entièrement par les trois revues mortes qui ne se refont plus. Un `no_submit` worker à
+      cinq tours sans rien écrire, rattrapé par l'orchestrateur lui-même.
+      → **Corrigé** : retry pour un writer dont l'arbre est prouvé inchangé.
+      → **Retiré** : la règle A, un run après sa pose. Elle déclassait un `needs_rework` sur
+      des LOW seuls ; le même run a montré une revue rendant `approved` avec un MEDIUM certain
+      qui ne justifiait pas de renvoyer le livrable. Une sévérité note un finding, un verdict
+      note le diff.
+- [x] **Douze contradictions relevées par `gpt-5.6-sol`**, lu en tant que destinataire
+      d'`AGENTS.md` : précédence, régime libre, ligne unique d'un livrable, seuil des
+      50 lignes, deux listes de critères, signature de l'outil, brief, escalade du worker,
+      `reviewer → scout → reviewer` bloqué par la garde, bootstrap du scout, double échéance.
+      Puis cinq de plus à la relecture : « backlog deliverable » inexistant en régime libre,
+      `/compact` sans `INSTRUCTIONS.md`, détection du bundle sur deux fichiers au lieu de
+      quatre, substance du `project AGENTS.md` qui ne traverse pas la frontière enfant.
 
 ### Hors run
 

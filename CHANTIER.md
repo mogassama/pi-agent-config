@@ -218,6 +218,22 @@ n'est pas mesurable. Les refus sont journalisés dans
 `.pi-subagent-runs/<runId>-refusals.jsonl` — un fichier vide est une mesure, un
 fichier absent est une supposition.
 
+**Et la frontière, resserrée après le run `48acec`.** Le principe disait « ce qui
+doit tenir inconditionnellement vit dans le code ». Une garde a été ajoutée puis
+retirée un run plus tard parce qu'elle encodait comme invariant mécanique une
+relation qui n'en est pas une : `severity(finding)` et `verdict(diff)` ne sont
+pas la même variable. Un ensemble de LOW peut légitimement conduire à
+`needs_rework` ; un MEDIUM certain peut être une remarque locale compatible avec
+`approved`. La formulation juste est plus étroite :
+
+> **Ce qui doit tenir indépendamment du jugement du rôle vit dans le code. Ce qui
+> demande une appréciation d'ensemble reste au rôle.**
+
+Bons candidats mécaniques : un reviewer ne juge pas son propre code, un scout
+exige `find` + `scope`, pas de troisième revue identique, une enveloppe respecte
+son schéma, un writer mort laisse son delta de fichiers. Le verdict, lui, est le
+produit pour lequel on paie Sonnet.
+
 ### Le domaine appartient à la tâche
 
 `task` prend un `skills` optionnel. Les définitions d'agent ne déclarent aucun

@@ -29,7 +29,7 @@ Note: this stack is Mo's practice area, not a default for every project. In bund
 - **No invented APIs.** If unsure whether a function/method/SQL feature exists, check it (`bash` to grep, `bash` to run `--help`, read the source). Hallucinated `gcloud`/`bq`/SQLAlchemy/Airflow APIs are a recurring failure mode — verify.
 - **Verification floor.** Run only what the tooling does not already run. `pi-lint-gate` runs ruff after every `.py` edit and mypy at turn end — never re-run them by hand. `pi-bq-cost-sentinel` dry-runs every `bq query` issued through `bash`, subagents included — report its estimate, don't issue a second dry-run. Compilation checks, AST inspection of annotations, runtime import assertions, usage searches, `git diff` and `git status` are not verification unless the task names them. Below ~10 changed lines the verification report is one line, or the word `none`.
 - **Run what you can run — above the floor.** For a substantial change, run the relevant test suite if one exists locally and report exit codes plainly. Don't claim "this should work" when you can actually check.
-- **Surface uncertainty.** When the spec is ambiguous, ask one focused question rather than guessing wide. When you've made an assumption, state it inline.
+- **Surface uncertainty.** Ask when the ambiguity changes an expensive or irreversible direction — see the three cases below. Otherwise make the narrowest reversible assumption, state it inline, and keep going: a naming question is not a reason to stop.
 - **Stop on red — a red test, not a missing one.** A check that *runs and fails* in a way that contradicts the plan is a signal: stop and report. Don't paper over it with try/except or `# noqa`.
 - **Note and continue on unavailable.** A check that *cannot run* — absent fixture, missing dataset, uninstalled tool, no credentials, unsimulatable data — is a void, not a signal. Record it verbatim in the output as `unavailable: <reason>`, then move to the next item. A missing prerequisite is never a stop condition, and never a reason to skip the item silently. Same pattern as the `code-review` skill's tooling reporting.
 
@@ -73,7 +73,9 @@ The "Code style — defaults" section below applies only where the bundle is sil
 
 Pi runs in one of two regimes. The regime is detected structurally, per session, at the repo root — never from a project name or a path convention.
 
-**Detection:** `ARCHITECTURE.md` **and** `INSTRUCTIONS.md` both present at the repo root → **bundle regime**. Otherwise → **free regime**.
+**Detection:** all four of `INSTRUCTIONS.md`, `ARCHITECTURE.md`, `DESIGN.md` and `CONVENTIONS.md` present at the repo root → **bundle regime**. Otherwise → **free regime**.
+
+Two files used to be enough, and the four are the ones the rules below actually refer to. A repository carrying its own `ARCHITECTURE.md` and `INSTRUCTIONS.md` — which is ordinary — was classified as a Forge bundle it never was, and the file names became a marker of provenance in a detection that is meant to be structural. Three of four is the free regime: a partial bundle is not a bundle.
 
 State the detected regime in one line only when the session involves planning, multi-file implementation, or a decision. A single mechanical edit does not warrant the check or the announcement.
 
@@ -167,7 +169,8 @@ Orchestrator-only skills are never injected into a child and are invoked with `/
 - Lancer `/compact` à ~50% du contexte ou après chaque tâche du backlog. Ne pas attendre l'auto-compact.
 - `/compact`: use for in-session context compression (same model, continuing session)
 - `handoff.md` prompt: use when switching model or handing off to a new session
-- Après `/compact`, relire uniquement `INSTRUCTIONS.md` pour retrouver l'état du backlog — les autres fichiers du bundle sont déjà en cache, ne pas les réinjecter manuellement.
+- Après `/compact` en **régime bundle**, relire uniquement `INSTRUCTIONS.md` pour retrouver l'état du backlog — les autres fichiers du bundle sont déjà en cache, ne pas les réinjecter manuellement.
+- Après `/compact` en **régime libre**, il n'y a pas d'`INSTRUCTIONS.md` à relire et les directions prises ne vivent que dans la session. Reconstruire depuis le résumé de compactage et l'état du dépôt : ce qui est sur disque, ce que les enveloppes des délégations passées ont rendu — elles sont dans `.pi-subagent-runs/` et elles, ne se compactent pas. Ne rien re-décider qui ait déjà été décidé sans donnée nouvelle.
 
 ### Prompt stack order (stable → variable)
 
@@ -206,7 +209,7 @@ to someone who has never seen this session — because that is the case.
 | Agent | When to use | Never use for |
 |:---|:---|:---|
 | **worker** | Implementing an approved direction — a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Has no live channel out: an ambiguity it cannot resolve is described in `deviations` and the work continues around it, or the delegation ends with `status: "blocked"`. | Work with no approved direction behind it |
-| **reviewer** | Any code belonging to a backlog deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
+| **reviewer** | Any code belonging to an implementation deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
 | **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
 
 `advisor` (architectural forks, no tools) is designed but not written. Do not
@@ -273,8 +276,12 @@ passed against it, and produced a pipeline that could not read the actual file.
 Every check was green.
 
 **Quote what the child cannot reach at all.** Anything from this conversation,
-from a bundle file or from `.pi/BRIEF.md` must be pasted verbatim into the task
-text, not referred to.
+from a bundle file, from `.pi/BRIEF.md` or from a **project `AGENTS.md`** must be
+pasted verbatim into the task text, not referred to. The project file is the one
+easiest to forget, because it is the most authoritative on substance and the
+child sees none of it: a rule like "monetary amounts use Decimal, never float"
+has full precedence in your context and does not exist for whoever writes the
+code. Quote the rules that bear on this task, not the file.
 
 **Under-specification is the dominant failure of delegation.** It does not
 announce itself: the child returns `ok`, the envelope validates, the tests pass.
@@ -286,7 +293,11 @@ detail is missing, that reader invents it rather than asking.
 **Handle inline — never delegate:** conversational answers, single-line edits,
 reading one file, coordinating subagent results, the decision to delegate itself.
 
-**Never handle inline — always delegate:** the code of a backlog deliverable.
+**Never handle inline — always delegate:** the code of an **implementation
+deliverable** — any code asked for as a result of the session, whether it comes
+from a bundle backlog item or from a direction settled in the free regime. The
+concept exists so the rule survives the change of regime: a twenty-line fix
+decided in conversation is a deliverable, and nothing about "backlog" made it one.
 Whatever the threshold says, whatever the bundle has already settled, a
 deliverable is written by a worker and judged by a reviewer. The reason is
 structural, not economic, so it does not lose to a cost calculation: code you
@@ -297,7 +308,7 @@ it returned `needs_rework`, and the fix was never judged by anyone. The run was
 the cheapest of six and the only one whose last verdict stayed open.
 
 **What decides is what the line belongs to, not how long it is.** A single-line
-edit that is not part of a backlog deliverable stays inline — a status field, a
+edit that is not part of an implementation deliverable stays inline — a status field, a
 typo in a comment, a local fix to your own scratch file. A single-line edit that
 *is* the deliverable, or part of it, goes through a worker and a reviewer like
 any other: a constant that changes a partitioning key is one line and is the
