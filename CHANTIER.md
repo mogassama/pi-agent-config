@@ -476,6 +476,18 @@ positif serait un marqueur produit par Forge lui-même ; ne pas le choisir avant
 regardé ce que Forge peut émettre naturellement. En attendant, vérifier avant chaque
 benchmark que le dépôt de test ne porte pas les quatre noms par hasard.
 
+**Le reviewer reste sur Sonnet 5, et c'est mesuré.** Gemini 3.7 Flash coûte 71 % de moins et
+retrouve deux défauts sur trois, dont celui de `load.py` que ni `flake8` ni `mypy` ne voient.
+Il manque entièrement la double boucle de `transform.py` en `medium`, et en `high` il atteint
+son plafond de douze tours sans rendre d'enveloppe. Un portail de qualité qui laisse passer un
+défaut quadratique ne s'évalue pas au prix du tour.
+
+Ce que la porte a aussi produit, et qui vaut au-delà du choix de modèle : le verdict de Sonnet
+n'est pas stable sur une entrée identique — `blocked` puis `needs_rework` sur le même fichier
+avec le même finding `HIGH certain`. La référence contre laquelle on mesure un juge est donc
+elle-même bruitée, ce qui plaide pour comparer des **localisations trouvées** plutôt que des
+verdicts.
+
 ## 8. Dette
 
 **`evidence/2026-08-03_submit-validation.jsonl`** reste dans l'historique Git avec

@@ -20,6 +20,17 @@ export interface AgentDefinition {
   name: string;
   description: string;
 
+  /**
+   * Which envelope schema this role submits under. Defaults to `name`.
+   *
+   * The envelope's vocabulary is closed on purpose — scout, worker, reviewer,
+   * advisor — and a model variant is not a new role: `reviewer-gemini` reviews,
+   * it just reviews on a different model. Without this field the only way to run
+   * two models side by side was to add the variant's name to the closed set,
+   * which is how a closed vocabulary stops being one.
+   */
+  envelopeRole?: string;
+
   /** Provider-qualified, e.g. "claude-bridge/claude-sonnet-5". */
   model: string;
   /** Tried in order when the primary model errors. Empty means fail immediately. */
@@ -251,6 +262,7 @@ export function parseAgent(raw: string, filePath: string): AgentDefinition {
   return {
     name,
     description: str(fields, "description") ?? "",
+    envelopeRole: str(fields, "envelopeRole"),
     model,
     fallbackModels: list(fields, "fallbackModels") ?? DEFAULTS.fallbackModels,
     thinking: str(fields, "thinking"),

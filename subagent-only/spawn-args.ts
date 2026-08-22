@@ -386,7 +386,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
 
   return {
     args,
-    env: { PI_SUBAGENT_ROLE: agent.name },
+    env: { PI_SUBAGENT_ROLE: agent.envelopeRole ?? agent.name },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),
     withoutDelta,

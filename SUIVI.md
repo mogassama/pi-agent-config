@@ -153,6 +153,27 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       `/compact` sans `INSTRUCTIONS.md`, détection du bundle sur deux fichiers au lieu de
       quatre, substance du `project AGENTS.md` qui ne traverse pas la frontière enfant.
 
+- [x] **Porte reviewer — Sonnet 5 contre Gemini 3.7 Flash**, sur quatre fichiers d'`anime-etl`
+      aux défauts vérifiés. Première mesure de la série qui compare un jugement à une
+      **référence** et non à une autre exécution.
+      *Résultat : Sonnet garde le rôle.* Gemini retrouve les défauts de `config.py` et
+      `load.py` — dont le HIGH que ni `flake8` ni `mypy` ne voient — mais rend **`approved`
+      avec zéro finding sur `transform.py`**, où le recalcul de `normalize_title` dans une
+      double boucle est réel et confirmé. Rejoué en `thinking: high` sur ce seul fichier :
+      **plafond de 12 tours atteint, aucune enveloppe, 213 159 tokens**. Il ne voit pas en
+      `medium` et ne conclut pas en `high`.
+      *Coût, pour mémoire :* 0,118 $ contre 0,409 $ sur les quatre revues, −71 %. L'économie
+      est réelle et ne compense pas un défaut quadratique laissé passer.
+      *Deux acquis annexes :* Gemini ne met rien en cache sur les revues courtes — 97 757
+      tokens d'entrée plein tarif contre 187 508 relus à 10 % chez Sonnet, donc l'économie
+      vient du tarif d'entrée seul et se dégradera sur des revues plus longues. Et Sonnet a
+      rendu `blocked` puis `needs_rework` sur `config.py` avec le même finding `HIGH certain`
+      à deux runs d'intervalle — le verdict n'est pas stable sur une entrée identique.
+      *Une correction à la référence :* `extract.py`, tenu pour corrigé, porte encore un
+      défaut réel que Sonnet a trouvé — l'ordre des décorateurs place `retry` sous `limits`,
+      donc les reprises tenacity contournent le rate-limiter. Il n'y avait donc aucun fichier
+      témoin, et les faux positifs n'ont pas pu être mesurés.
+
 ### Hors run
 
 - [x] Audit du dispositif `.pi/BRIEF.md` — le brief survivait aux remises à zéro et décrivait
