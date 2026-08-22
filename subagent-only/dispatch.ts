@@ -584,6 +584,16 @@ const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cach
   ["google/gemini-2.5-flash-lite", { in: 0.1, out: 0.4 }],
   ["google/gemini-3.1-flash-lite", { in: 0.25, out: 1.5 }],
   ["google/gemini-3.5-flash-lite", { in: 0.3, out: 2.5 }],
+  // 3.7 Flash, introductory rate through 31 December 2026 — 0.75 in and 3.75
+  // out, doubling to 1.50 and 7.50 on 1 January 2027, which is worth knowing
+  // before a role's budget is built on it. Cached input is published at 0.075,
+  // exactly a tenth of input, so the default read multiplier is right.
+  // `cacheWrite` stays at 1.25 and overstates: Google bills the first pass as
+  // ordinary input and charges cache *storage* by the hour instead, which a
+  // per-token table cannot express — that line has to be read off the console
+  // and will never appear in the footer. Flash pricing is flat whatever the
+  // prompt length, so there is no cliff of the kind Grok has at 200K.
+  ["google/gemini-3.7-flash", { in: 0.75, out: 3.75 }],
   ["google/gemini-3.6-flash", { in: 1.5, out: 7.5 }],
   ["google/gemini-3.5-flash", { in: 1.5, out: 9 }],
   ["google/gemini-3.1-pro", { in: 2, out: 12 }],
@@ -596,15 +606,25 @@ const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cach
   // read is 0.007/M, i.e. 0.016 of the peak input rate.
   ["deepseek/deepseek-v4-flash", { in: 0.44, out: 1.32, cacheWrite: 0, cacheRead: 0.016 }],
   ["deepseek/deepseek-v4-pro", { in: 0.88, out: 2.64, cacheWrite: 0, cacheRead: 0.016 }],
-  // Qwen 3.8 Max, list price. The cache multipliers are deliberately left at the
-  // Anthropic defaults — 1.25 on write, 0.1 on read — because they are not
-  // known for this provider and overstating is the safe direction: a table that
-  // reports more than the bill costs a correction, one that reports less costs
-  // a decision. If DashScope writes its prefix cache free, as DeepSeek does,
-  // this entry overstates a review by roughly a tenth and the first console
-  // figure will say so. Reconcile it on the anime-etl run, before the reviewer
-  // moves here for real.
-  ["qwen-paygo/qwen3.8-max", { in: 2, out: 6 }],
+  // Qwen-Max on pay-as-you-go.
+  //
+  // 3.8-max reached general availability on 3 August 2026 at a flat 2.00 in and
+  // 6.00 out across the whole 1M context, with cached input at 0.25 — an eighth
+  // of the input price rather than the tenth Model Studio applies generally, so
+  // it is written here rather than defaulted. It was briefly a Token Plan
+  // exclusive during the July preview, and `qwen3.8-max-preview` still is; the
+  // GA id is the one without the suffix.
+  //
+  // `cacheWrite` stays at the default 1.25. Whether it is charged at all depends
+  // on the provider using explicit or implicit caching, and implicit caching has
+  // no creation charge. The whole difference between these two rides on that:
+  // measured against run 48acec's average review, an explicit cache puts Qwen
+  // within two per cent of Sonnet, an implicit one puts it eighty-four per cent
+  // below. Overstating is the safe direction until the console says which.
+  ["qwen-paygo/qwen3.8-max", { in: 2, out: 6, cacheRead: 0.125 }],
+  ["qwen-paygo/qwen3.7-max", { in: 2.5, out: 7.5 }],
+  ["qwen-paygo/qwen3-max", { in: 1.2, out: 6 }],
+  ["qwen-paygo/qwen-max", { in: 1.6, out: 6.4 }],
   ["qwen-paygo/", { in: 2, out: 6 }],
   ["anthropic/", { in: 2, out: 10 }],
 ];
