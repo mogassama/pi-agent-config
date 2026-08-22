@@ -123,7 +123,25 @@ export function resolveExtension(name: string, ctx: BuildContext): string {
  *
  * Providers built into pi need nothing.
  */
-const BUILTIN_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex", "kimi-coding", "xai", "groq", "openrouter"]);
+const BUILTIN_PROVIDERS = new Set([
+  "anthropic",
+  "google",
+  "openai",
+  "openai-codex",
+  "kimi-coding",
+  "xai",
+  "groq",
+  "openrouter",
+  // Native to pi and configured by an API key, not by an extension: `pi` lists
+  // it under the providers it can configure itself, with `models_json_key`. It
+  // failed the check because this set was written from the providers in use at
+  // the time and a provider absent from it is treated as needing a package —
+  // which sends the fix in the wrong direction, since there is no package to
+  // name. Two lists, two questions: does pi know this provider, and if not
+  // which extension supplies it.
+  "qwen-paygo",
+  "qwen",
+]);
 
 /**
  * Providers that need an extension loaded before their models exist.
