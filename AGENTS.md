@@ -103,7 +103,7 @@ No frozen artefact. Architecture is decided in-session, grounded in the repo's a
 Applies in both regimes. Replace the word "bundle" with "the frozen artefacts, if any".
 
 1. **The bundle decides.** Apply it. No question, no restatement, no summary.
-2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, record the decision in the commit body (`why`, not `what`), ask nothing. **One exception, and it is the free regime's whole subject:** an expensive or irreversible choice — new service, new dependency, schema shape, storage layout, directory restructure — is not silence to be filled by a skill. It goes to the operator with two options and a recommendation, per "Free regime" above. Silence covers what is cheap to undo; nothing else.
+2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, state the decision inline, ask nothing — and if a commit is later requested, preserve its `why` in the commit body. In the free regime a commit may never happen, and a decision recorded nowhere else would exist nowhere. **One exception, and it is the free regime's whole subject:** an expensive or irreversible choice — new service, new dependency, schema shape, storage layout, directory restructure — is not silence to be filled by a skill. It goes to the operator with two options and a recommendation, per "Free regime" above. Silence covers what is cheap to undo; nothing else.
 3. **The repo contradicts the bundle.** Stop. Emit a divergence note — observed state, expected state, options, no decision — and put it to **the operator**, through the orchestrator. A subagent has no channel to the operator: it returns `status: "blocked"` with the note in its summary, and the orchestrator owns the operator-facing question.
 
 **Never a fourth case.** `## Hard limits` above is the only other stop list, and it is complete. The irreversible-choice exception in case 2 is not a fourth case: it is a route to the operator inside case 2, and execution continues on everything else while the question is open. Do not invent a second, vaguer one. A gap in the bundle, a missing fixture, an untestable step, an ambiguous naming choice: none of these stop execution.
@@ -208,8 +208,8 @@ to someone who has never seen this session — because that is the case.
 
 | Agent | When to use | Never use for |
 |:---|:---|:---|
-| **worker** | Implementing an approved direction — a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Has no live channel out: an ambiguity it cannot resolve is described in `deviations` and the work continues around it, or the delegation ends with `status: "blocked"`. | Work with no approved direction behind it |
-| **reviewer** | Any code belonging to an implementation deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
+| **worker** | Implementing a settled direction — operator-approved when the choice was expensive or irreversible, otherwise settled by you under the free-regime rules; a plan, a handoff, or an operator-issued mechanical spec; bulk file operations. Writes directly to the working tree. Has no live channel out: an ambiguity it cannot resolve is described in `deviations` and the work continues around it, or the delegation ends with `status: "blocked"`. | Work with no settled direction behind it |
+| **reviewer** | Any code belonging to an implementation deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits **outside an implementation deliverable**; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
 | **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
 
 `advisor` (architectural forks, no tools) is designed but not written. Do not
@@ -255,7 +255,7 @@ the reviewer may weigh.
 delegation costs more than one not made: asked for a "final completeness
 inventory", a role built to report locations read the same nine files three
 times and returned nothing. The scout finds, the reviewer judges against a
-severity table, the worker implements an approved direction. A task that asks a
+severity table, the worker implements a settled direction. A task that asks a
 role for something outside that is not a hard task — it is the wrong role.
 
 **Delegating replaces reading.** Do not read the file you are about to hand off:
@@ -374,10 +374,10 @@ A second review with no worker between reads the same code and reaches the same
 verdict — the extension refuses it outright. A second completeness inventory
 returns the same inventory.
 
-**The backlog's end criteria are the stop condition.** When every item has
-passed its criterion, the session is over: say so and stop. Do not delegate a
-verification of the verification. A criterion that cannot be evaluated is noted
-`unavailable` and the item still counts as done — waiting for it is not a reason
+**In the bundle regime, the backlog's end criteria are the stop condition.** When
+every item has passed its criterion, the session is over: say so and stop. Do not
+delegate a verification of the verification. A criterion that cannot be evaluated
+is noted `unavailable` and the item still counts as done — waiting for it is not a reason
 to keep the session alive.
 
 **Write the synthesis yourself, before the next delegation.** After a round of
@@ -391,6 +391,14 @@ every reviewer suggestion.
 or architecture choices that the bundle does not settle are not yours to take on
 a reviewer's suggestion. Put the question to Mo and wait; do not launch a fix
 worker to make the decision by implementing it.
+
+**In the free regime, the operator's request is the stop condition.** There is no
+backlog and you do not write one: the session is over when the implementation
+deliverables that request needs have been implemented and judged, the validations
+that could be run have been run, and everything else is named — `unavailable`,
+deferred with a reason, or waiting on a decision only Mo can take. A request
+answered is an answer, not a backlog to keep extending: once it is met, another
+delegation has nothing left to change.
 
 **Say why the loop stopped.** When the session ends, state it in one line —
 rounds run, fixes applied, what is deferred, and which of the stop conditions

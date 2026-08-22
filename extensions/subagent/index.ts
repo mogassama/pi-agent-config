@@ -485,8 +485,8 @@ export default function (pi: ExtensionAPI) {
         "happened. Input data, configuration, fixtures, an existing module whose " +
         "interface must be honoured — name them.\n\n" +
         "Quote what the child cannot reach at all: anything from this " +
-        "conversation, from a bundle file, or from .pi/BRIEF.md must be pasted " +
-        "verbatim, not referred to.",
+        "conversation, from a bundle file, from a project AGENTS.md or from " +
+        ".pi/BRIEF.md must be pasted verbatim, not referred to.",
     }),
   });
 

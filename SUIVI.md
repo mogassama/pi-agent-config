@@ -168,18 +168,24 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 
 ### En cours
 
-- [ ] **Balance Âgée run 5** — un seul changement : le seuil d'inline du diff, 32 000 → 80 000.
-      *Attendu :* zéro revue dégradée — les deux du run 4, à 38 et 71 kO, passent en inline.
-      *Mesurer :* `grep -c 'No diff is inlined' .pi-subagent-runs/*reviewer.json` doit valoir 0,
-      et les tours du reviewer se comparer à `[2,2,2,3,4,4,5,5,6,6,7,8,8,11]`. Si la queue à
-      8 et 11 disparaît, le seuil était la cause ; si elle demeure, elle est ailleurs.
-      *Surveiller :* le coût du reviewer — 2,86 → 2,94 → **3,49 $**, seul poste qui ne baisse
-      pas. Son coût *par tour* est plat à ~0,049 $ : il coûte plus parce qu'il tourne plus,
-      pas parce qu'il est devenu cher.
-      *Et le rendement du worker :* 3,58 → 3,95 tours par test ajouté. Un run de plus avant
-      d'en tirer quoi que ce soit — l'écart est dans la dispersion.
+- [ ] **Benchmark en régime libre** — un seul prompt, aucun bundle, un dépôt que personne n'a
+      décrit. C'est la moitié de la configuration qu'aucun des vingt runs n'a exercée.
+      *Précondition :* le dépôt choisi ne doit pas porter les quatre fichiers du bundle,
+      sinon il est classé régime bundle et le test ne mesure rien.
+      *Cinq pièges retenus :* une exigence qui ne se satisfait qu'en lisant une donnée réelle
+      non décrite ; une optimisation naturelle qui casse une propriété non énoncée ; une
+      décision irréversible sans réponse évidente ; un piège de conformité que seule une
+      confrontation au réel révèle ; une convention présente **uniquement** dans un
+      `project AGENTS.md`, absente des skills et du prompt.
+      *Quatre portes, écrites avant les deux runs :* réalité, sémantique, conformité, décision.
+      *Et trois chiffres propres au régime :* délégations effectuées après que la demande est
+      satisfaite = 0 ; livrables terminés avec un dernier verdict ouvert = 0 ; raison d'arrêt
+      annoncée = 1, explicite.
+      *Ne pas scorer le nombre de tests ajoutés isolément* — 158 contre 165 a déjà montré
+      pourquoi. Et un bon run peut légitimement s'arrêter sur la question opérateur : « a tout
+      terminé » n'est pas une porte.
 
-### Après le run 4
+### Ensuite
 
 - [ ] ~~Règle de découpage des tâches worker~~ — **sans objet**. Le run 4 montre un étalement
       sans concentration sur le plafond, et l'exploration à 88 % en première moitié écarte la

@@ -466,6 +466,16 @@ Deux champs, et le registre de findings devient possible.
 
 ---
 
+**Risque de classification accepté.** Le régime est détecté par la présence des quatre
+fichiers du bundle à la racine. C'est bien plus fort que les deux exigés auparavant — un
+dépôt ordinaire portant `ARCHITECTURE.md` et `INSTRUCTIONS.md` n'est plus classé bundle —
+mais quatre noms de fichiers restent une **heuristique de provenance** : rien n'empêche un
+dépôt tiers de les porter tous les quatre sans qu'aucun vienne d'une session Forge validée.
+La détection se dit structurelle et ne l'est pas tout à fait. Le seul correctif sans faux
+positif serait un marqueur produit par Forge lui-même ; ne pas le choisir avant d'avoir
+regardé ce que Forge peut émettre naturellement. En attendant, vérifier avant chaque
+benchmark que le dépôt de test ne porte pas les quatre noms par hasard.
+
 ## 8. Dette
 
 **`evidence/2026-08-03_submit-validation.jsonl`** reste dans l'historique Git avec
