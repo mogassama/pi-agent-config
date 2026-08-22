@@ -98,17 +98,40 @@ function isReadOnly(tools: readonly string[]): boolean {
  * what it should have been. The scout first, because five of the six defects are
  * its own and it is the cheapest role to be wrong about.
  */
+const WHOLE_REPO = new Set([".", "./", "/", "*", "**", "**/*", ""]);
+
 function checkScoutInput(params: { find?: string; scope?: string[] }): string | null {
   const find = (params.find ?? "").trim();
   const scope = (params.scope ?? []).map((p) => p.trim()).filter(Boolean);
+
+  /*
+   * The bootstrap, which the contract created and did not answer.
+   *
+   * `scope` is required and the repository as a whole is not one, so on a
+   * project nobody has described — the free regime, which no run has yet
+   * exercised — the first reconnaissance needs to know a subtree before doing
+   * the search meant to find it. The contract made that a silent refusal loop.
+   * It is now a named step: list the root inline, scope to what comes back. An
+   * `ls` on a path you name is yours to make and costs one call.
+   */
+  if (find && scope.length > 0 && scope.every((p) => WHOLE_REPO.has(p))) {
+    return (
+      "Refused: the repository as a whole is not a scope. If you do not yet know where to " +
+      "look, that is not a scout question — list the root yourself with `ls`, then scope " +
+      "this call to the directories it returns. One inline call, and the scout gets a " +
+      "territory instead of a tree."
+    );
+  }
+
   if (find && scope.length > 0) return null;
 
   const missing = [!find ? "`find`" : "", scope.length === 0 ? "`scope`" : ""].filter(Boolean);
   return (
     `Refused: a scout call needs ${missing.join(" and ")}. \`find\` is the single thing to ` +
     "locate, as one question — where X is defined, who calls Y, which module owns Z. " +
-    "`scope` is the paths to search. If the question is a comparison between two sets, it " +
-    "is two scouts and a subtraction you do yourself: ask for each list, compare them here."
+    "`scope` is the paths to search — if you do not know them yet, list the root inline " +
+    "first. If the question is a comparison between two sets, it is two scouts and a " +
+    "subtraction you do yourself: ask for each list, compare them here."
   );
 }
 
@@ -443,7 +466,10 @@ export default function (pi: ExtensionAPI) {
       Type.Array(Type.String(), {
         description:
           "Scout only, and required for it: the paths to search, by directory or " +
-          "file. The whole repository is not a scope.",
+          "file. The whole repository is not a scope. On a repository you have " +
+          "not seen, list the root yourself first — one inline `ls`, which is a " +
+          "named read and yours to make — and scope the scout to the directories " +
+          "it returns.",
       }),
     ),
     task: Type.String({

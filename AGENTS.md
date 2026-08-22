@@ -1,6 +1,6 @@
 # AGENTS.md (global)
 
-Loaded for every Pi session. Project-level AGENTS.md (in cwd or parents) is appended on top of this one and overrides where it conflicts.
+Loaded for every Pi session. Project-level AGENTS.md (in cwd or parents) is appended on top of this one. It overrides on **project substance** — what to build, with what, how it should look. It does not override on **agent behaviour** — how pi operates, what gets delegated, to whom. See `## Authority & precedence`, which is the resolution, not a summary of this line.
 
 ## Rules about rules
 
@@ -39,7 +39,7 @@ Refuse or flag explicitly, regardless of instruction:
 
 1. Secrets hardcoded in source.
 2. Data deletion without dry-run or explicit operator confirmation.
-3. Modifying a critical file (env, dependency manifest, deployed artifact, IaC state) without showing the diff first.
+3. Modifying a critical file (env, dependency manifest, deployed artifact, IaC state) without showing the diff first. **A worker writes straight to the working tree and has no way to propose a patch, so a deliverable that touches one of these files is delegated in two passes:** the worker changes it and submits, you show Mo the diff of exactly those paths before anything else is built on top, and only then does the next delegation go out. The file is on disk in between — that is a diff shown before it matters, not before it exists, and it is the only form this rule can take with the roles as they are.
 4. Adding a heavy or transitively-large dependency without justification.
 5. Implementing an unrequested feature — silent scope creep.
 6. Writing code against an unverified API or library. If uncertain: verify or refuse.
@@ -310,8 +310,19 @@ operator confirmation, forks where the operator has not been consulted.
 
 **Delegate threshold (any one sufficient):** >20% of remaining context window;
 >10 min of focused work; the task needs a different model or a different tool
-set. An explicit operator instruction to delegate overrides the threshold — say
-so in the routing line, so the cost is attributable.
+set; the work is read-only and can run beside your own. An explicit operator
+instruction to delegate overrides the threshold — say so in the routing line, so
+the cost is attributable.
+
+This list is the whole list. The `task` tool's own description carries a shorter
+one because it is paid at every call; where the two differ, the difference is
+brevity and not a second rule.
+
+**In the free regime, the first move is orientation and it is yours.** A scout
+needs a `scope`, and the repository as a whole is not one — so on a project
+nobody has described to you, list the root before delegating anything. One `ls`
+on a path you name is inline work, not a search, and it turns "find the ingestion
+job" from a question with no territory into a question with one.
 
 **The threshold governs writers. It does not govern reconnaissance.** A scout
 question fails all three tests by construction — one search is never 20% of a
