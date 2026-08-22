@@ -361,13 +361,9 @@ async function runOnce(
     withoutDelta: plan.withoutDelta,
     role: agent.name,
     status: (envelope.status as RunResult["status"]) ?? "ok",
-    summary:
-      (String(envelope.summary ?? "").trim() || "(empty summary)") +
-      (envelope.verdict === "needs_rework" && effectiveVerdict(envelope) === "approved"
-        ? " (rework asked on LOW findings only — not blocking, recorded in the artefact)"
-        : ""),
+    summary: String(envelope.summary ?? "").trim() || "(empty summary)",
     next: deriveNext(envelope),
-    verdict: effectiveVerdict(envelope),
+    verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
     findings: Array.isArray(envelope.findings) ? envelope.findings.length : undefined,
     outOfScope: Array.isArray(envelope.out_of_scope) ? envelope.out_of_scope.length : undefined,
     changedFiles: Array.isArray(envelope.changed_files)
@@ -415,40 +411,23 @@ function treeState(cwd: string): Set<string> {
   }
 }
 
-/**
- * The verdict, with a rework that only cosmetics justify downgraded to approved.
+/*
+ * There is no rule downgrading a verdict here, and there was one.
  *
- * A review that follows a rework sees the whole deliverable again, not just the
- * patch — the fix can be locally right and globally wrong, which is exactly what
- * happened on run 3ed33e where a review approved two correct fixes while the
- * same identifier was still built two different ways in another module. But
- * widening what a review looks at widens what counts as introduced by the
- * change, and every fix cycle measured on that run produced a fresh finding on
- * freshly written code — the last one a LOW on code written two minutes earlier.
- * That tail is what stops a loop converging, not the real defects.
+ * It turned a `needs_rework` into an `approved` when every finding was LOW, to
+ * stop a loop converging on cosmetics. Measured on run 48acec it fired twice and
+ * saved two rework cycles — and the same run showed why it was wrong. A review
+ * returned `approved` while carrying a MEDIUM/certain finding: six sections of
+ * DESIGN.md moved to Implemented and the one this deliverable implements did
+ * not. Real, exactly located, and not worth sending the deliverable back. The
+ * reviewer had the context to see that; the severity label, attached to one
+ * finding in isolation, did not.
  *
- * So severity decides whether the loop continues. LOW findings are returned,
- * written to the artefact, and do not block; anything MEDIUM or above does. The
- * reviewer is not told this rule, which is why it cannot game it: it grades on
- * the domain's severity table exactly as before, and the loop reads the grade.
- *
- * The visible half stays visible: the head still carries the finding count, so
- * `[reviewer: approved, 2 findings]` says plainly that something was seen and
- * judged not worth another pass.
+ * Which settles it in both directions. A severity grades a finding; a verdict
+ * grades the diff. Overriding the verdict with the severity took authority away
+ * from the reviewer where it was cautious and left it where it was lax — the
+ * worst of the two arrangements. The loop reads the verdict, and nothing else.
  */
-function effectiveVerdict(envelope: Record<string, unknown>): string | undefined {
-  const verdict = typeof envelope.verdict === "string" ? envelope.verdict : undefined;
-  if (verdict !== "needs_rework") return verdict;
-
-  const findings = Array.isArray(envelope.findings) ? envelope.findings : [];
-  if (findings.length === 0) return verdict;
-
-  const blocking = findings.some((f: unknown) => {
-    const sev = String((f as { severity?: unknown })?.severity ?? "").toUpperCase();
-    return sev !== "LOW";
-  });
-  return blocking ? verdict : "approved";
-}
 
 /**
  * What runs next, decided here rather than asked of the child.
@@ -536,7 +515,18 @@ export async function dispatch(
      * twice as expensively. Never for a writer: re-running one that stopped
      * mid-edit would redo edits against a tree it already changed.
      */
-    if (result.failure === "no_submit" && !mutates && !opts.signal?.aborted) {
+    // A writer qualifies only when it wrote nothing.
+    //
+    // The exclusion was right and too wide. Measured on run 48acec: `31-worker`
+    // stopped after five turns of thirty with no submit and no changed files —
+    // nothing on disk, nothing to redo, and the deliverable simply did not get
+    // done by that delegation. The danger of re-running a writer is that it
+    // replays edits against a tree it already changed; when the before/after
+    // snapshots are identical there is no such tree, and the safety condition is
+    // mechanical rather than a judgement. `salvaged` is that comparison and it
+    // is already computed.
+    const wroteNothing = mutates && result.changedFiles === undefined;
+    if (result.failure === "no_submit" && (!mutates || wroteNothing) && !opts.signal?.aborted) {
       const retry = await runOnce(agent, model, task, opts);
       if (!retry.failure) {
         return { ...retry, summary: `${retry.summary} (retried after an empty first attempt)` };
