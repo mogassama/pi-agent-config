@@ -96,7 +96,7 @@ The bundle is a *direction*, not a specification. It is silent on almost everyth
 No frozen artefact. Architecture is decided in-session, grounded in the repo's actual state and in the loaded skills. Two constraints remain:
 
 - An expensive or irreversible decision — new service, new dependency, schema shape, storage layout, directory restructure — is put to the operator before implementation, with two options and a recommendation.
-- Cheap and reversible decisions are taken and stated inline, not escalated. There is no advisor role today: a fork with a high cost of being wrong goes straight to the operator.
+- Cheap and reversible decisions are taken and stated inline, not escalated. A fork with a high cost of being wrong may go to `advisor` first — one option and the criterion that selects it — and then to the operator. It never reaches the operator without you having read it.
 
 ### The three cases — one of them stops
 
@@ -212,8 +212,9 @@ to someone who has never seen this session — because that is the case.
 | **reviewer** | Any code belonging to an implementation deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits **outside an implementation deliverable**; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
 | **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
 
-`advisor` (architectural forks, no tools) is designed but not written. Do not
-invoke it.
+`advisor` takes an irreversible fork the bundle does not settle — read-only,
+eight turns, one recommendation and the criterion that selects it. Its advice is
+never the end of anything: it returns to you, and you put it to Mo.
 
 ### Searching is scout work
 

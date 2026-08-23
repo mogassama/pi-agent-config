@@ -445,6 +445,14 @@ function deriveNext(envelope: Record<string, unknown>): string {
   if (typeof envelope.verdict === "string") {
     return envelope.verdict === "approved" ? "done" : "orchestrator";
   }
+  // An advice is never `done`. Its payload carries a `recommendation`, and a
+  // recommendation is an input to a decision the operator takes — the advisor
+  // exists precisely because no rule covers the fork, so nothing downstream can
+  // close on its output alone. Recognised by the payload rather than by the
+  // role name, so a model variant of the advisor derives the same way.
+  if (Array.isArray(envelope.concerns) || typeof envelope.recommendation === "string") {
+    return "orchestrator";
+  }
   return "done";
 }
 
@@ -574,7 +582,7 @@ export async function dispatch(
  * Sonnet review.
  */
 const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cacheRead?: number }]> = [
-  ["anthropic/claude-opus", { in: 5, out: 25 }],
+  ["anthropic/claude-opus", { in: 15, out: 75 }],
   ["anthropic/claude-haiku", { in: 0.8, out: 4 }],
   ["anthropic/claude-sonnet", { in: 2, out: 10 }],
   // "Flash" is a family name, not a price band: 3.5 Flash lists at 1.50/9.00,

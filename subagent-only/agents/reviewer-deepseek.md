@@ -1,8 +1,9 @@
 ---
-name: reviewer
-description: Read-only review of a change against the domain conventions it was written under.
-model: anthropic/claude-sonnet-5
-fallbackModels: [deepseek/deepseek-v4-pro]
+name: reviewer-deepseek
+description: Same reviewer, on DeepSeek V4 Pro. Temporary, for the anime-etl gate only — delete it once the model decision is made.
+model: deepseek/deepseek-v4-pro
+envelopeRole: reviewer
+fallbackModels: [anthropic/claude-sonnet-5]
 thinking: medium
 tools: [read, ls, submit]
 extensions: [envelope]
