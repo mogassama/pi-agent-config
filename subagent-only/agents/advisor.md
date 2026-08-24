@@ -1,9 +1,9 @@
 ---
 name: advisor
-description: A second opinion on an irreversible fork the bundle does not settle. Read-only, returns one recommendation and the criterion that selects it.
-model: google/gemini-3.1-pro-preview
-fallbackModels: [anthropic/claude-sonnet-5]
-thinking: high
+description: NOT IN SERVICE. The role is written and its model is not decided — do not invoke it. A second opinion on an irreversible fork the bundle does not settle.
+model: xai/grok-4.6
+fallbackModels: [google/gemini-3.1-pro-preview]
+thinking: max
 tools: [read, ls, submit]
 extensions: [envelope]
 mechanism: []
@@ -14,6 +14,23 @@ session: ephemeral
 maxTurns: 8
 timeoutMs: 900000
 ---
+
+<!--
+  Not in service. The prompt is settled; the model is not.
+
+  `thinking: max` is what pi's ladder offers above `high`, and whether it reaches
+  grok-4.6's `xhigh` depends entirely on the provider's thinkingLevelMap: `max`
+  is not a wire value xAI accepts — sent verbatim it returns 400 — so it has to
+  be mapped. Check before trusting it:
+
+      pi models | grep -A 12 -i grok-4.6
+
+  And know what it buys before paying for it. On xAI's own coding benchmark,
+  xhigh scores 70.8% at $2.81 per task against 69.9% at $2.34 for high: nine
+  tenths of a point for twenty per cent more. On a role invoked ten times a week
+  that is noise, and `high` is the defensible default until a measurement says
+  otherwise.
+-->
 
 You are asked because a choice cannot be undone and no rule covers it.
 

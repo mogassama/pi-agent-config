@@ -194,6 +194,22 @@ async function runOnce(
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
   const before = mutates ? treeState(process.cwd()) : new Set<string>();
 
+  /*
+   * When the delegation started, so the artefact can say how long it took.
+   *
+   * Eight runs went by without a single duration being recorded, and the one
+   * time it was needed it had to be reconstructed by subtracting one
+   * delegation's start from the next one's — a method that only works because
+   * everything runs in sequence, and that would therefore stop being valid at
+   * exactly the moment it mattered most. It also measured the wrong thing:
+   * spawn-to-spawn contains the child, plus the orchestrator's own turn, plus
+   * any pause. dispatch knows the real boundaries, so it writes them.
+   *
+   * What that reconstruction did show, once: the scout is 12% of wall time
+   * across eighteen delegations, on a role that took three batches to tune.
+   */
+  const startedAt = Date.now();
+
   const state: StreamState = {
     turns: 0,
     submit: null,
@@ -304,6 +320,7 @@ async function runOnce(
         model,
         task,
         turns: state.turns,
+        durationMs: Date.now() - startedAt,
         usage: state.usage,
         injectedTokens: plan.estimatedInputTokens,
         exitCode: code,
@@ -634,6 +651,14 @@ const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cach
   ["qwen-paygo/qwen3-max", { in: 1.2, out: 6 }],
   ["qwen-paygo/qwen-max", { in: 1.6, out: 6.4 }],
   ["qwen-paygo/", { in: 2, out: 6 }],
+  // Grok 4.6, standard tier below 200k prompt tokens: 2.00 in, 0.50 cached, 6.00
+  // out. Past 200k, *every token in the request* moves to double rate — the
+  // last token across the line changes the price of the first — and a table
+  // keyed on a model name cannot express that. A review runs near 50k, so the
+  // cliff is far; an advisor quoting a whole bundle is closer to it than it
+  // looks. Cached input at a quarter of input, not the usual tenth.
+  ["xai/grok-4.6", { in: 2, out: 6, cacheRead: 0.25 }],
+  ["xai/", { in: 2, out: 6, cacheRead: 0.25 }],
   ["anthropic/", { in: 2, out: 10 }],
 ];
 

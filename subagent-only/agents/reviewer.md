@@ -2,7 +2,7 @@
 name: reviewer
 description: Read-only review of a change against the domain conventions it was written under.
 model: anthropic/claude-sonnet-5
-fallbackModels: [deepseek/deepseek-v4-pro]
+fallbackModels: [google/gemini-3.1-pro-preview]
 thinking: medium
 tools: [read, ls, submit]
 extensions: [envelope]

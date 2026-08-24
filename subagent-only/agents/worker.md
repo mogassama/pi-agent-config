@@ -1,8 +1,8 @@
 ---
 name: worker
 description: Implements one scoped change, writing directly to the working tree.
-model: openai-codex/gpt-5.6-sol
-fallbackModels: [openai-codex/gpt-5.6-terra]
+model: openai-codex/gpt-5.6-terra
+fallbackModels: [openai-codex/gpt-5.6-sol]
 thinking: high
 tools: [read, grep, find, ls, bash, edit, write, submit]
 extensions: [envelope, pi-lint-gate, bash-guard, pi-bq-cost-sentinel]
