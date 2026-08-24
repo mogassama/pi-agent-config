@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : lot `5543d92` + corrections post-relecture.
+Branche `feat/subagent-extension`. État courant : `9de2af1` + scouts parallèles.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -13,10 +13,10 @@ et ce qui reste.
 
 | Rôle | Modèle | Thinking | Session | Tours | Outils |
 |:--|:--|:--|:--|--:|:--|
-| worker | `openai-codex/gpt-5.6-sol` | `high` | éphémère | **30** ¹ | read, grep, find, ls, bash, edit, write |
+| worker | `openai-codex/gpt-5.6-terra` ⁴ | `high` | éphémère | **30** ¹ | read, grep, find, ls, bash, edit, write |
 | reviewer | `anthropic/claude-sonnet-5` | medium | éphémère | **12** ² | read, ls |
 | scout | `deepseek/deepseek-v4-flash` | low ³ | éphémère | 12 | read, grep, find, ls, bash |
-| advisor | — | — | — | — | **non écrit** |
+| advisor | `xai/grok-4.6` | `xhigh` ⁵ | éphémère | 8 | read, ls — **hors service** |
 
 ¹ Monté de 20 à 30 après le run `b9baad`, où quatre workers sur quatorze ont soumis au tour
 exact du plafond en étant encore en train d'éditer. Consigne : conclure quatre tours avant.
@@ -24,6 +24,11 @@ exact du plafond en étant encore en train d'éditer. Consigne : conclure quatre
 L'échelle s'était inversée : le chemin dégradé donnait 12 tours et le chemin inline 8, donc
 relever `DIFF_MAX_CHARS` avait fait sortir les plus gros changements du 12 pour les mettre
 dans le 8. Douze partout ne peut plus s'inverser. Le chemin dégradé garde `grep` et `find`.
+⁴ Bascule depuis `gpt-5.6-sol` le 24 août, à mesurer. Référence à battre, run 7 : dix-sept
+délégations worker, médiane 10 tours, 47 tests ajoutés. Sol reste en repli.
+⁵ Écrit, **jamais invoqué** : `AGENTS.md` interdit la délégation. `xhigh` et non `max` —
+la table de pi mappe `max` sur `null`, donc champ omis, donc défaut du modèle.
+
 ³ **Correction du 22 août.** `minimal|low|medium → null` ne veut pas dire « pas de
 raisonnement » mais « champ omis », donc le modèle retombe sur son défaut — et
 `deepseek-v4-flash` est hybride. Les douze scouts du run `b9baad` ont émis entre 323 et
@@ -173,6 +178,29 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       défaut réel que Sonnet a trouvé — l'ordre des décorateurs place `retry` sous `limits`,
       donc les reprises tenacity contournent le rate-limiter. Il n'y avait donc aucun fichier
       témoin, et les faux positifs n'ont pas pu être mesurés.
+
+- [x] **run 7** — 42 délégations, 17 workers, 17 reviewers, 8 scouts, 156 tests, zéro échec.
+      Reviewer Sonnet : **14 findings sur 17 revues**, dont un HIGH bloquant. C'est la
+      baseline de qualité du reviewer.
+- [x] **run 8** — même bundle, reviewer basculé sur DeepSeek V4 Pro. 162 tests au vert, le
+      meilleur livrable des huit — et **1 finding sur 11 revues**, dix `approved` à zéro
+      finding. Deux `provider_error` sur quota ChatGPT, hors configuration.
+      *Décision : Sonnet garde le rôle.* Le mode de défaillance n'est pas l'erreur, c'est de
+      ne jamais contester — et tout le dispositif repose sur un tiers qui voit ce que
+      l'auteur ne voit pas. 2,6 fois plus lent par revue en prime : `34-reviewer`, quatre
+      tours, 37 560 tokens de sortie dont 35 922 de raisonnement, dix minutes pour un MEDIUM.
+- [x] **Temps mur mesuré pour la première fois**, reconstruit par différence entre lancements :
+      worker 47 %, reviewer 41 %, scout 12 %. Le scout, qui a coûté trois lots de réglage,
+      pèse un huitième. → `durationMs` entre dans l'artefact ; la reconstruction supposait la
+      séquentialité et aurait cessé d'être valide au moment où elle servirait.
+- [x] **Parallélisation écartée pour les writers, faite pour les scouts.** Sur le run 8,
+      quatre délégations seulement étaient disjointes en écriture — un README, un script, des
+      fixtures, `pyproject.toml`, aucun code source — soit 18 minutes en série contre 6,3 en
+      parallèle : 10 % du temps mur contre quatre mécanismes à réécrire et la perte de
+      l'historique linéaire. Les scouts, eux, n'écrivent rien : `find` accepte désormais un
+      tableau, jusqu'à quatre en parallèle, sans qu'aucun invariant d'état ne bouge.
+      *Condition de réouverture pour les writers :* un projet dont les livrables sont
+      réellement indépendants. Balance Âgée n'en est pas un.
 
 ### Hors run
 

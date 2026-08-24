@@ -100,9 +100,25 @@ function isReadOnly(tools: readonly string[]): boolean {
  */
 const WHOLE_REPO = new Set([".", "./", "/", "*", "**", "**/*", ""]);
 
-function checkScoutInput(params: { find?: string; scope?: string[] }): string | null {
-  const find = (params.find ?? "").trim();
+const MAX_PARALLEL_SCOUTS = 4;
+
+/** One question, or several to run at once. Always an array from here on. */
+function scoutQuestions(find: string | string[] | undefined): string[] {
+  return (Array.isArray(find) ? find : [find ?? ""]).map((q) => q.trim()).filter(Boolean);
+}
+
+function checkScoutInput(params: { find?: string | string[]; scope?: string[] }): string | null {
+  const questions = scoutQuestions(params.find);
+  const find = questions[0] ?? "";
   const scope = (params.scope ?? []).map((p) => p.trim()).filter(Boolean);
+
+  if (questions.length > MAX_PARALLEL_SCOUTS) {
+    return (
+      `Refused: ${questions.length} questions at once. Four is the ceiling — past that the ` +
+      "answers arrive faster than they can be read, and a fan-out nobody reads is a fan-out " +
+      "nobody needed. Ask the four that matter."
+    );
+  }
 
   /*
    * The bootstrap, which the contract created and did not answer.
@@ -453,13 +469,18 @@ export default function (pi: ExtensionAPI) {
       }),
     ),
     find: Type.Optional(
-      Type.String({
+      Type.Union([Type.String(), Type.Array(Type.String())], {
         description:
           "Scout only, and required for it: the single thing to locate, as one " +
           "question. Where X is defined, who calls Y, which module owns Z. One " +
           "question — not a list, not \"every occurrence of\", not \"check that A " +
-          "matches B\". A comparison between two sets is two scouts and a " +
-          "subtraction you do yourself: ask for each list, compare them here.",
+          "matches B\".\n\n" +
+          "Pass an array of questions to run that many scouts at once, in " +
+          "parallel, against the same scope — each still answering one question, " +
+          "each returning its own envelope. This is how a comparison between two " +
+          "sets is asked: give the two questions here and do the subtraction " +
+          "yourself when both come back. Up to four; beyond that, ask the four " +
+          "that matter.",
       }),
     ),
     scope: Type.Optional(
@@ -501,7 +522,7 @@ export default function (pi: ExtensionAPI) {
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
-        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it: three narrow scouts beat one exhaustive scout that dies.",
+        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it — `find` takes an array and the scouts run at once, so three narrow questions cost what the slowest one costs and beat one exhaustive scout that dies.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
         "The child sees only the task text. Anything implicit here is absent there — including a project AGENTS.md, the most authoritative file on substance and one no child ever sees. Quote the rules that bear on the task.",
@@ -542,11 +563,14 @@ export default function (pi: ExtensionAPI) {
 
         // For a scout, the contract is also the head of its task text: the child
         // reads the same one question and the same paths the schema enforced.
-        const scoutHeader =
-          params.agent === "scout" && params.find
-            ? `Find: ${params.find.trim()}\nScope: ${(params.scope ?? []).join(", ")}\n\n`
-            : "";
-        const task = `${pkg.text}${scoutHeader}${params.task}`;
+        // One task text per question, so a fan-out spawns children that differ
+        // in exactly one line and nothing else.
+        const questions = params.agent === "scout" ? scoutQuestions(params.find) : [];
+        const scoutHeader = (q: string) =>
+          `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
+        const tasks = questions.length
+          ? questions.map((q) => `${pkg.text}${scoutHeader(q)}${params.task}`)
+          : [`${pkg.text}${params.task}`];
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
@@ -593,20 +617,61 @@ export default function (pi: ExtensionAPI) {
         // The degraded branch above stays: both reviews given no diff ran five
         // and seven turns, against a median of four.
 
-        const result = await dispatch(effective, task, {
-          ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
-          seq: ++CALL_SEQ,
-          signal,
-          onProgress: publish,
-        });
+        /*
+         * Several scouts at once, one writer at a time.
+         *
+         * A scout holds `read`, `grep`, `find`, `ls` and `bash` under bash-guard:
+         * it cannot change the tree. So running four of them together cannot
+         * produce the failure that makes parallel writers dangerous — two
+         * processes disagreeing about what is on disk. Everything the
+         * configuration says about state stays true, because none of them
+         * touches state: `changedSinceLastReview`, the material-change guard and
+         * the tree snapshots all read a tree nobody is writing.
+         *
+         * The measured reason: eighteen scouts cost 13.8 minutes of a 119-minute
+         * run, 12% of wall time, serialised for no reason. Four at once brings
+         * that to the longest of the four.
+         *
+         * Writers are deliberately excluded, and the exclusion is structural
+         * rather than a setting. Two workers in one tree would make "since the
+         * last review" ambiguous, hand the reviewer a union no worker authored,
+         * and let a killed worker claim another's files as salvage. That is the
+         * `3ed33e` failure — a schema nobody wrote, every test green — rebuilt
+         * by the harness instead of merely suffered.
+         */
+        const results =
+          tasks.length > 1
+            ? await Promise.all(
+                tasks.map((t) =>
+                  dispatch(effective, t, {
+                    ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
+                    seq: ++CALL_SEQ,
+                    signal,
+                    onProgress: publish,
+                  }),
+                ),
+              )
+            : [
+                await dispatch(effective, tasks[0], {
+                  ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
+                  seq: ++CALL_SEQ,
+                  signal,
+                  onProgress: publish,
+                }),
+              ];
         publish();
 
-        HISTORY.push({
-          agent: params.agent,
-          produced: !result.failure,
-          readOnly: isReadOnly(agent.tools),
-          changedFiles: result.changedFiles ?? [],
-        });
+        // One HISTORY entry per delegation, as before: the guard counts
+        // delegations, and four scouts are four, not one.
+        for (const r of results) {
+          HISTORY.push({
+            agent: params.agent,
+            produced: !r.failure,
+            readOnly: isReadOnly(agent.tools),
+            changedFiles: r.changedFiles ?? [],
+          });
+        }
+        const result = results[0];
 
         // Only the summary crosses back. The envelope stays on disk; the
         // orchestrator reads the artifact when it actually needs the findings.
@@ -645,15 +710,27 @@ export default function (pi: ExtensionAPI) {
           SCOUT_CALLS === 0 && result.role === "reviewer" && (result.outOfScope ?? 0) > 0
             ? "\n(out_of_scope is a where-question answered inside a review. A scout resolves it for a fraction of the cost, and the locations it returns are files the next review may weigh.)"
             : "";
-        if (params.agent === "scout") SCOUT_CALLS++;
+        if (params.agent === "scout") SCOUT_CALLS += results.length;
+
+        // A fan-out returns one block per scout, in the order the questions were
+        // asked. Nothing is merged: four answers to four questions are four
+        // answers, and the subtraction between two of them is the
+        // orchestrator's — it is the only party holding both.
+        const body =
+          results.length > 1
+            ? results
+                .map((r, i) => {
+                  const rVia = r.modelUsed === agent.model ? "" : ` via ${r.modelUsed}`;
+                  const rHead = r.failure
+                    ? `[${r.role}: ${r.failure}${rVia}]`
+                    : `[${r.role}: ${r.verdict ?? r.status}${rVia}]`;
+                  return `${i + 1}. Find: ${questions[i]}\n${rHead} ${r.summary}\n${r.artifact}`;
+                })
+                .join("\n\n")
+            : `${head} ${result.summary}${note}${scoutHint}\n${result.artifact}`;
 
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `${head} ${result.summary}${note}${scoutHint}\n${result.artifact}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: body }],
           details: {
             role: result.role,
             model: result.modelUsed,

@@ -59,9 +59,10 @@ tout, et rejugeait tout.
 
 | Rôle | Modèle | Session | Outils | `maxTurns` |
 |:--|:--|:--|:--|--:|
-| `worker` | `openai-codex/gpt-5.6-sol` (abonnement), `thinking: high` | éphémère | read, grep, find, ls, bash, edit, write, submit | **30** |
+| `worker` | `openai-codex/gpt-5.6-terra` (abonnement), `thinking: high`, repli sur `sol` | éphémère | read, grep, find, ls, bash, edit, write, submit | **30** |
 | `reviewer` | `anthropic/claude-sonnet-5` (API) | éphémère | **read, ls, submit** | **12** |
 | `scout` | `deepseek/deepseek-v4-flash` | éphémère | read, grep, find, ls, bash, submit | 12 |
+| `advisor` | `xai/grok-4.6`, `thinking: xhigh` — **hors service** | éphémère | read, ls, submit | 8 |
 
 *Les quatre nombres de cette table et le seuil d'inline du diff ont tous été
 calibrés sur `csv-to-bq` — 360 lignes — et ont tous dû être relevés pour un
@@ -133,7 +134,7 @@ Chaque délégation lance un processus `pi` neuf : ni AGENTS.md, ni historique, 
 appels d'outils antérieurs, ni `APPEND_SYSTEM.md`.
 
 **Une exception, explicite et mesurée** : `.pi/BRIEF.md` est injecté en
-`--append-system-prompt` aux rôles qui déclarent `projectBrief: true` —
+`--append-system-prompt` aux rôles qui déclarent `projectBrief: false` — — l'audit du brief a retiré le worker de la liste, l'orchestrateur en est le seul lecteur
 aujourd'hui le worker seul. Sans lui, un worker à qui AGENTS.md interdit de
 supposer une arborescence obéit en dépensant des tours à la découvrir, et un tour
 coûte une relecture complète de contexte. Le scout trouve la structure en
@@ -335,7 +336,27 @@ contenant que le bundle.
 
 ## 6. Ce qui est planifié, et sa condition d'entrée
 
-### Reviewer sur Qwen 3.8 Max, advisor sur Sonnet 5
+### Reviewer et advisor — tranché par la mesure, contre le plan
+
+**Le reviewer reste sur Sonnet 5, medium.** Deux portes franchies sur `anime-etl`, fichiers
+aux défauts vérifiés à la main, même prompt et même plafond des deux côtés :
+
+- **Gemini 3.7 Flash** retrouve `config.py` et `load.py`, rend `approved` avec zéro finding
+  sur une double boucle quadratique réelle, et atteint son plafond de douze tours sans rendre
+  d'enveloppe quand on le repasse en `high`. 71 % moins cher, et il ne voit pas.
+- **DeepSeek V4 Pro** fait jeu égal fichier par fichier — quatre sur cinq chacun, zéro faux
+  positif des deux côtés sur le témoin — puis s'effondre à l'échelle : **un finding sur onze
+  revues** sur Balance Âgée, contre quatorze sur dix-sept pour Sonnet, même bundle.
+
+**Qwen n'a jamais été atteint** : trois clés, trois régions, un 403 `AccessDenied.Unpurchased`
+qui n'a pas bougé. Piste abandonnée, pas réfutée.
+
+**L'advisor n'ira pas sur Sonnet.** Écrit, hors service, pointant sur `grok-4.6` — un
+quatrième laboratoire, indépendant du worker et du reviewer, sur le seul rôle sans barème.
+DeepSeek est écarté d'office : ne jamais contester est exactement le mode de défaillance qui
+rend un arbitre inutile.
+
+### Le plan initial, pour mémoire
 
 **Le principe, repris d'oh-my-pi** : le meilleur modèle va où l'erreur coûte le
 plus cher, pas où il tourne le plus souvent. Le reviewer applique un barème écrit
