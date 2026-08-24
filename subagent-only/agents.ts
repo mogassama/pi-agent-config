@@ -35,7 +35,14 @@ export interface AgentDefinition {
   model: string;
   /** Tried in order when the primary model errors. Empty means fail immediately. */
   fallbackModels: string[];
-  /** off | minimal | low | medium | high | max. Passed as --thinking. */
+  /**
+   * Passed straight through as `--thinking`. The ladder is not fixed: each model
+   * declares its own `thinkingLevelMap`, so a level accepted by one is silence
+   * on another — `max` maps to null on grok-4.6, where the top level is `xhigh`,
+   * and `low` maps to null on deepseek-v4-flash, which reasons anyway. Read the
+   * map before choosing a level: null means the field is omitted and the model
+   * uses its own default, not that reasoning is off.
+   */
   thinking?: string;
 
   /**

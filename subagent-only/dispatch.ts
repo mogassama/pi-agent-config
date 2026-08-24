@@ -651,14 +651,17 @@ const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cach
   ["qwen-paygo/qwen3-max", { in: 1.2, out: 6 }],
   ["qwen-paygo/qwen-max", { in: 1.6, out: 6.4 }],
   ["qwen-paygo/", { in: 2, out: 6 }],
-  // Grok 4.6, standard tier below 200k prompt tokens: 2.00 in, 0.50 cached, 6.00
-  // out. Past 200k, *every token in the request* moves to double rate — the
-  // last token across the line changes the price of the first — and a table
-  // keyed on a model name cannot express that. A review runs near 50k, so the
-  // cliff is far; an advisor quoting a whole bundle is closer to it than it
-  // looks. Cached input at a quarter of input, not the usual tenth.
-  ["xai/grok-4.6", { in: 2, out: 6, cacheRead: 0.25 }],
-  ["xai/", { in: 2, out: 6, cacheRead: 0.25 }],
+  // Grok 4.6, from pi's own catalogue: 2.00 in, 6.00 out, cache read 0.50 — a
+  // quarter of input rather than the usual tenth — and **cache write free**,
+  // which the default 1.25 would have overstated by the whole first pass.
+  //
+  // pi's pricing table shows a single tier for all requests. xAI's own docs
+  // describe a doubling past 200k prompt tokens, applied to every token in the
+  // request rather than the excess. The two disagree; this encodes the flat
+  // rate pi uses, and the console is the arbiter if an advisor ever quotes a
+  // whole bundle into one call.
+  ["xai/grok-4.6", { in: 2, out: 6, cacheWrite: 0, cacheRead: 0.25 }],
+  ["xai/", { in: 2, out: 6, cacheWrite: 0, cacheRead: 0.25 }],
   ["anthropic/", { in: 2, out: 10 }],
 ];
 

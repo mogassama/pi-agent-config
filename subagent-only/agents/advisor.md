@@ -3,7 +3,7 @@ name: advisor
 description: NOT IN SERVICE. The role is written and its model is not decided — do not invoke it. A second opinion on an irreversible fork the bundle does not settle.
 model: xai/grok-4.6
 fallbackModels: [google/gemini-3.1-pro-preview]
-thinking: max
+thinking: xhigh
 tools: [read, ls, submit]
 extensions: [envelope]
 mechanism: []
@@ -18,18 +18,24 @@ timeoutMs: 900000
 <!--
   Not in service. The prompt is settled; the model is not.
 
-  `thinking: max` is what pi's ladder offers above `high`, and whether it reaches
-  grok-4.6's `xhigh` depends entirely on the provider's thinkingLevelMap: `max`
-  is not a wire value xAI accepts — sent verbatim it returns 400 — so it has to
-  be mapped. Check before trusting it:
+  The level is `xhigh`, not `max`. pi's catalogue for this model maps:
 
-      pi models | grep -A 12 -i grok-4.6
+      off      -> null        low   -> "low"      high  -> "high"
+      minimal  -> null        medium-> "medium"   xhigh -> "xhigh"
+      max      -> null
 
-  And know what it buys before paying for it. On xAI's own coding benchmark,
-  xhigh scores 70.8% at $2.81 per task against 69.9% at $2.34 for high: nine
-  tenths of a point for twenty per cent more. On a role invoked ten times a week
-  that is noise, and `high` is the defensible default until a measurement says
-  otherwise.
+  `max` maps to null, and null means the field is omitted, which means the model
+  falls back to its own default — `high` for grok-4.6. Writing `max` here would
+  have bought nothing while looking like it bought the most. This is the second
+  time that reading has caught us out: `low -> null` on deepseek-v4-flash was
+  read as "no reasoning" when it means "no instruction", and all twelve scouts
+  reasoned anyway. Null is not off. Null is silence.
+
+  Whether xhigh earns its price is a separate question and the evidence is thin.
+  On xAI's own coding benchmark it scores 70.8% at $2.81 per task against 69.9%
+  at $2.34 for high — nine tenths of a point for twenty per cent more. It is
+  written here because the advisor is rare and its errors are expensive, not
+  because a measurement supports it.
 -->
 
 You are asked because a choice cannot be undone and no rule covers it.
