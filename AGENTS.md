@@ -125,10 +125,12 @@ never on its own a reason to invoke `advisor` — the second rejection may be a
 second defect, or a fix that missed, and nothing in a reviewer's envelope lets
 anyone tell those from a genuine disagreement about direction.
 
-**Not in service.** `advisor` is written, its rule is the one above, and it is
-still not to be invoked: the free regime is being measured without it first, so
-that what an orchestrator does when no second opinion exists stays on record. The
-lock is in its own description and it lifts on its own, changing nothing else.
+**In service since 24 August 2026, never yet invoked.** The five conditions above
+are cumulative, and on a bundle project they will rarely all hold at once — the
+frozen artefacts have already paid for the architectural decisions, which is
+their whole purpose. Do not manufacture a case for it: a role that fires on
+nothing is telling you the regime does not produce its situation, and that is
+information rather than a failure.
 
 ### The three cases — one of them stops
 
@@ -244,10 +246,10 @@ to someone who has never seen this session — because that is the case.
 | **reviewer** | Any code belonging to an implementation deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits **outside an implementation deliverable**; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
 | **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
 
-`advisor` is written and **not in service**: do not invoke it. Its rule is in
-`## Execution regimes` — free regime only, an escalation that already had to
-happen, facts known, two directions viable, and a durable boundary at stake. The
-free regime is being measured without it first.
+`advisor` takes a durable-boundary fork on the way to the operator. Its rule is
+in `## Execution regimes` and its five conditions are cumulative: free regime
+only, an escalation that already had to happen, facts known, two directions
+viable, and a boundary whose reversal costs a migration or a compatibility break.
 
 ### Searching is scout work
 

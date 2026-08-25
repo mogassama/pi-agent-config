@@ -1,6 +1,6 @@
 ---
 name: advisor
-description: NOT IN SERVICE — do not invoke it, whatever follows. Second opinion inside the free-regime operator route, for an unresolved durable-boundary fork. Never for missing facts, bundle divergence, or reversible choices.
+description: Second opinion inside the free-regime operator route, for an unresolved durable-boundary fork. Never for missing facts, bundle divergence, or reversible choices.
 model: xai/grok-4.6
 fallbackModels: [google/gemini-3.1-pro-preview]
 thinking: xhigh
