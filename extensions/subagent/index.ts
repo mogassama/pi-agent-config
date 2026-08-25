@@ -727,7 +727,13 @@ export default function (pi: ExtensionAPI) {
                   return `${i + 1}. Find: ${questions[i]}\n${rHead} ${r.summary}\n${r.artifact}`;
                 })
                 .join("\n\n")
-            : `${head} ${result.summary}${note}${scoutHint}\n${result.artifact}`;
+            : `${head} ${result.summary}${note}${scoutHint}` +
+              // The advisor's recommendation crosses with the summary. Every
+              // other role's payload waits on disk because a head plus a count
+              // says whether opening it is worth a turn; an advice has no such
+              // signal — the sentence is the deliverable.
+              (result.recommendation ? `\nRecommendation: ${result.recommendation}` : "") +
+              `\n${result.artifact}`;
 
         return {
           content: [{ type: "text" as const, text: body }],

@@ -174,7 +174,14 @@ const payloads = {
       }),
     ),
     recommendation: Type.String({
-      description: "One option, with the criterion that selects it. Not a menu.",
+      description:
+        "One next move, with the criterion that selects it. Not a menu. On a " +
+        "genuine fork that means choosing an option; it is not always a fork, " +
+        "and the four legal shapes are: \"choose X because Y\"; \"scout X before " +
+        "choosing, because Y decides it\"; \"return this to the orchestrator, " +
+        "reversal costs only X\"; \"reframe this as a factual question first\". " +
+        "Required in every case — a role called on the wrong question still owes " +
+        "the move that follows from that.",
     }),
   }),
 } as const;

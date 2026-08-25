@@ -48,6 +48,18 @@ export interface RunResult {
    */
   changedFiles?: string[];
   /**
+   * The advisor's recommendation, and only the advisor's.
+   *
+   * The contract everywhere else is that one field crosses — `summary` — and the
+   * envelope waits on disk. For a reviewer that holds: `[reviewer: needs_rework,
+   * 3 findings]` is enough to know the artefact is worth opening. For an advisor
+   * the payload *is* the product, so hiding the one sentence behind a second
+   * read is the wrong asymmetry: it makes the orchestrator pay a turn to learn
+   * what it delegated for. `concerns` stays on disk; this is one short field on
+   * a role invoked rarely.
+   */
+  recommendation?: string;
+  /**
    * True when `changedFiles` was read from the working tree because no envelope
    * came back. The paths are real; nothing about them has been validated.
    */
@@ -381,6 +393,8 @@ async function runOnce(
     summary: String(envelope.summary ?? "").trim() || "(empty summary)",
     next: deriveNext(envelope),
     verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
+    recommendation:
+      typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,
     findings: Array.isArray(envelope.findings) ? envelope.findings.length : undefined,
     outOfScope: Array.isArray(envelope.out_of_scope) ? envelope.out_of_scope.length : undefined,
     changedFiles: Array.isArray(envelope.changed_files)

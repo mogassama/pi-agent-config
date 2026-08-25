@@ -96,14 +96,46 @@ The bundle is a *direction*, not a specification. It is silent on almost everyth
 No frozen artefact. Architecture is decided in-session, grounded in the repo's actual state and in the loaded skills. Two constraints remain:
 
 - An expensive or irreversible decision — new service, new dependency, schema shape, storage layout, directory restructure — is put to the operator before implementation, with two options and a recommendation.
-- Cheap and reversible decisions are taken and stated inline, not escalated. A fork with a high cost of being wrong goes to the operator: `advisor` exists but is not in service, and no delegation goes to it.
+- Cheap and reversible decisions are taken and stated inline, not escalated.
+
+**`advisor` sits inside that first route, and does not create a second one.** It
+is not a new reason to escalate: it is a second opinion taken on the way to the
+operator, on the narrow subset of escalations where one has value. Invoke it
+before an operator decision only when *all* of these hold, and in the free regime
+only:
+
+- the free-regime rules above already require escalation;
+- the relevant facts are known — a missing fact is a scout, not an advice;
+- no rule, skill or frozen artefact settles the choice;
+- at least two viable directions remain;
+- and choosing one commits a **durable boundary**: reversal would need a data
+  migration, a compatibility break, or a coordinated change outside the local
+  implementation.
+
+That last one is what makes the criterion observable, where "irreversible" is a
+judgement. A persistent schema something already reads, a storage format that
+would need migrating, a published interface or cross-module contract: durable. A
+large new dependency, a new service, a directory restructure: expensive and
+painful, rarely durable — those go to the operator directly, without an advice.
+
+**Never for:** a missing fact, which is a scout; a bundle-versus-repo divergence,
+which is a factual question for the operator; a reversible choice, however
+expensive. And a repeated `needs_rework` is a signal to reclassify the problem,
+never on its own a reason to invoke `advisor` — the second rejection may be a
+second defect, or a fix that missed, and nothing in a reviewer's envelope lets
+anyone tell those from a genuine disagreement about direction.
+
+**Not in service.** `advisor` is written, its rule is the one above, and it is
+still not to be invoked: the free regime is being measured without it first, so
+that what an orchestrator does when no second opinion exists stays on record. The
+lock is in its own description and it lifts on its own, changing nothing else.
 
 ### The three cases — one of them stops
 
 Applies in both regimes. Replace the word "bundle" with "the frozen artefacts, if any".
 
 1. **The bundle decides.** Apply it. No question, no restatement, no summary.
-2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, state the decision inline, ask nothing — and if a commit is later requested, preserve its `why` in the commit body. In the free regime a commit may never happen, and a decision recorded nowhere else would exist nowhere. **One exception, and it is the free regime's whole subject:** an expensive or irreversible choice — new service, new dependency, schema shape, storage layout, directory restructure — is not silence to be filled by a skill. It goes to the operator with two options and a recommendation, per "Free regime" above. Silence covers what is cheap to undo; nothing else.
+2. **The bundle is silent.** The relevant skill decides, under the bundle's constraints. This is the default case and must cover the overwhelming majority. Continue, state the decision inline, ask nothing — and if a commit is later requested, preserve its `why` in the commit body. In the free regime a commit may never happen, and a decision recorded nowhere else would exist nowhere. **One exception, and it is the free regime's whole subject:** an expensive or irreversible choice — new service, new dependency, schema shape, storage layout, directory restructure — is not silence to be filled by a skill. It goes to the operator with two options and a recommendation, per "Free regime" above — which is also the only route on which `advisor` sits, under the conditions stated there. Silence covers what is cheap to undo; nothing else.
 3. **The repo contradicts the bundle.** Stop. Emit a divergence note — observed state, expected state, options, no decision — and put it to **the operator**, through the orchestrator. A subagent has no channel to the operator: it returns `status: "blocked"` with the note in its summary, and the orchestrator owns the operator-facing question.
 
 **Never a fourth case.** `## Hard limits` above is the only other stop list, and it is complete. The irreversible-choice exception in case 2 is not a fourth case: it is a route to the operator inside case 2, and execution continues on everything else while the question is open. Do not invent a second, vaguer one. A gap in the bundle, a missing fixture, an untestable step, an ambiguous naming choice: none of these stop execution.
@@ -212,9 +244,10 @@ to someone who has never seen this session — because that is the case.
 | **reviewer** | Any code belonging to an implementation deliverable, whatever its size, reviewed **before** it is finalised. Outside a deliverable, from about 50 lines. Read-only. Judges against the domain's `## Review delta` and returns `approved`, `needs_rework` or `blocked`. | Single-line edits **outside an implementation deliverable**; conversational answers; **anything triggered by the act of committing** — a commit is not a review |
 | **scout** | Any question answered by searching rather than by knowing: where something lives, who calls it, what a change would touch, whether a pattern already exists. Cheapest model, read-only. | Judging what it finds; reading one file you can already name; anything that edits |
 
-`advisor` is written and **not in service**: its prompt is settled, its model is
-not. Do not invoke it. A fork with a high cost of being wrong goes to Mo, as
-before, and will go through the advisor once a model has been measured for it.
+`advisor` is written and **not in service**: do not invoke it. Its rule is in
+`## Execution regimes` — free regime only, an escalation that already had to
+happen, facts known, two directions viable, and a durable boundary at stake. The
+free regime is being measured without it first.
 
 ### Searching is scout work
 
