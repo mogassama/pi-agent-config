@@ -28,7 +28,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /** The Forge bundle, exactly as AGENTS.md defines it. */
 const BUNDLE_FILES = ["INSTRUCTIONS.md", "ARCHITECTURE.md", "DESIGN.md", "CONVENTIONS.md"];
@@ -43,7 +43,22 @@ const BUNDLE_FILES = ["INSTRUCTIONS.md", "ARCHITECTURE.md", "DESIGN.md", "CONVEN
  * four is the free regime, and this guard is silent there.
  */
 function bundleRoot(cwd: string): string | null {
-  return BUNDLE_FILES.every((f) => existsSync(resolve(cwd, f))) ? cwd : null;
+  // Walk up. A session opened in a subdirectory — `cd dags && pi` — found no
+  // bundle at `cwd`, concluded free regime and disabled the protection in
+  // silence. Silence is the worst shape for that failure: nothing distinguishes
+  // "no bundle here" from "bundle not looked for far enough up".
+  //
+  // Bounded by the filesystem root and by a repository boundary: a `.git`
+  // directory ends the walk, so a bundle in a parent repository does not govern
+  // a nested checkout that has none of its own.
+  let dir = resolve(cwd);
+  for (;;) {
+    if (BUNDLE_FILES.every((f) => existsSync(join(dir, f)))) return dir;
+    if (existsSync(join(dir, ".git"))) return null;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /** True when `p` is one of the four, at the root — not a same-named file in a subdirectory. */
@@ -65,7 +80,7 @@ const READ_ONLY_COMMANDS = new Set([
   "rg", "grep", "egrep", "fgrep", "find", "fd", "ls", "cat", "bat", "head", "tail",
   "wc", "awk", "cut", "tr", "sort", "uniq", "nl", "column", "jq", "yq", "diff",
   "basename", "dirname", "realpath", "readlink", "file", "stat", "du", "df",
-  "echo", "printf", "pwd", "which", "type", "true", "false", "date", "env",
+  "echo", "printf", "pwd", "which", "type", "true", "false", "date",
   "uname", "test", "[",
 ]);
 
@@ -98,8 +113,50 @@ function headWord(segment: string): { cmd: string; rest: string[] } {
   return { cmd: (words[i] ?? "").replace(/^.*\//, ""), rest: words.slice(i + 1) };
 }
 
+/**
+ * Constructs that run a command this check cannot see.
+ *
+ * Checked before anything else and on the raw string, because each of them
+ * hides an arbitrary command from a first-word allowlist. Every one below was
+ * demonstrated against the earlier version of this file: `echo $(touch x)`
+ * passed as an `echo`, `find . -exec touch x \\;` as a `find`, `awk 'BEGIN {
+ * system("touch x") }'` as an `awk`.
+ *
+ * This narrowing is defence in depth, not the guarantee. The guarantee is that
+ * a role which must not write does not hold `bash` at all — which is why the
+ * scout no longer does. What remains here protects a role that legitimately
+ * needs a shell and must still not reach past it.
+ */
+const INDIRECTION: Array<{ pattern: RegExp; why: string }> = [
+  { pattern: /\$\(/, why: "`$(…)` runs a command substitution" },
+  { pattern: /`/, why: "backticks run a command substitution" },
+  { pattern: /\$\{[^}]*\|/, why: "`${…|…}` can expand to a command" },
+  { pattern: /(^|\s)-exec(dir)?(\s|$)/, why: "`-exec` runs an arbitrary command" },
+  { pattern: /(^|\s)-delete(\s|$)/, why: "`-delete` removes files" },
+  { pattern: /\bsystem\s*\(/, why: "`system(` runs a command from inside awk or perl" },
+  { pattern: /\bprint\s*>/, why: "awk can redirect to a file" },
+];
+
+/**
+ * Commands whose whole purpose is to run another one, or that write by design.
+ *
+ * Separate from the allowlist because absence is what protects there, and a
+ * name absent by oversight is a hole. These are named so that adding a plausible
+ * read-only command later cannot silently readmit them.
+ */
+const NEVER = new Set([
+  "xargs", "eval", "exec", "sh", "bash", "zsh", "env", "nohup", "time", "timeout",
+  "watch", "nice", "sudo", "doas", "ssh", "python", "python3", "node", "ruby",
+  "make", "pip", "pip3", "npm", "npx", "uv", "curl", "wget",
+  "rm", "mv", "cp", "install", "tee", "truncate", "chmod", "chown", "ln", "mkdir", "touch",
+]);
+
 /** Null when the command may run; a reason when it may not. */
 export function refuseMutation(command: string): string | null {
+  for (const { pattern, why } of INDIRECTION) {
+    if (pattern.test(command)) return why;
+  }
+
   // Redirection writes a file whatever the command in front of it is. /dev/null
   // is the one destination that changes nothing, and it is the one every
   // legitimate search uses to silence errors.
@@ -107,35 +164,36 @@ export function refuseMutation(command: string): string | null {
   if (redirect && !/^\/dev\/(null|stderr|stdout)$/.test(redirect[1])) {
     return `redirection to ${redirect[1]} writes a file`;
   }
-  if (/(^|[\s|])tee(\s|$)/.test(command)) return "`tee` writes a file";
 
   for (const segment of segments(command)) {
     const { cmd, rest } = headWord(segment);
     if (!cmd) continue;
+
+    if (NEVER.has(cmd)) return `\`${cmd}\` is never read-only`;
 
     if (cmd === "git") {
       const sub = rest.find((w) => !w.startsWith("-"));
       if (!sub || !GIT_READ_SUBCOMMANDS.has(sub)) {
         return sub ? `\`git ${sub}\` is not a read-only git subcommand` : "`git` with no subcommand";
       }
-      // `git config --global x y` writes. Reading takes one argument, setting takes two.
-      if (sub === "config" && rest.filter((w) => !w.startsWith("-")).length > 2) {
-        return "`git config` with a value writes configuration";
+      // `git config` reads with one argument and writes with two — or with any
+      // of the flags that mutate, which take none.
+      if (sub === "config") {
+        const mutating = rest.some((w) => /^--(unset|unset-all|add|replace-all|rename-section|remove-section|edit)$/.test(w));
+        if (mutating || rest.filter((w) => !w.startsWith("-")).length > 2) {
+          return "`git config` in a form that writes configuration";
+        }
       }
       continue;
     }
 
     // sed and perl read by default and write with one flag.
-    if ((cmd === "sed" || cmd === "perl") && rest.some((w) => /^-[a-z]*i/.test(w))) {
-      return `\`${cmd} -i\` edits in place`;
+    if (cmd === "sed" || cmd === "perl") {
+      if (rest.some((w) => /^-[a-z]*i/.test(w))) return `\`${cmd} -i\` edits in place`;
+      continue;
     }
 
-    // xargs and friends run a command this check has not seen.
-    if (cmd === "xargs" || cmd === "eval" || cmd === "exec" || cmd === "sh" || cmd === "bash") {
-      return `\`${cmd}\` runs a command that cannot be checked here`;
-    }
-
-    if (!READ_ONLY_COMMANDS.has(cmd) && !(cmd === "sed" || cmd === "perl")) {
+    if (!READ_ONLY_COMMANDS.has(cmd)) {
       return `\`${cmd}\` is not on the read-only allowlist`;
     }
   }

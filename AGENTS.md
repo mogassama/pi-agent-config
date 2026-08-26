@@ -236,9 +236,12 @@ extension and declared in no frontmatter.** In the bundle regime the four root
 files are refused to a child in both directions — reading returns what the task
 already quoted, and writing them is the operator's, with the `Statut` line of a
 `DESIGN.md` decision reserved to you. And a role without `edit` and `write` does
-not get them back through `bash`: for `scout` and `advisor`, shell commands run
-against a read-only allowlist, so a redirection, a `mv` or a writing `git`
-subcommand is refused rather than trusted to the prompt.
+not get them back through `bash` — because it does not hold `bash` at all.
+`scout` and `advisor` search with the native `grep`, `find` and `ls` tools and
+have no shell: an allowlist over shell command names was demonstrated to be
+walkable with `echo $(…)`, `find -exec` and `env`, so the tool was removed
+rather than policed. The allowlist stays in `role-guard` for a role that
+legitimately needs a shell and must still not reach past it.
 
 **A child inherits nothing.** No AGENTS.md, no conversation history, no prior
 tool calls, no `APPEND_SYSTEM.md`, and no `.pi/BRIEF.md` — the brief has one

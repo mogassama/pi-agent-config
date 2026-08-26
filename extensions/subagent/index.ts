@@ -12,7 +12,7 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
@@ -533,6 +533,32 @@ export default function (pi: ExtensionAPI) {
         const agent = agents.get(params.agent);
         if (!agent) {
           return { content: [{ type: "text" as const, text: `unknown agent: ${params.agent}` }], isError: true };
+        }
+
+        // A skill name the orchestrator invented. `resolveSkill` throws inside
+        // `buildSpawnPlan`, which runs inside `dispatch`, which has no catch for
+        // it — so a typo surfaced as an exception rather than as a tool result
+        // the model could read and correct. Checked here, where a wrong name is
+        // one line back to the caller with the valid ones listed.
+        if (params.skills?.length) {
+          let available: string[] = [];
+          try {
+            available = readdirSync(join(AGENT_DIR, "skills"), { withFileTypes: true })
+              .filter((e) => e.isDirectory() && existsSync(join(AGENT_DIR, "skills", e.name, "SKILL.md")))
+              .map((e) => e.name)
+              .sort();
+          } catch {
+            /* the resolver will say so, and better than a guess would */
+          }
+          const unknown = params.skills.filter((n) => available.length > 0 && !available.includes(n));
+          if (unknown.length) {
+            const text =
+              `Refused: no skill named ${unknown.map((u) => `\`${u}\``).join(", ")}. ` +
+              `Available: ${available.join(", ")}. Names come from the skills directory, ` +
+              "not from the domain — omit `skills` entirely to give the child none.";
+            logRefusal(RUN_ID, params.agent, text);
+            return { content: [{ type: "text" as const, text }], isError: true };
+          }
         }
 
         // Before anything is spawned. A refusal costs one tool result; the

@@ -25,6 +25,18 @@ const TOKEN_SOURCES: string[] = [
   // `git --no-pager commit`. Does not match `git log --grep=commit`.
   String.raw`\bgit\s+(?:(?:-c|-C|--[\w-]+)(?:[= ]\S+)?\s+)*commit\b`,
   String.raw`\bgh\s+pr\s+(?:merge|create)\b`,
+  // An alias is a commit the pattern above cannot see. Demonstrated: neither
+  // `git -c alias.ci=commit ci -m x` nor `git ci -m x` — with `ci` configured
+  // in any gitconfig — matched, and the token was presented as a guarantee
+  // without a bypass. Two rules, because the two cases are different: defining
+  // an alias on the command line is always suspicious, and invoking an unknown
+  // subcommand may or may not be one. Both go through the operator.
+  String.raw`\bgit\s+(?:-c|--config-env)[= ]\s*alias\.`,
+  // A git invocation whose first non-flag word is not a known subcommand. The
+  // list is porcelain that cannot commit; anything outside it — an alias, a
+  // custom `git-foo` on PATH — is unknown, and unknown is not safe when the
+  // thing being guaranteed is that no commit happens without a token.
+  String.raw`\bgit\s+(?:(?:-c|-C|--[\w-]+)(?:[= ]\S+)?\s+)*(?!(?:add|am|apply|archive|bisect|blame|branch|cat-file|check-ignore|checkout|cherry-pick|clean|clone|config|describe|diff|fetch|for-each-ref|fsck|gc|grep|help|init|log|ls-files|ls-remote|ls-tree|merge|merge-base|mv|notes|pull|push|range-diff|rebase|reflog|remote|reset|restore|rev-list|rev-parse|revert|rm|shortlog|show|show-ref|stash|status|submodule|switch|symbolic-ref|tag|version|whatchanged|worktree)\b)[a-z][\w-]*`,
 ];
 
 /**

@@ -14,7 +14,8 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
@@ -204,7 +205,7 @@ async function runOnce(
   // Only for a role that can mutate: a read-only delegation cannot have changed
   // anything, and a git call per scout is a cost for nothing.
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
-  const before = mutates ? treeState(process.cwd()) : new Set<string>();
+  const before = mutates ? treeState(process.cwd()) : new Map<string, string>();
 
   /*
    * When the delegation started, so the artefact can say how long it took.
@@ -316,7 +317,10 @@ async function runOnce(
   // No envelope from a role that writes: ask the tree what it did.
   const salvaged =
     !envelope && mutates
-      ? [...treeState(process.cwd())].filter((p) => !before.has(p)).sort()
+      ? [...treeState(process.cwd())]
+          .filter(([path, hash]) => before.get(path) !== hash)
+          .map(([path]) => path)
+          .sort()
       : [];
 
   mkdirSync(artifactDir, { recursive: true });
@@ -451,7 +455,21 @@ async function runOnce(
  * tree, never mixed with what an envelope claims — a child that did not submit
  * did not validate anything, and the difference has to stay visible.
  */
-function treeState(cwd: string): Set<string> {
+function treeState(cwd: string): Map<string, string> {
+  // Path plus content hash, not path alone.
+  //
+  // A set of paths cannot see a file that was already dirty before the
+  // delegation and that the worker changed again: the path is in both
+  // snapshots, the difference is empty, and the dispatcher concludes the worker
+  // wrote nothing. On a run that produced no envelope, that is the difference
+  // between salvaging the work and relaunching over the top of it.
+  //
+  // `git status --porcelain` still supplies the candidate list — it already
+  // knows about `.gitignore` and costs one call — and each candidate is hashed
+  // from disk. A file that vanished hashes to the empty string, which is a
+  // change like any other.
+  const files = new Map<string, string>();
+  let names: string[];
   try {
     const out = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
       cwd,
@@ -459,15 +477,24 @@ function treeState(cwd: string): Set<string> {
       timeout: 10_000,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return new Set(
-      out
-        .split("\n")
-        .map((l) => l.slice(3).trim())
-        .filter(Boolean),
-    );
+    names = out
+      .split("\n")
+      .map((l) => l.slice(3).trim())
+      .filter(Boolean);
   } catch {
-    return new Set();
+    return files;
   }
+  for (const name of names) {
+    let hash = "";
+    try {
+      hash = createHash("sha1").update(readFileSync(join(cwd, name))).digest("hex");
+    } catch {
+      // Absent, unreadable, or a directory. The empty string is a legal state
+      // and differs from any real hash, which is what the comparison needs.
+    }
+    files.set(name, hash);
+  }
+  return files;
 }
 
 /*

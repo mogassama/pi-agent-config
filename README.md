@@ -62,7 +62,7 @@ Orchestrator context at startup: **8 803 tokens** (print mode).
 
 ## Delegation
 
-One tool, `task({ agent, task, skills? })`. Each call spawns a fresh `pi`
+One tool, `task({ agent, task, skills?, find?, scope? })` — `find` and `scope` are the scout's input contract and a scout call without them is refused before anything is spawned. Each call spawns a fresh `pi`
 process with its own model, tool allowlist, hooks and skill slices.
 
 **A child inherits nothing.** No AGENTS.md, no conversation history, no prior
@@ -81,17 +81,20 @@ so a reviewer once accused the orchestrator of fabricating its own delegations.
 |---|---|---|---|---|--:|
 | `worker` | `openai-codex/gpt-5.6-terra` (subscription) | `gpt-5.6-sol` | high | read, grep, find, ls, bash, edit, write | 30 |
 | `reviewer` | `anthropic/claude-sonnet-5` (API) | `gemini-3.1-pro-preview` | medium | read, ls | 12 |
-| `scout` | `deepseek/deepseek-v4-flash` | `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite` | low | read, grep, find, ls, bash | 12 |
-| `advisor` | `xai/grok-4.6` | `gemini-3.1-pro-preview` | xhigh | read, ls | 8 |
+| `scout` | `deepseek/deepseek-v4-flash` | `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite` | low | read, grep, find, ls | 12 |
+| `advisor` | `xai/grok-4.6` | `gemini-3.1-pro-preview` | xhigh | read, grep, find, ls | 8 |
 
 Every role runs ephemeral. `--session-id` is passed either way, so provider cache
 affinity does not depend on carrying history — and history, measured, was carried
 and not used: 24 re-reads of byte-identical content already in the session.
 
 Four model families, deliberately, one per role. A reviewer on the worker's
-family is a judge-and-party arrangement; `/check-config` reports it if it ever
-happens. The fallback chains respect the same rule: the reviewer does not fall
-back onto the advisor's model, nor onto the family that lost the role.
+family is a judge-and-party arrangement; `/check-config` blocks on it. The
+fallback chains do **not** currently respect the same rule: reviewer and advisor
+both fall back onto `gemini-3.1-pro-preview`, so a Gemini outage-free day on
+which both primaries fail would put judge and second opinion on one model.
+`/check-config` reports it rather than blocking — it is a trade-off to take
+knowingly, not a discovery to make during an incident.
 
 Scouts run in parallel when several are asked at once: `find` takes an array, up
 to four, and each child answers one question against the same scope. Nothing is
@@ -108,8 +111,10 @@ of diff the task carries the file list instead, and the reviewer gets `grep` and
 `find` back for that delegation: the tools follow the input package, not the
 role.
 
-`advisor` is written and **not in service**: its prompt is settled, its model is
-not, and `AGENTS.md` tells the orchestrator not to invoke it. It points at
+`advisor` is **in service since 24 August 2026 and has never yet been invoked**:
+its five conditions are cumulative, and on a bundle project they rarely all hold
+at once. A role that fires on nothing is telling you the regime does not produce
+its situation. It points at
 `grok-4.6` at `xhigh` with Gemini Pro behind. The reviewer stayed on Sonnet 5
 after two measured gates — Gemini 3.7 Flash missed a quadratic defect entirely,
 DeepSeek V4 Pro returned one finding across eleven reviews where Sonnet returned

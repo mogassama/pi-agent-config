@@ -206,6 +206,8 @@ interface AgentCheck {
   blocking: string[];
   report: string[];
   model?: string;
+  /** Declared fallbacks, in order. Diversity has to hold on these too. */
+  fallbacks?: string[];
 }
 
 /**
@@ -249,6 +251,7 @@ function checkAgent(root: string, file: string, skillSet: Set<string>): AgentChe
   const model = field("model");
   out.model = model;
   if (!model) out.blocking.push(`agents/${file}: no model`);
+  out.fallbacks = list("fallbackModels");
 
   const tools = list("tools");
   if (!tools.includes("submit")) {
@@ -411,11 +414,13 @@ export default function (pi: ExtensionAPI): void {
         blocking.push("subagent-only/agents/ unreadable — no delegation is possible");
       }
       const models = new Set<string>();
+      const chains = new Map<string, string[]>();
       for (const f of agentFiles) {
         const r = checkAgent(root, f, diskSet);
         blocking.push(...r.blocking);
         report.push(...r.report);
         if (r.model) models.add(r.model);
+        if (r.model) chains.set(r.file.replace(/\.md$/, ""), [r.model, ...(r.fallbacks ?? [])]);
       }
 
       // Cognitive diversity: a reviewer on the same family as the worker is a
@@ -426,6 +431,40 @@ export default function (pi: ExtensionAPI): void {
           `all agents run on '${[...families][0]}' — reviewer and worker on one family ` +
             `is the structural risk this setup was built to avoid`,
         );
+      }
+
+      /*
+       * Diversity has to survive a fallback.
+       *
+       * The check above reads primary models only, which is where the guarantee
+       * is easiest to keep and least likely to be tested. A fallback fires
+       * exactly when a provider is down — that is, on a day nobody chose — and
+       * if two roles that must not agree fall back onto the same model, the
+       * separation disappears at the worst moment and nothing says so.
+       *
+       * Reported, not blocking: sharing a fallback is a real risk and a
+       * defensible trade-off when a family has one usable model. It has to be
+       * a decision, not a discovery.
+       */
+      const REVIEW_PAIRS: Array<[string, string]> = [
+        ["worker", "reviewer"],
+        ["worker", "advisor"],
+        ["reviewer", "advisor"],
+      ];
+      for (const [a, b] of REVIEW_PAIRS) {
+        const ca = chains.get(a);
+        const cb = chains.get(b);
+        if (!ca || !cb) continue;
+        const shared = ca.filter((m) => cb.includes(m));
+        if (shared.length === 0) continue;
+        const primary = ca[0] === cb[0];
+        const msg =
+          `${a} and ${b} can both run on ${shared.join(", ")}` +
+          (primary ? " as their primary model" : " through a fallback") +
+          " — no model should judge work it may itself have produced. Blocking only " +
+          "if it is the primary; a shared fallback is a trade-off to take knowingly.";
+        if (primary) blocking.push(msg);
+        else report.push(msg);
       }
 
       // --- roles declared vs defined ----------------------------------------

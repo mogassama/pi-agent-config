@@ -16,7 +16,8 @@ timeoutMs: 900000
 ---
 
 <!--
-  Not in service. The prompt is settled; the model is not.
+  In service since 24 August 2026, never yet invoked. The prompt is settled; the
+  model is the part still carrying risk, for the reason below.
 
   The level is `xhigh`, not `max`. pi's catalogue for this model maps:
 
