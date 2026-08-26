@@ -95,9 +95,15 @@ export function resolveExtension(name: string, ctx: BuildContext): string {
     join(root, "src", "index.ts"),
     join(root, "dist", "index.js"),
   ];
+  // Ours, and beside this file rather than under extensions/: a child-side
+  // extension is not one the orchestrator should discover and load.
+  const LOCAL: Record<string, string[]> = {
+    envelope: [join(ctx.selfDir, "envelope", "envelope.ts"), join(ctx.selfDir, "envelope.ts")],
+    "role-guard": [join(ctx.selfDir, "role-guard", "role-guard.ts"), join(ctx.selfDir, "role-guard.ts")],
+  };
   const candidates =
-    name === "envelope"
-      ? [join(ctx.selfDir, "envelope", "envelope.ts"), join(ctx.selfDir, "envelope.ts")]
+    name in LOCAL
+      ? LOCAL[name]
       : [
           join(ctx.agentDir, "extensions", name, "index.ts"),
           // npm-installed packages live on disk under <agentDir>/npm/node_modules
@@ -331,9 +337,16 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
 
   // Provider first: without it the model does not exist and nothing else matters.
   const providerExt = providerExtensionFor(agent.model);
-  const extensions = providerExt && !agent.extensions.includes(providerExt)
+  const declared = providerExt && !agent.extensions.includes(providerExt)
     ? [providerExt, ...agent.extensions]
     : agent.extensions;
+
+  // `role-guard` is added here rather than declared per role. It carries two
+  // invariants that hold for every child — the bundle is frozen and pre-quoted,
+  // and a role without `edit` and `write` does not get them back through
+  // `bash` — and an invariant one can forget to list on a new role is not one.
+  // Same reasoning as the provider extension above: derived, not remembered.
+  const extensions = declared.includes("role-guard") ? declared : [...declared, "role-guard"];
 
   for (const ext of extensions) args.push("-e", resolveExtension(ext, ctx));
 
@@ -384,9 +397,17 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // it qualifies, before the line that must stay last.
   args.push(`Task: ${task}\n\n${dataNote(process.cwd(), task)}${CLOSING_INSTRUCTION}`);
 
+  // Derived from the tool list, exactly like `isReadOnly` in the subagent
+  // extension: a role added later is classified by what it can do, not by
+  // having been remembered in a second place that can drift from the first.
+  const readOnly = !agent.tools.includes("edit") && !agent.tools.includes("write");
+
   return {
     args,
-    env: { PI_SUBAGENT_ROLE: agent.envelopeRole ?? agent.name },
+    env: {
+      PI_SUBAGENT_ROLE: agent.envelopeRole ?? agent.name,
+      PI_SUBAGENT_READONLY: readOnly ? "1" : "0",
+    },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),
     withoutDelta,

@@ -103,6 +103,10 @@ the operator's authorisation. An agent that issues its own removes the only hard
 guarantee in this config. If a commit is blocked for want of a token, report it and
 stop — never work around it.
 
+This is now enforced: bash-guard refuses any command naming that path, ahead of the
+whitelist and with no dialog and no token of its own. The line stays because a rule
+whose mechanism is invisible gets rediscovered by trying it, and that costs a turn.
+
 **This workflow never delegates.** Staging, drafting a message and committing are
 orchestrator work: there is no context to isolate and nothing to parallelise, so a
 subagent adds a full context and minutes of latency for nothing. Never spawn
@@ -156,7 +160,12 @@ Run `git log --oneline -1 2>&1`. If no commits exist:
    build/
    *.log
    ```
-3. Stage everything: `git add -A`
+3. Stage explicitly, never `git add -A` or `git add .` — bash-guard stops both,
+   and an initial commit is where blanket staging is most dangerous: nothing is
+   tracked yet, so nothing has ever been reviewed, and `.gitignore` was written
+   one step ago. Run `git status -s`, show the list, stage the paths by name.
+   A repository root holding an `auth.json` is not hypothetical: this config's
+   own does.
 4. Propose: `chore: initial commit`
 5. Ask for confirmation before committing. If declined, abort and leave index as-is.
 ### Phase 1 — Pre-flight & staging

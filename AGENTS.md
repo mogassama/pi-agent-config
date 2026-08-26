@@ -65,7 +65,7 @@ The bundle wins because it was decided per project and validated by the operator
 
 The bundle has no authority here. `CONVENTIONS.md` describes the project, not pi.
 
-> UNRESOLVED — `APPEND_SYSTEM.md` and the `subagents/*.md` templates appear in neither chain. Measured: `worker.md`'s final-response template overrode `APPEND_SYSTEM.md`, a loaded skill body, and task text. Do not treat this gap as settled either way until the delivery-channel test is run.
+`APPEND_SYSTEM.md` sits above both chains and reaches the orchestrator only: passing an explicit `--append-system-prompt` suppresses its discovery, and every role passes at least its own prompt. A role template is the whole of its child's instruction and has no precedence question to answer, because there is nothing beside it to conflict with. This replaces an `UNRESOLVED` note that predated the custom `subagent` extension and that `APPEND_SYSTEM.md` now contradicts in its own text.
 
 The "Code style — defaults" section below applies only where the bundle is silent or absent — which, per "Execution regimes", is the normal case.
 
@@ -161,7 +161,8 @@ See authoring skills for canonical rules. Applies only where the project bundle 
 - **`edit`** preferred over `write` for existing files. Reserve `write` for new files or full rewrites.
 - **No `cd` in a long pipeline** — it doesn't persist between `bash` calls in pi (each call is a new shell). Use absolute paths or `cd X && cmd` in the same call.
 - **Commits:** never commit on your own initiative. A commit happens only through an explicit `/skill:git-collaboration` invocation — which stands as intent through to push, so don't re-ask for confirmation at each step. Enforced by `bash-guard`; workarounds fail.
-- **Staging:** `git add <specific files>` only. Never `git add .` or `git add -A` — including on an initial commit.
+- **Staging:** `git add <specific files>` only. Never `git add .` or `git add -A` — including on an initial commit. Enforced by `bash-guard` at MEDIUM: blanket staging asks for confirmation and shows the operator the file list at the one moment it is still free to change.
+- **The commit token is never yours to create.** `~/.pi/.allow-commit` is the operator's authorisation; `bash-guard` refuses any command naming that path, ahead of the whitelist and with no dialog. A commit blocked for want of a token is reported, not worked around.
 - **Commit language:** commit subject and body in English, whatever the conversation language.
 
 ## Skills available (global)
@@ -229,6 +230,15 @@ no role declares a default. `find` and `scope` are the scout's input contract:
 one question and the paths to search, and a scout call without them is refused
 before anything is spawned. Each call spawns a fresh
 `pi` process with its own model, tool allowlist, hooks and skill slices.
+
+**Two invariants are carried by `role-guard`, injected into every child by the
+extension and declared in no frontmatter.** In the bundle regime the four root
+files are refused to a child in both directions — reading returns what the task
+already quoted, and writing them is the operator's, with the `Statut` line of a
+`DESIGN.md` decision reserved to you. And a role without `edit` and `write` does
+not get them back through `bash`: for `scout` and `advisor`, shell commands run
+against a read-only allowlist, so a redirection, a `mv` or a writing `git`
+subcommand is refused rather than trusted to the prompt.
 
 **A child inherits nothing.** No AGENTS.md, no conversation history, no prior
 tool calls, no `APPEND_SYSTEM.md`, and no `.pi/BRIEF.md` — the brief has one

@@ -343,6 +343,34 @@ async function runOnce(
         // `next` is derived, not submitted, and is written in so the artefact
         // shape does not change when the field leaves the schema.
         envelope: envelope ? splitEnvelope({ ...envelope, next: deriveNext(envelope) }) : null,
+        /*
+         * What is left of a run that never called `submit`.
+         *
+         * `envelope: null` is correct and stays correct — nothing here was
+         * validated against a schema and nothing downstream may treat it as if
+         * it were. But null was also all there was, so a delegation that cost
+         * 112,683 tokens left an artefact with no content whatsoever, and
+         * `subagent-trace` had nothing to read but a failure string.
+         *
+         * Deliberately a separate key with an unambiguous name. The salvage is
+         * the child's last assistant text and, for a writer, the paths that
+         * appeared in the tree while it ran — attributed to the tree, not to
+         * the child, because nobody asked the child what it had done.
+         *
+         * Not a warning injected mid-run: the child is spawned with stdin
+         * ignored, so there is no channel to tell it that its ceiling is near.
+         * Converging early stays a request made in the role prompt. This is
+         * what happens when the request is not honoured.
+         */
+        degraded: envelope
+          ? null
+          : {
+              validated: false,
+              reason: failure ?? null,
+              turns: state.turns,
+              lastText: state.lastText || null,
+              changedFilesFromTree: salvaged,
+            },
         stderr: failure ? state.stderr.join("").slice(-4000) : undefined,
       },
       null,
@@ -496,7 +524,14 @@ function failureSummary(
   // Whatever the child last said, when it said anything. Unvalidated and
   // unstructured, and still the difference between a failure the orchestrator
   // can act on and 112k tokens that returned a single line.
-  const salvage = state.lastText ? ` Last thing it said: ${state.lastText.slice(-600).trim()}` : "";
+  //
+  // Still truncated at 600 characters, and deliberately: this string lands in
+  // the orchestrator's context on every failure, where its job is to say
+  // whether the artefact is worth opening. The untruncated text is in the
+  // artefact under `degraded.lastText`, which costs nothing until read.
+  const salvage = state.lastText
+    ? ` Last thing it said: ${state.lastText.slice(-600).trim()} (full text in the artefact under \`degraded\`)`
+    : "";
 
   switch (failure) {
     case "max_turns":

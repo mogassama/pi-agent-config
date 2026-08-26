@@ -5,7 +5,7 @@ model: openai-codex/gpt-5.6-terra
 fallbackModels: [openai-codex/gpt-5.6-sol]
 thinking: high
 tools: [read, grep, find, ls, bash, edit, write, submit]
-extensions: [envelope, pi-lint-gate, bash-guard, pi-bq-cost-sentinel]
+extensions: [envelope, pi-lint-gate, bash-guard, pi-bq-cost-sentinel, pi-secret-gate]
 skills: []
 sliceMode: authoring
 contextFiles: false

@@ -27,6 +27,23 @@ const TOKEN_SOURCES: string[] = [
   String.raw`\bgh\s+pr\s+(?:merge|create)\b`,
 ];
 
+/**
+ * The token file itself — refused outright, never authorised.
+ *
+ * `git-collaboration` forbade creating it in prose: "an agent that issues its
+ * own removes the only hard guarantee in this config". Every role holding
+ * `bash` could `touch` it, so the only hard guarantee in this config was
+ * guarded by a sentence.
+ *
+ * Deliberately not a TOKEN pattern. TOKEN means "one authorisation, consumed
+ * here", and a token cannot authorise the creation of a token — the guard
+ * would spend the operator's authorisation to let the agent mint a fresh one.
+ * This level has no dialog, no always-allow and no token path: it blocks, and
+ * says why. Matched on the path rather than on `touch`, since `: >`, `echo >`,
+ * `install -D`, `cp` and `python -c` all create a file just as well.
+ */
+export const TOKEN_FILE_PATTERN = new RegExp(String.raw`\.allow-commit\b`, "is");
+
 const HIGH_SOURCES: string[] = [
   String.raw`\bterraform\s+destroy\b`,
   // One or more subcommand words (e.g. "functions", "composer environments", "run services")
@@ -48,6 +65,14 @@ const MEDIUM_SOURCES: string[] = [
   // Generic force-push (no branch target) — less specific than the HIGH variant above
   String.raw`\bgit\s+push\s+(-f|--force)\b`,
   String.raw`\bgit\s+reset\s+--hard\b`,
+  // AGENTS.md forbids blanket staging outright; git-collaboration Phase 0
+  // prescribed `git add -A` for an initial commit. Two prompts, one
+  // contradiction, and no pattern — which is how `auth.json` at a repo root
+  // gets staged. MEDIUM rather than HIGH: staging is reversible with
+  // `git reset`, and the commit itself is already gated at TOKEN level. The
+  // confirmation is the point — it puts the file list in front of the operator
+  // at the one moment it can still be changed for free.
+  String.raw`\bgit\s+add\s+(?:-A\b|--all\b|\.(?:\s|$))`,
   String.raw`\bterraform\s+apply\s+-auto-approve\b`,
 ];
 

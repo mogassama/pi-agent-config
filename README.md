@@ -25,13 +25,15 @@ from a run, not from a guess.
 │   ├── pi-bq-cost-sentinel/         # BigQuery cost gate on every `bq query`
 │   ├── pi-check-config/             # /check-config — consistency, two tiers
 │   ├── pi-lint-gate/                # ruff after .py edits, mypy at turn end
+│   ├── pi-secret-gate/              # Refuses a write carrying a credential
 │   └── pi-project-brief/            # /brief — .pi/BRIEF.md orientation note
 ├── subagent-only/                   # Loaded into children, never the orchestrator
-│   ├── agents/{worker,reviewer,scout}.md
+│   ├── agents/{worker,reviewer,scout,advisor}.md
 │   ├── envelope/envelope.ts         # The `submit` tool, one schema per role
 │   ├── agents.ts                    # Agent definition schema and loader
 │   ├── slicer.ts                    # Cuts a SKILL.md on `## Review delta`
 │   ├── spawn-args.ts                # Builds the child's argv
+│   ├── role-guard.ts                # Frozen bundle; read-only means read-only
 │   ├── dispatch.ts                  # Spawn, stream, turn ceiling, artefact
 │   └── run-state.ts                 # Per-role state published to the footer
 ├── skills/                          # 19, one directory each
@@ -198,9 +200,10 @@ legitimately has no delta costs a whole run.
 |---|---|
 | `subagent/` | The `task` tool. One tool with the role as a parameter: 190 tokens, against 5 468 for the six of the extension it replaced. |
 | `subagent-footer/` | Three lines — orchestrator model, context, cache, git state; then per-role usage with the running one in bold. Installs at `session_start`; `/footer` toggles back to pi's built-in. |
-| `bash-guard/` | Three levels. TOKEN: `git commit`, `gh pr merge\|create` — single-use `~/.pi/.allow-commit`, consumed on use, checked before HIGH and the whitelist. HIGH: mandatory confirmation. MEDIUM: confirmation + session always-allow. |
+| `bash-guard/` | Three levels, plus one refusal. Any command naming `~/.pi/.allow-commit` is blocked outright — the token is the operator's and cannot be minted by an agent. TOKEN: `git commit`, `gh pr merge\|create` — single-use token, consumed on use, checked before HIGH and the whitelist. HIGH: mandatory confirmation. MEDIUM: confirmation + session always-allow, and it now carries `git add -A\|.` |
 | `pi-bq-cost-sentinel/` | Dry-runs every `bq query` issued through `bash`, subagents included. <1 GB passes, 1 GB–1 TB warns, >1 TB blocks. |
 | `pi-lint-gate/` | `ruff` after every `.py` edit, appended to the tool result the agent reads next. `mypy` once per turn on the files touched. |
+| `pi-secret-gate/` | Refuses a `write` or `edit` whose content carries a credential-shaped literal. AGENTS.md hard limit 1, at the moment of writing rather than at `/audit` time. Loaded by the worker and by the orchestrator; `.env.example` and obvious placeholders pass. |
 | `pi-check-config/` | `/check-config` — blocking and report tiers over skills, agent definitions, the `## Review delta` marker, and model-family diversity. |
 | `pi-project-brief/` | `/brief` — writes `.pi/BRIEF.md`, a ≤40-line orientation note. The extension itself does not reach children (`-ne` is active); the file is injected directly by `spawn-args` for roles declaring `projectBrief: true` — no role does, since the brief audit found that a child handed a summary stops going to look. The orchestrator is its only reader. |
 | `@tmustier/pi-raw-paste` | Raw paste handling (npm). |

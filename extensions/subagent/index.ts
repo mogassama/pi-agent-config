@@ -561,6 +561,37 @@ export default function (pi: ExtensionAPI) {
             ? diffSection(changed)
             : { text: "", degraded: false, diffChars: 0 };
 
+        /*
+         * Which of those files no worker authored.
+         *
+         * "The code of an implementation deliverable is never handled inline"
+         * cannot be enforced here: whether a line belongs to a deliverable is a
+         * judgement, and AGENTS.md says so itself — "what decides is what the
+         * line belongs to, not how long it is". A gate on the orchestrator's
+         * `write` would either block legitimate inline edits or be opened by a
+         * token, which is a planner in another costume.
+         *
+         * What can be established mechanically is authorship, and authorship is
+         * what run `adee82` actually lost: seven modules and two edits written
+         * inline, one review, `needs_rework`, and a fix nobody judged. The
+         * review still happens — inline writes have counted as material changes
+         * since they started being recorded — but the reviewer was never told
+         * that the code in front of it was written by the party that also wrote
+         * its task. It is entitled to know, and so is the operator reading the
+         * refusal log afterwards.
+         */
+        const inlineWritten = new Set(
+          HISTORY.filter((d) => d.agent === "orchestrator").flatMap((d) => d.changedFiles),
+        );
+        const unauthored = changed.filter((f) => inlineWritten.has(f));
+        const authorshipNote =
+          params.agent === "reviewer" && unauthored.length > 0
+            ? `Written inline by the orchestrator, not by a worker: ${unauthored.join(", ")}. ` +
+              "These were not produced against a delegated task and their author wrote yours. " +
+              "Judge them exactly as you judge the rest — this note exists so that you are not " +
+              "assuming a worker envelope stands behind them.\n\n"
+            : "";
+
         // For a scout, the contract is also the head of its task text: the child
         // reads the same one question and the same paths the schema enforced.
         // One task text per question, so a fan-out spawns children that differ
@@ -570,7 +601,7 @@ export default function (pi: ExtensionAPI) {
           `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
         const tasks = questions.length
           ? questions.map((q) => `${pkg.text}${scoutHeader(q)}${params.task}`)
-          : [`${pkg.text}${params.task}`];
+          : [`${pkg.text}${authorshipNote}${params.task}`];
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would

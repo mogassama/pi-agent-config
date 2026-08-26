@@ -20,7 +20,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { readFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { type PatternEntry, compilePatterns, findMatch } from "./patterns";
+import { type PatternEntry, TOKEN_FILE_PATTERN, compilePatterns, findMatch } from "./patterns";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -129,6 +129,23 @@ export default function (pi: ExtensionAPI): void {
     if (!isToolCallEventType("bash", event)) return undefined;
 
     const command = event.input.command;
+
+    // Before the whitelist, before TOKEN, before everything: the authorisation
+    // file is the operator's, and nothing an agent runs may create, copy or
+    // restore it. No dialog — an interactive operator who wants to authorise a
+    // commit already has the TOKEN dialog for that, and does not need the agent
+    // to mint the file on their behalf.
+    if (TOKEN_FILE_PATTERN.test(command)) {
+      await appendLog(logPath, "token", "declined", "allow-commit token file", command);
+      return {
+        block: true,
+        reason:
+          "blocked by bash-guard: the commit token is the operator's authorisation and " +
+          "cannot be created, copied or restored by an agent. If a commit is blocked for " +
+          "want of a token, report it and stop — do not work around it.",
+      };
+    }
+
     const match = findMatch(command, extraHigh, extraMedium, whitelist);
     if (!match) return undefined;
 
@@ -192,9 +209,15 @@ export default function (pi: ExtensionAPI): void {
         : "⚠️  Dangerous command (MEDIUM)";
     const prompt = `${title}\n\nPattern matched: ${patternSource}\n\n${cmdDisplay}`;
 
+    // No escalation option. It used to offer "Consult oracle-deep first", and
+    // `oracle-deep` was removed with the planner/oracle roles: the dialog named
+    // an agent the `task` tool would refuse, and the block message instructed
+    // the model to invoke it. A HIGH command confirms or cancels. The advisor
+    // is not a substitute — it takes a durable-boundary fork in the free
+    // regime, not a destructive shell command.
     const options =
       level === "high"
-        ? (["Confirm", "Consult oracle-deep first", "Cancel"] as const)
+        ? (["Confirm", "Cancel"] as const)
         : (["Confirm", "Cancel", "Always allow for this session"] as const);
 
     const choice = await ctx.ui.select(prompt, [...options]);
@@ -208,22 +231,6 @@ export default function (pi: ExtensionAPI): void {
       alwaysAllowed.add(patternSource);
       await appendLog(logPath, level, "auto-allowed", patternSource, command);
       return undefined;
-    }
-
-    if (choice === "Consult oracle-deep first") {
-      await appendLog(logPath, level, "escalated", patternSource, command);
-      return {
-        block: true,
-        reason:
-          "blocked by bash-guard: operator requested oracle-deep review.\n" +
-          `Pattern matched: ${patternSource}\n` +
-          `Command: ${cmdDisplay}\n\n` +
-          "Invoke the `oracle-deep` subagent before retrying. The call MUST embed, verbatim: " +
-          "the exact command, the target resource and environment, the intended outcome, " +
-          "the blast radius if wrong, and the rollback path. " +
-          "oracle-deep runs with inheritProjectContext: false and sees nothing you do not pass it. " +
-          "Re-run only after oracle-deep has answered AND the operator re-confirms.",
-      };
     }
 
     // "Cancel" or Escape (undefined)
