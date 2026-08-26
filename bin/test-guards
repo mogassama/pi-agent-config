@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# test-guards — run the test suite over the rules that must hold unconditionally.
+#
+# No dependency, no package.json, no test framework: `node --test` with type
+# stripping. A configuration repository that needs an install step before its
+# own tests run is a repository whose tests do not get run.
+#
+#   bin/test-guards            # everything
+#   bin/test-guards guards     # one file, by name
+#
+# What is covered, and why each one is here:
+#   tests/guards.test.ts   the shell parser, the bundle paths, the commit token
+#                          patterns, the credential shapes — including the six
+#                          bypasses an external audit demonstrated
+#   tests/config.test.ts   every declared extension and skill exists on disk,
+#                          every role has an envelope schema, no read-only role
+#                          holds a shell, no model both produces and judges
+#
+# What is NOT covered, and cannot be from here: whether a model honours a
+# prompt. That is measured by running a delegation, not by asserting on a
+# string.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+# Type stripping landed in 22.6 behind the flag and is on by default from 23.6.
+major="$(node -p 'process.versions.node.split(".")[0]')"
+minor="$(node -p 'process.versions.node.split(".")[1]')"
+if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 6 ]; }; then
+  echo "node $(node -v) is too old — these tests read .ts directly and need 22.6+" >&2
+  echo "the rules themselves do not care; only the runner does" >&2
+  exit 1
+fi
+
+flags=(--test)
+[ "$major" -lt 23 ] && flags=(--experimental-strip-types "${flags[@]}")
+
+if [ $# -gt 0 ]; then
+  files=()
+  for name in "$@"; do files+=("tests/${name%.test.ts}.test.ts"); done
+else
+  files=(tests/*.test.ts)
+fi
+
+exec node "${flags[@]}" "${files[@]}"

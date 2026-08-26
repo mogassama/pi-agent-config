@@ -17,7 +17,8 @@ from a run, not from a guess.
 ├── PLAN-V2-POST-MESURE.md           # Measurement log the design rests on
 ├── settings.json                    # Provider, model, theme, packages
 ├── bin/
-│   └── subagent-trace               # What a child actually did, from its stream
+│   ├── subagent-trace               # What a child actually did, from its stream
+│   └── test-guards                  # Runs tests/ — no install step, no framework
 ├── extensions/
 │   ├── subagent/                    # The `task` tool — delegation
 │   ├── subagent-footer/             # Three-line footer: orchestrator + roles
@@ -34,6 +35,7 @@ from a run, not from a guess.
 │   ├── slicer.ts                    # Cuts a SKILL.md on `## Review delta`
 │   ├── spawn-args.ts                # Builds the child's argv
 │   ├── role-guard.ts                # Frozen bundle; read-only means read-only
+│   ├── role-rules.ts                # Its predicates, importable and tested
 │   ├── dispatch.ts                  # Spawn, stream, turn ceiling, artefact
 │   └── run-state.ts                 # Per-role state published to the footer
 ├── skills/                          # 19, one directory each
@@ -212,6 +214,33 @@ legitimately has no delta costs a whole run.
 | `pi-check-config/` | `/check-config` — blocking and report tiers over skills, agent definitions, the `## Review delta` marker, and model-family diversity. |
 | `pi-project-brief/` | `/brief` — writes `.pi/BRIEF.md`, a ≤40-line orientation note. The extension itself does not reach children (`-ne` is active); the file is injected directly by `spawn-args` for roles declaring `projectBrief: true` — no role does, since the brief audit found that a child handed a summary stops going to look. The orchestrator is its only reader. |
 | `@tmustier/pi-raw-paste` | Raw paste handling (npm). |
+
+## Tests
+
+```
+bin/test-guards            # everything — 102 cases, no install step
+bin/test-guards guards     # one file
+```
+
+`node --test` with type stripping, so the suite runs on a clone with nothing
+installed. Two files:
+
+| File | What it holds to account |
+|---|---|
+| `tests/guards.test.ts` | The shell parser, the frozen-bundle paths, the commit-token patterns, the credential shapes. The six bypasses an external audit demonstrated — `echo $(…)`, backticks, `env`, `find -exec`, `find -delete`, `awk system()` — are cases in it, so the next rewrite of the parser has to beat them again. |
+| `tests/config.test.ts` | Every declared extension and skill exists on disk; every role has an envelope schema and a `submit` tool; no read-only role holds `bash`; worker and reviewer cannot meet on one model, primary or fallback. |
+
+The predicates live in `subagent-only/role-rules.ts` and
+`extensions/pi-secret-gate/rules.ts` — leaf modules importing nothing from pi,
+split out for exactly this reason. The extension files are the wiring.
+
+What the suite cannot cover: whether a model honours a prompt. That is measured
+by running a delegation.
+
+The case that produced `config.test.ts`: `pi-secret-gate` was declared in
+`worker.md` and never committed. It existed on one machine, so every local run
+worked and every clone failed at `resolveExtension` before a child spawned.
+Nothing in the repository could notice.
 
 Git hooks are not pi extensions: `git-hooks/commit-msg` enforces Conventional
 Commits at the git level, so the format holds outside the agent too.
