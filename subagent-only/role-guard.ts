@@ -147,29 +147,6 @@ export default function (pi: ExtensionAPI): void {
   const readOnly = process.env.PI_SUBAGENT_READONLY === "1";
   const root = bundleRoot(process.cwd());
 
-  /**
-   * How many times each refusal has already been given.
-   *
-   * Measured on two probes, two model families, two different rules: five
-   * refused attempts each. A scout blocked on a redirection tried five
-   * commands; a worker blocked on `CONVENTIONS.md` issued five reads of it,
-   * against seven reads in the whole run. The first message explains the rule,
-   * which reads as a description of a situation to work around rather than as
-   * an outcome — so the model reformulates. Explaining twice buys nothing that
-   * explaining once did not; the second refusal is short, and says only that
-   * the answer will not change.
-   */
-  const refusals = new Map<string, number>();
-  const escalate = (key: string, first: string): string => {
-    const n = (refusals.get(key) ?? 0) + 1;
-    refusals.set(key, n);
-    if (n === 1) return `${first} This refusal covers every form of the request: do not retry with another tool, another path or another command. Record it and carry on with the rest of the task.`;
-    return (
-      `blocked by role-guard: same refusal, attempt ${n}. The answer does not change with the ` +
-      "phrasing. Stop retrying, put it in your envelope — `deviations` for a worker, `gaps` " +
-      "for a scout — and finish the part of the task that does not depend on it."
-    );
-  };
 
   pi.on("tool_call", async (event) => {
     // --- The frozen bundle -------------------------------------------------
@@ -183,7 +160,7 @@ export default function (pi: ExtensionAPI): void {
 
       if (path && isBundleFile(path, root)) {
         const writing = !isToolCallEventType("read", event);
-        const first = writing
+        const reason = writing
           ? `blocked by role-guard: ${basename(path)} is a frozen bundle file. Only the ` +
             "operator changes it, and the one field pi may write — the `Statut` line of a " +
             "DESIGN.md decision — belongs to the orchestrator, not to a delegation. If the " +
@@ -194,10 +171,7 @@ export default function (pi: ExtensionAPI): void {
             "what you were already given and costs turns you will need for the work. If " +
             "something decisive is genuinely missing from the task text, name it in your " +
             "envelope rather than going to look for it.";
-        return {
-          block: true,
-          reason: escalate(`${writing ? "write" : "read"}:${basename(path)}`, first),
-        };
+        return { block: true, reason };
       }
     }
 
@@ -207,13 +181,11 @@ export default function (pi: ExtensionAPI): void {
       if (reason) {
         return {
           block: true,
-          reason: escalate(
-            "bash",
+          reason:
             `blocked by role-guard: ${reason}. \`${role || "this role"}\` is read-only — it ` +
-              "has no `edit` and no `write` by design, and `bash` is not a way around that. " +
-              "Use it to search and to read. If the answer requires changing something, that " +
-              "is a different role and the orchestrator's call, not yours.",
-          ),
+            "has no `edit` and no `write` by design, and `bash` is not a way around that. " +
+            "Use it to search and to read. If the answer requires changing something, that " +
+            "is a different role and the orchestrator's call, not yours.",
         };
       }
     }
