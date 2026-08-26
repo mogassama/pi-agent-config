@@ -291,7 +291,20 @@ function checkAgent(root: string, file: string, skillSet: Set<string>): AgentChe
   // A role prompt that does not tell the child its context is complete sends it
   // hunting for AGENTS.md, which -nc removed. Measured: one wasted turn, first
   // call, every time.
-  if (!/already in this prompt|inherits nothing|do not search for/i.test(body ?? "")) {
+  //
+  // The alternatives are what the prompts actually say, not what this check
+  // once expected them to say. Every role opens on "Everything you need is in
+  // this prompt", which none of the three earlier patterns matched — so the
+  // check reported all four prompts as defective while all four were correct,
+  // and the obvious repair was to reword four correct prompts to satisfy a
+  // stale regex. A check that dictates wording rather than verifying a property
+  // is worse than no check: it would have gone on shaping every role written
+  // after it.
+  if (
+    !/already in this prompt|inherits nothing|do not search for|everything you need is in this prompt|quoted into (?:your|the) task/i.test(
+      body ?? "",
+    )
+  ) {
     out.report.push(
       `agents/${file}: prompt does not state that the context is complete — a child ` +
         `running with --no-context-files will look for AGENTS.md`,
@@ -416,22 +429,47 @@ export default function (pi: ExtensionAPI): void {
       }
 
       // --- roles declared vs defined ----------------------------------------
+      //
+      // Read from the keys of the `payloads` map, not from `Type.Literal("…")`.
+      // The literals were how a role was named when the envelope carried a
+      // discriminant field; that field is gone — envelope.ts says so in its own
+      // header — and the schemas have been plain keys of `payloads` since. The
+      // check went on grepping for the literals, found none, and reported all
+      // four roles as undeclared at once. Four simultaneous failures are a
+      // checker, never four regressions, and this one blocked the commit
+      // workflow on a Tier 1 that did not exist.
+      //
+      // Keys rather than a hardcoded list of the four: a role added to the map
+      // is declared by that act, which is the property this check is meant to
+      // verify in the first place.
       const envelope = readText(join(root, "subagent-only", "envelope", "envelope.ts")) ?? "";
-      const declaredRoles = [...envelope.matchAll(/Type\.Literal\("(worker|reviewer|scout|advisor)"\)/g)]
+      const payloadBlock = envelope.slice(envelope.indexOf("const payloads = {"));
+      const declaredRoles = [...payloadBlock.matchAll(/^\s{2}([a-z][a-z0-9_-]*):\s*Type\.Object\(/gm)]
         .map((m) => m[1]!)
         .filter((v, i, a) => a.indexOf(v) === i);
-      const defined = new Set(agentFiles.map((f) => f.replace(/\.md$/, "")));
-      for (const role of declaredRoles) {
-        if (!defined.has(role)) {
-          report.push(
-            `role '${role}' has an envelope schema but no definition — the schema is ready, ` +
-              `the agent is not written. Not an error unless you meant to invoke it.`,
-          );
+
+      if (declaredRoles.length === 0) {
+        // Said once, and not four times over. If the map cannot be read at all,
+        // the per-role comparison below would blame every agent on disk for a
+        // parse failure that belongs here.
+        blocking.push(
+          "subagent-only/envelope/envelope.ts: no role schema found. Expected a `const payloads = {` " +
+            "map whose keys are role names. Every per-role check below is suspended.",
+        );
+      } else {
+        const defined = new Set(agentFiles.map((f) => f.replace(/\.md$/, "")));
+        for (const role of declaredRoles) {
+          if (!defined.has(role)) {
+            report.push(
+              `role '${role}' has an envelope schema but no definition — the schema is ready, ` +
+                `the agent is not written. Not an error unless you meant to invoke it.`,
+            );
+          }
         }
-      }
-      for (const role of defined) {
-        if (!declaredRoles.includes(role)) {
-          blocking.push(`agents/${role}.md exists but envelope.ts declares no '${role}' schema`);
+        for (const role of defined) {
+          if (!declaredRoles.includes(role)) {
+            blocking.push(`agents/${role}.md exists but envelope.ts declares no '${role}' schema`);
+          }
         }
       }
 
