@@ -3,7 +3,7 @@
  *
  * Every case below is a claim the configuration makes in prose somewhere:
  * AGENTS.md says a read-only role cannot write through a shell, `bash-guard`'s
- * header says a commit has no bypass, hard limit 1 says a secret is never
+ * header says a commit needs the token, hard limit 1 says a secret is never
  * written to source. A claim with no test is a claim that was true once.
  *
  * The bypass cases are not hypothetical. Each was demonstrated against a
@@ -151,7 +151,7 @@ test("only the four files at the root are frozen", () => {
 });
 
 // ---------------------------------------------------------------------------
-// bash-guard — the commit token has no bypass
+// bash-guard — the commit token covers direct commands and aliases
 // ---------------------------------------------------------------------------
 
 const token = (c: string) => TOKEN_PATTERNS.some((p) => p.pattern.test(c));
@@ -162,7 +162,8 @@ const MUST_NEED_TOKEN = [
   "git -c user.name=x commit -m y",
   "git --no-pager commit",
   // Aliases. Demonstrated: neither of these matched, while the token was
-  // documented as having no bypass.
+  // covered here: direct commands and aliases. A `git commit` inside a script
+  // run as `bash script.sh` is not seen by bash-guard and is not claimed to be.
   "git -c alias.ci=commit ci -m x",
   "git ci -m x",
   "gh pr create",

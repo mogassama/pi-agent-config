@@ -315,13 +315,7 @@ async function runOnce(
   }
 
   // No envelope from a role that writes: ask the tree what it did.
-  const salvaged =
-    !envelope && mutates
-      ? [...treeState(process.cwd())]
-          .filter(([path, hash]) => before.get(path) !== hash)
-          .map(([path]) => path)
-          .sort()
-      : [];
+  const salvaged = !envelope && mutates ? changedBetween(before, treeState(process.cwd())) : [];
 
   mkdirSync(artifactDir, { recursive: true });
   if (agent.keepTranscript !== false) {
@@ -471,21 +465,31 @@ function treeState(cwd: string): Map<string, string> {
   const files = new Map<string, string>();
   let names: string[];
   try {
-    const out = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+    const out = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
       cwd,
       encoding: "utf-8",
       timeout: 10_000,
       maxBuffer: 4 * 1024 * 1024,
     });
-    names = out
-      .split("\n")
-      .map((l) => l.slice(3).trim())
-      .filter(Boolean);
+    // -z, because the default format quotes and escapes any path that is not
+    // plain ASCII and writes a rename as `old -> new`. Either produces a string
+    // that names no file on disk, so the hash comes back empty and the
+    // comparison silently lies. With -z each record is NUL-terminated and a
+    // rename emits its two paths as two records: the status prefix is two
+    // characters plus a space, and what follows is the path, verbatim.
+    const records = out.split("\0").filter(Boolean);
+    names = records.map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r)).filter(Boolean);
   } catch {
     return files;
   }
   for (const name of names) {
-    let hash = "";
+    // A path git reports but that cannot be read is gone — deleted, or renamed
+    // away. It needs a value that no hash can equal *and* that no absent entry
+    // can equal: the empty string fails the second test, because a path missing
+    // from a snapshot also defaults to empty, and a file deleted from a clean
+    // tree is absent from the first snapshot and empty in the second. The two
+    // then compare equal and the deletion is invisible.
+    let hash = "\u0000gone";
     try {
       hash = createHash("sha1").update(readFileSync(join(cwd, name))).digest("hex");
     } catch {
@@ -514,6 +518,24 @@ function treeState(cwd: string): Map<string, string> {
  * from the reviewer where it was cautious and left it where it was lax — the
  * worst of the two arrangements. The loop reads the verdict, and nothing else.
  */
+
+/**
+ * Paths whose content differs between two snapshots, in either direction.
+ *
+ * The union matters, not the second snapshot's keys. A file the operator had
+ * modified before the delegation, and that the worker put back to its committed
+ * state, leaves `git status` entirely: it is a key of `before` and of neither
+ * `after` nor the difference. Iterating over `after` alone reports nothing
+ * changed — and "nothing changed" is exactly the condition that lets a writer be
+ * relaunched, on a tree where it has just erased somebody else's work.
+ *
+ * A missing file hashes to the empty string, so a deletion and a revert-to-HEAD
+ * are both a difference like any other.
+ */
+function changedBetween(before: Map<string, string>, after: Map<string, string>): string[] {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].filter((p) => (before.get(p) ?? "") !== (after.get(p) ?? "")).sort();
+}
 
 /**
  * What runs next, decided here rather than asked of the child.

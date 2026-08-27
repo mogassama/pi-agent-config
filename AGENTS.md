@@ -160,7 +160,12 @@ See authoring skills for canonical rules. Applies only where the project bundle 
 - **`read` tool** — for individual files, by path. A question that spans files — where is this, who calls it, is it consistent — is a `task({ agent: "scout" })`, not an `rg` you run yourself. See "Searching is scout work".
 - **`edit`** preferred over `write` for existing files. Reserve `write` for new files or full rewrites.
 - **No `cd` in a long pipeline** — it doesn't persist between `bash` calls in pi (each call is a new shell). Use absolute paths or `cd X && cmd` in the same call.
-- **Commits:** never commit on your own initiative. A commit happens only through an explicit `/skill:git-collaboration` invocation — which stands as intent through to push, so don't re-ask for confirmation at each step. Enforced by `bash-guard`; workarounds fail.
+- **Commits:** never commit on your own initiative. A commit happens only through an explicit `/skill:git-collaboration` invocation — which stands as intent through to push, so don't re-ask for confirmation at each step. `bash-guard` refuses a direct `git commit`, an alias for it, and the mutating
+forms of `git config` that would create one — including `--no-verify`. It
+inspects the command it is handed and nothing else, so a `git commit` written
+into a script and run as `bash script.sh` is not seen: the protection covers the
+commands a model reaches for, not every path to a commit. Treat the token as the
+rule made visible and hard to trip over, not as a sandbox.
 - **Staging:** `git add <specific files>` only. Never `git add .` or `git add -A` — including on an initial commit.
 - **Commit language:** commit subject and body in English, whatever the conversation language.
 
