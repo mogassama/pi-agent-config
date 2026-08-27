@@ -12,7 +12,7 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
@@ -506,8 +506,9 @@ export default function (pi: ExtensionAPI) {
         "happened. Input data, configuration, fixtures, an existing module whose " +
         "interface must be honoured — name them.\n\n" +
         "Quote what the child cannot reach at all: anything from this " +
-        "conversation, from a bundle file, from a project AGENTS.md or from " +
-        ".pi/BRIEF.md must be pasted verbatim, not referred to.",
+        "conversation, from a bundle file, from .pi/BRIEF.md, or stated anywhere " +
+        "in the repository about the paths this task touches — AGENTS.md, " +
+        "SECURITY.md, an ADR — must be pasted verbatim, not referred to.",
     }),
   });
 
@@ -522,10 +523,10 @@ export default function (pi: ExtensionAPI) {
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
-        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it — `find` takes an array and the scouts run at once, so three narrow questions cost what the slowest one costs and beat one exhaustive scout that dies.",
+        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it — `find` takes an array and the scouts run at once, so three narrow questions cost what the slowest one costs and beat one exhaustive scout that dies. **If you are about to send a second scout before acting on the first, the two were one call**: measured on two runs, four consecutive scouts were delegated one at a time where a single array would have answered all four in the time of the slowest.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
-        "The child sees only the task text. Anything implicit here is absent there — including a project AGENTS.md, the most authoritative file on substance and one no child ever sees. Quote the rules that bear on the task.",
+        "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
       ],
       parameters,
 
@@ -533,32 +534,6 @@ export default function (pi: ExtensionAPI) {
         const agent = agents.get(params.agent);
         if (!agent) {
           return { content: [{ type: "text" as const, text: `unknown agent: ${params.agent}` }], isError: true };
-        }
-
-        // A skill name the orchestrator invented. `resolveSkill` throws inside
-        // `buildSpawnPlan`, which runs inside `dispatch`, which has no catch for
-        // it — so a typo surfaced as an exception rather than as a tool result
-        // the model could read and correct. Checked here, where a wrong name is
-        // one line back to the caller with the valid ones listed.
-        if (params.skills?.length) {
-          let available: string[] = [];
-          try {
-            available = readdirSync(join(AGENT_DIR, "skills"), { withFileTypes: true })
-              .filter((e) => e.isDirectory() && existsSync(join(AGENT_DIR, "skills", e.name, "SKILL.md")))
-              .map((e) => e.name)
-              .sort();
-          } catch {
-            /* the resolver will say so, and better than a guess would */
-          }
-          const unknown = params.skills.filter((n) => available.length > 0 && !available.includes(n));
-          if (unknown.length) {
-            const text =
-              `Refused: no skill named ${unknown.map((u) => `\`${u}\``).join(", ")}. ` +
-              `Available: ${available.join(", ")}. Names come from the skills directory, ` +
-              "not from the domain — omit `skills` entirely to give the child none.";
-            logRefusal(RUN_ID, params.agent, text);
-            return { content: [{ type: "text" as const, text }], isError: true };
-          }
         }
 
         // Before anything is spawned. A refusal costs one tool result; the
@@ -587,37 +562,6 @@ export default function (pi: ExtensionAPI) {
             ? diffSection(changed)
             : { text: "", degraded: false, diffChars: 0 };
 
-        /*
-         * Which of those files no worker authored.
-         *
-         * "The code of an implementation deliverable is never handled inline"
-         * cannot be enforced here: whether a line belongs to a deliverable is a
-         * judgement, and AGENTS.md says so itself — "what decides is what the
-         * line belongs to, not how long it is". A gate on the orchestrator's
-         * `write` would either block legitimate inline edits or be opened by a
-         * token, which is a planner in another costume.
-         *
-         * What can be established mechanically is authorship, and authorship is
-         * what run `adee82` actually lost: seven modules and two edits written
-         * inline, one review, `needs_rework`, and a fix nobody judged. The
-         * review still happens — inline writes have counted as material changes
-         * since they started being recorded — but the reviewer was never told
-         * that the code in front of it was written by the party that also wrote
-         * its task. It is entitled to know, and so is the operator reading the
-         * refusal log afterwards.
-         */
-        const inlineWritten = new Set(
-          HISTORY.filter((d) => d.agent === "orchestrator").flatMap((d) => d.changedFiles),
-        );
-        const unauthored = changed.filter((f) => inlineWritten.has(f));
-        const authorshipNote =
-          params.agent === "reviewer" && unauthored.length > 0
-            ? `Written inline by the orchestrator, not by a worker: ${unauthored.join(", ")}. ` +
-              "These were not produced against a delegated task and their author wrote yours. " +
-              "Judge them exactly as you judge the rest — this note exists so that you are not " +
-              "assuming a worker envelope stands behind them.\n\n"
-            : "";
-
         // For a scout, the contract is also the head of its task text: the child
         // reads the same one question and the same paths the schema enforced.
         // One task text per question, so a fan-out spawns children that differ
@@ -627,7 +571,7 @@ export default function (pi: ExtensionAPI) {
           `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
         const tasks = questions.length
           ? questions.map((q) => `${pkg.text}${scoutHeader(q)}${params.task}`)
-          : [`${pkg.text}${authorshipNote}${params.task}`];
+          : [`${pkg.text}${params.task}`];
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
