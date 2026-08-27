@@ -36,3 +36,8 @@ evidence/
 .pi-subagent-runs/
 .pi-subagent-runs/
 .backup-*/
+
+# pi-secret-gate est une extension, pas un secret. Le .gitignore global
+# exclut *secret*, ce qui a rendu ce répertoire invisible pendant une semaine.
+!extensions/pi-secret-gate/
+!extensions/pi-secret-gate/**

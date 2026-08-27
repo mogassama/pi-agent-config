@@ -1,0 +1,6 @@
+{
+  "name": "pi-secret-gate",
+  "version": "1.0.0",
+  "description": "refuses a write that puts a credential-shaped literal in source — AGENTS.md hard limit 1, at the moment of writing",
+  "private": true
+}
