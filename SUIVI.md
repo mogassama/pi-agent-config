@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `233e452`.
+Branche `feat/subagent-extension`. État courant : `d0d5954`.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -40,9 +40,10 @@ même réglage ; seuls `high` et `max` déplacent quelque chose.
 Huit extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-lint-gate`,
 `pi-project-brief`, `pi-secret-gate`, `subagent`, `subagent-footer`.
 
-Suite de tests : `bin/test-guards`, 110 cas, dont huit sur le salvage du dispatch et neuf sur
-le câblage de `pi-secret-gate` — ces derniers écrits après qu'un défaut de nommage de champ a
-laissé passer **tous** les `edit` pendant une journée sans qu'aucun test ne le voie.
+Suite de tests : `bin/test-guards`, 125 cas — huit sur le salvage du dispatch, neuf sur le
+câblage de `pi-secret-gate`, quinze sur le fan-out. Les deux derniers groupes ont été écrits
+après coup, chacun sur un chemin dont les règles étaient justes et le câblage jamais
+exercé.
 
 ---
 
@@ -319,18 +320,47 @@ laissé passer **tous** les `edit` pendant une journée sans qu'aucun test ne le
 
 ### En cours
 
-- [ ] **Le fan-out des scouts n'a jamais servi.** Zéro appel multi-questions depuis sa mise en
-      service. Au run 10, quatorze scouts dont deux séries consécutives — `22,23` et `33` à
-      `36` — avec un **`scope` identique** à l'intérieur de chaque série et des questions
-      indépendantes : la série de quatre est exactement le cas décrit par la guideline, au
-      plafond exact. Deux hypothèses écartées par ces chiffres : ce n'est ni une contrainte
-      d'interface — un `scope` unique par tableau —, ni une dépendance temporelle entre les
-      questions.
-      *Un avis extérieur est demandé avant de décider.* Le retrait toucherait neuf endroits,
-      une soixantaine de lignes, et rendrait environ 60 tokens par session.
-      *Ce qui l'a écarté :* différer les appels pour les grouper suppose de savoir que
-      l'orchestrateur a fini de poser ses questions — un tampon qui doit prédire l'avenir dans
-      un mécanisme dont la valeur est de ne rien prédire.
+- [ ] **Le fan-out des scouts n'a jamais servi — mécanisme gardé, affordance refaite.**
+      Zéro appel multi-questions depuis sa mise en service. Au run 10, quatorze scouts dont
+      deux séries consécutives — `22,23` et `33` à `36` — avec un **`scope` identique** à
+      l'intérieur de chaque série et des questions indépendantes : la série de quatre est
+      exactement le cas décrit par la guideline, au plafond exact. Deux explications écartées
+      par ces chiffres : ni contrainte d'interface, ni dépendance temporelle.
+
+      *Correction de fait, vérifiée dans la documentation de pi :* `promptGuidelines` n'est
+      pas réinjecté à chaque appel de l'outil — les bullets sont ajoutées **à plat** dans la
+      section `Guidelines` du prompt système, sans regroupement, d'où l'obligation que chacune
+      nomme son outil. La guideline du découpage faisait 609 caractères dans une liste qui
+      contient aussi « Be concise in your responses ».
+
+      *Ce qui a été fait :* le déclencheur devient **prospectif** — rassembler les questions
+      connues avant le premier scout — et vit dans la description du champ `find`, à l'endroit
+      où l'appel se construit. L'exemple est un tableau de trois questions et **aucun
+      singleton n'est montré** ; la chaîne est nommée comme raccourci. La guideline ne garde
+      que le refus des audits déguisés et renvoie au paramètre. Le type reste
+      `string | string[]` : rien ne prouve que l'union soit la cause, et un tableau n'empêche
+      pas quatre singletons successifs. Coût net : +6 tokens.
+
+      *Référence du prochain run, mécaniquement comptable :* délégations scout consécutives
+      partageant un `scope`. Run 10 → **0 % de capture, 4 appels sérialisés excédentaires**.
+      Validation à ≥ 70 % sur ≥ 5 groupes. Zéro sur cinq voudrait dire que le prompt n'est pas
+      le levier, et le passage à `find: string[]` devient l'essai suivant.
+
+- [x] **Deux défauts sur un chemin jamais exécuté**, trouvés en vérifiant la forme de ce que
+      rend un fan-out — et non par un run, puisqu'il n'y en a jamais eu.
+      `details` était construit depuis `results[0]` : sur quatre scouts dont un mort au
+      plafond, **six tours rapportés sur trente-quatre** et `isError: false`. Le bloc texte
+      disait `[scout: max_turns]` sur le quatrième ; le seul champ structuré disait que
+      l'appel avait réussi.
+      `run-state` n'avait qu'un créneau `running` par rôle, or un fan-out lance quatre enfants
+      du **même** rôle : chaque `markStart` écrasait le précédent, le **premier** `markEnd`
+      vidait le créneau alors que trois travaillaient encore, et `lastOutcome` était celui qui
+      finissait en dernier — donc un fan-out avec un enfant mort s'affichait en succès.
+      → agrégation complète, créneau à compteur d'enfants, tours au maximum et non en somme,
+      pire verdict du lot. `tests/fanout.test.ts`, quinze cas. **Même forme que
+      `pi-secret-gate`** : des règles justes et un câblage jamais exercé — trouvé cette fois
+      avant que ça ne serve.
+
 
 - [ ] **Lire un module de Balance Âgée en entier**, avec les sept critères de la revue en
       aveugle. Dix runs mesurent des défauts **prévus** et des diffs ; personne n'a jamais lu
