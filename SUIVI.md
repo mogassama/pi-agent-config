@@ -3,20 +3,20 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `9de2af1` + scouts parallèles.
+Branche `feat/subagent-extension`. État courant : `233e452`.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
 ---
 
-## Configuration au 21 août 2026
+## Configuration au 29 août 2026
 
 | Rôle | Modèle | Thinking | Session | Tours | Outils |
 |:--|:--|:--|:--|--:|:--|
 | worker | `openai-codex/gpt-5.6-terra` ⁴ | `high` | éphémère | **30** ¹ | read, grep, find, ls, bash, edit, write |
 | reviewer | `anthropic/claude-sonnet-5` | medium | éphémère | **12** ² | read, ls |
 | scout | `deepseek/deepseek-v4-flash` | low ³ | éphémère | 12 | read, grep, find, ls, bash |
-| advisor | `xai/grok-4.6` | `xhigh` ⁵ | éphémère | 8 | read, ls — **hors service** |
+| advisor | `xai/grok-4.6` | `xhigh` ⁵ | éphémère | 8 | read, grep, find, ls |
 
 ¹ Monté de 20 à 30 après le run `b9baad`, où quatre workers sur quatorze ont soumis au tour
 exact du plafond en étant encore en train d'éditer. Consigne : conclure quatre tours avant.
@@ -26,8 +26,10 @@ relever `DIFF_MAX_CHARS` avait fait sortir les plus gros changements du 12 pour 
 dans le 8. Douze partout ne peut plus s'inverser. Le chemin dégradé garde `grep` et `find`.
 ⁴ Bascule depuis `gpt-5.6-sol` le 24 août, à mesurer. Référence à battre, run 7 : dix-sept
 délégations worker, médiane 10 tours, 47 tests ajoutés. Sol reste en repli.
-⁵ Écrit, **jamais invoqué** : `AGENTS.md` interdit la délégation. `xhigh` et non `max` —
-la table de pi mappe `max` sur `null`, donc champ omis, donc défaut du modèle.
+⁵ **En service depuis le 24 août**, invoqué deux fois, toutes deux en régime libre et sur une
+frontière durable. `xhigh` et non `max` — la table de pi mappe `max` sur `null`, donc champ
+omis, donc défaut du modèle. Cinq conditions cumulatives, régime libre seulement : sur un
+projet à bundle il ne se déclenche pas, et c'est le résultat attendu.
 
 ³ **Correction du 22 août.** `minimal|low|medium → null` ne veut pas dire « pas de
 raisonnement » mais « champ omis », donc le modèle retombe sur son défaut — et
@@ -35,8 +37,12 @@ raisonnement » mais « champ omis », donc le modèle retombe sur son défaut �
 2 409 tokens de raisonnement, 1,3 % de leur budget. Les trois niveaux bas sont un seul et
 même réglage ; seuls `high` et `max` déplacent quelque chose.
 
-Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-lint-gate`,
-`pi-project-brief`, `subagent`, `subagent-footer`.
+Huit extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-lint-gate`,
+`pi-project-brief`, `pi-secret-gate`, `subagent`, `subagent-footer`.
+
+Suite de tests : `bin/test-guards`, 110 cas, dont huit sur le salvage du dispatch et neuf sur
+le câblage de `pi-secret-gate` — ces derniers écrits après qu'un défaut de nommage de champ a
+laissé passer **tous** les `edit` pendant une journée sans qu'aucun test ne le voie.
 
 ---
 
@@ -51,7 +57,11 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 | Balance Âgée | run 3 `b9baad` | 39 | 296 | ~3 $ | 0 |
 | Balance Âgée | run 4 `2cab6c` | 40 | 303 | ~3,5 $ | 0 |
 | Balance Âgée | run 5 | 34 | 274 | ~4,4 $ | 3 |
-| Balance Âgée | **run 6 `48acec`** | **40** | **317** | **3,59 $** | **1** |
+| Balance Âgée | run 6 `48acec` | 40 | 317 | 3,59 $ | 1 |
+| Balance Âgée | run 7, dernier Sol | 42 | — | 4,37 $ | 0 |
+| Balance Âgée | run 9, premier Terra | 14 | 124 | — | 0 |
+| Balance Âgée | **run 10 `a1c83f`** | **40** | **330** | **3,64 $** | **0** |
+| `transactions-etl` | régime libre | 14 | — | 1,19 $ | 0 |
 | Balance Âgée — Claude Code | — | — | — | — | 1 h 12, 165 tests |
 
 **Aucune conclusion ne tient sous ces écarts.** Un gain de 13 % sur `csv-to-bq` est du bruit.
@@ -95,7 +105,7 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 - [x] **`f414d3`** — 13 délégations, 0,68 $. **Reproductibilité établie** : 2 % d'écart sur les
       tours contre 56 % entre deux configurations proches auparavant.
 
-### Balance Âgée — deux runs
+### Balance Âgée — dix runs
 
 - [x] **run 1 `4a7d2d`** — 45 délégations, 11,0 M tokens. *Huit plafonds, 25 % des tokens
       perdus, dont un worker à 946 918 tokens sans enveloppe.*
@@ -202,6 +212,98 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       *Condition de réouverture pour les writers :* un projet dont les livrables sont
       réellement indépendants. Balance Âgée n'en est pas un.
 
+- [x] **run 9 `1d6f3e`** — premier run worker sur Terra. 14 délégations, 124 tours, zéro échec,
+      médiane worker 11, plafond de 30 jamais approché. Reviewer Sonnet : 14 findings sur 17
+      revues au run 7 contre 4 `needs_rework` ici.
+- [x] **run 10 `a1c83f`** — 40 délégations, 330 tours, **81,3 min d'exécution sur 96 de run**,
+      zéro échec de toute nature, 161 tests au vert contre 117 au départ.
+      *Terra confirmé sur un second point :* médiane worker 10 — celle de Sol —, `needs_rework`
+      à 3 contre 8 chez Sol, distribution `[5,5,6,6,7,8,10,14,16,18,20,23,25]`.
+      *Le reviewer a relu l'orchestrateur.* Sept lignes `Statut` de `DESIGN.md` basculées en
+      `Implemented` dans un diff qui n'ajoutait qu'un export log4j2 : le finding est juste, et
+      c'est la première fois que le mécanisme du lot `adee82` — écritures inline enregistrées
+      dans `HISTORY`, donc versées au diff de la revue suivante — produit un résultat.
+      *Second finding du même calibre :* un test comparant un `tmp_path` non résolu à ce que
+      `pwd -P` renvoie, donc vert sous Linux et rouge sur un Mac où `/var/folders` est un lien.
+      *Et le temps d'orchestrateur mesuré pour la première fois :* 15 min sur 79 tours, 16 %
+      du run. Un seul message opérateur sur les 96 minutes.
+
+### Portes de modèle
+
+- [x] **Reviewer, deux portes sur `anime-etl`**, fichiers aux défauts vérifiés à la main.
+      **Gemini 3.7 Flash** retrouve deux défauts sur trois, rend `approved` avec zéro finding
+      sur une double boucle quadratique réelle, et atteint son plafond sans rendre d'enveloppe
+      en `high`. **DeepSeek V4 Pro** fait jeu égal fichier par fichier — quatre sur cinq
+      chacun, zéro faux positif sur le témoin — puis s'effondre à l'échelle : **un finding sur
+      onze revues** sur Balance Âgée contre quatorze sur dix-sept pour Sonnet.
+      → **Sonnet garde le rôle.** Qwen n'a jamais été atteint : trois clés, trois régions, un
+      403 `AccessDenied.Unpurchased` qui n'a pas bougé.
+- [x] **Advisor écrit, puis mis en service.** `grok-4.6` en `xhigh`, quatrième famille,
+      indépendant du worker et du reviewer. Règle d'invocation à cinq conditions cumulatives
+      dans `Execution regimes`, régime libre seulement. Le double `needs_rework` est
+      explicitement **écarté** comme déclencheur : rien dans une enveloppe reviewer ne
+      distingue un second défaut d'un correctif manqué ou d'un vrai désaccord.
+
+### Régime libre — la moitié jamais exercée
+
+- [x] **Benchmark `transactions-etl`** — un prompt, aucun bundle, six pièges, contre Claude
+      Code. **Le résultat du chantier :** les deux systèmes ont écrit le même `MERGE` dont la
+      borne `event_date` ne s'applique qu'à la cible, donc une correction hors fenêtre
+      s'insère en doublon. Le reviewer de pi l'a trouvé, `HIGH probable`, un worker l'a
+      corrigé, la revue suivante a approuvé. **Claude Code l'a livré.** C'est l'événement que
+      le protocole définissait comme décisif, et ce n'était aucun des six pièges plantés — un
+      défaut que les deux ont *créé* en résolvant le vrai problème.
+      *Portes :* composition et décision gagnées par pi, conformité ratée à moitié des deux
+      côtés, réalité, sémantique et ciblage à égalité.
+      *Advisor invoqué pour la première fois*, 0,087 $, avec un critère que ni l'orchestrateur
+      ni Claude Code n'avaient formulé — et il a nommé comme condition bloquante ce que Claude
+      Code a listé comme « ouvert, hors périmètre ».
+- [x] **Bibliothèque de récurrence, deux runs**, dossier vide, lecture en aveugle contre
+      Claude Code. Claude Code produit une occurrence que son propre `is_occurrence` refuse —
+      générateur et vérificateur en désaccord le seul jour de l'année où la question se pose —
+      et livre un README vide alors que le prompt demandait les décisions.
+      *Ce que la revue en aveugle n'a pas pu voir :* presque tout ce qui distinguait le
+      livrable de pi était **spécifié par l'advisor avant la première ligne**. Un livrable
+      coupé de la conversation qui l'a produit ne se juge pas — quatre lectures d'un même fait
+      dans cette revue, trois fausses.
+      *Second run après réécriture de l'échelle des dépendances :* le renoncement est
+      désormais écrit dans le livrable, une seule politique pour tous les cas impossibles, et
+      le reviewer rattrape un champ `time` masquant sa classe importée.
+
+### Audit externe
+
+- [x] **Trois blockers et quatre concerns**, relevés hors de cette configuration et vérifiés
+      un par un dans le dépôt avant correction.
+      `extensions/pi-secret-gate/` était **déclaré partout et absent de la branche** — un
+      `.gitignore` global excluant `*secret*` le rendait invisible, donc aucune délégation
+      worker ne pouvait démarrer sur un clone frais. Le salvage manquait la transition
+      *dirty → clean* : un fichier remis à `HEAD` par un worker quittait `git status`, donc
+      « rien n'a changé » — la condition même qui autorise un retry, sur un arbre où le worker
+      venait d'effacer une modification de l'opérateur. `git status --porcelain` sans `-z`
+      mentait sur les chemins accentués et les renommages. Et la promesse « workarounds fail »
+      du token de commit dépassait ce que `bash-guard` garantit, son propre README le disant.
+      → union `before ∪ after`, format `-z`, promesse réduite, et `tests/dispatch.test.ts`.
+      *En écrivant ces tests :* une suppression depuis un arbre propre restait invisible, les
+      deux côtés valant la chaîne vide. Le test a trouvé le trou dans la correction.
+- [x] **Deux contournements de `pi-secret-gate`**, le lendemain de sa mise en service.
+      Le câblage lisait `new_str` là où pi envoie `{ edits: [{ oldText, newText }] }` : **tout
+      `edit` passait sans être inspecté**. Et le test de placeholder portait sur la ligne, donc
+      un `# example` ou un `// TODO` en fin de ligne désarmait la garde pour la clé qui
+      précédait. → le câblage parcourt l'entrée au lieu de nommer des champs, le placeholder
+      porte sur la valeur, et neuf tests exercent des formes d'appel réelles.
+
+### Bundle Balance Âgée
+
+- [x] **Quatre dérogations ajoutées à `CONVENTIONS.md`** après six défauts relevés à la main :
+      `PYSPARK_PYTHON` et `PYSPARK_DRIVER_PYTHON` avant tout `pytest`, `setuptools` déclaré
+      pour l'absence de `distutils` en 3.12, les chemins Spark en URI `file:///`, et
+      l'extension à tout fichier d'une règle qui ne visait que `docs/` — toute invocation
+      écrite hors du code est recopiée depuis la source qui la définit.
+      *Mesuré au run 10 :* `PYSPARK_PYTHON` est cité dans les treize tâches worker, aucune
+      invocation inventée n'est réapparue. Et la commande fautive du mémo — `$(which python3)`
+      au lieu de l'interpréteur du venv — a produit 47 échecs contre 117 succès sur le même
+      dépôt, ce qui est la meilleure démonstration de la dérogation qu'elle décrit.
+
 ### Hors run
 
 - [x] Audit du dispositif `.pi/BRIEF.md` — le brief survivait aux remises à zéro et décrivait
@@ -217,22 +319,23 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
 
 ### En cours
 
-- [ ] **Benchmark en régime libre** — un seul prompt, aucun bundle, un dépôt que personne n'a
-      décrit. C'est la moitié de la configuration qu'aucun des vingt runs n'a exercée.
-      *Précondition :* le dépôt choisi ne doit pas porter les quatre fichiers du bundle,
-      sinon il est classé régime bundle et le test ne mesure rien.
-      *Cinq pièges retenus :* une exigence qui ne se satisfait qu'en lisant une donnée réelle
-      non décrite ; une optimisation naturelle qui casse une propriété non énoncée ; une
-      décision irréversible sans réponse évidente ; un piège de conformité que seule une
-      confrontation au réel révèle ; une convention présente **uniquement** dans un
-      `project AGENTS.md`, absente des skills et du prompt.
-      *Quatre portes, écrites avant les deux runs :* réalité, sémantique, conformité, décision.
-      *Et trois chiffres propres au régime :* délégations effectuées après que la demande est
-      satisfaite = 0 ; livrables terminés avec un dernier verdict ouvert = 0 ; raison d'arrêt
-      annoncée = 1, explicite.
-      *Ne pas scorer le nombre de tests ajoutés isolément* — 158 contre 165 a déjà montré
-      pourquoi. Et un bon run peut légitimement s'arrêter sur la question opérateur : « a tout
-      terminé » n'est pas une porte.
+- [ ] **Le fan-out des scouts n'a jamais servi.** Zéro appel multi-questions depuis sa mise en
+      service. Au run 10, quatorze scouts dont deux séries consécutives — `22,23` et `33` à
+      `36` — avec un **`scope` identique** à l'intérieur de chaque série et des questions
+      indépendantes : la série de quatre est exactement le cas décrit par la guideline, au
+      plafond exact. Deux hypothèses écartées par ces chiffres : ce n'est ni une contrainte
+      d'interface — un `scope` unique par tableau —, ni une dépendance temporelle entre les
+      questions.
+      *Un avis extérieur est demandé avant de décider.* Le retrait toucherait neuf endroits,
+      une soixantaine de lignes, et rendrait environ 60 tokens par session.
+      *Ce qui l'a écarté :* différer les appels pour les grouper suppose de savoir que
+      l'orchestrateur a fini de poser ses questions — un tampon qui doit prédire l'avenir dans
+      un mécanisme dont la valeur est de ne rien prédire.
+
+- [ ] **Lire un module de Balance Âgée en entier**, avec les sept critères de la revue en
+      aveugle. Dix runs mesurent des défauts **prévus** et des diffs ; personne n'a jamais lu
+      le livrable d'un œil critique. 161 tests au vert ne disent rien de la qualité de lecture.
+      *Candidats :* `status.py` ou `io.py`.
 
 ### Ensuite
 
@@ -255,44 +358,19 @@ Sept extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-li
       *Mesurer, pas le coût — la dispersion l'écrase :* délégations scout, fichiers nommés par
       texte de tâche, tours worker avant la première écriture, nombre de `needs_rework`.
 
-### Séquence Qwen / advisor
+### ~~Séquence Qwen / advisor~~ — close
 
-- [ ] **Vérifier que pi expose Qwen** — `pi models | grep -i qwen`. Sans provider, tout
-      s'arrête là. Et son modèle de cache doit entrer dans `RATES` avec ses propres
-      multiplicateurs : une entrée naïve surfacturerait, comme elle l'aurait fait pour DeepSeek.
-- [ ] **Qwen 3.8 Max sur les cinq fichiers d'`anime-etl`** aux verdicts connus. Seule mesure de
-      la séquence qui compare un jugement à une **référence** et non à une autre exécution.
-      *Porte :* une divergence contre un verdict connu arrête tout.
-- [ ] **Qwen sur le reviewer**, puis `csv-to-bq` contre `37acf6`/`f414d3`.
-      *Porte :* baisse des findings à `confidence: certain` → on revient à Sonnet.
-      *Gain attendu :* ~0,09 $ sur 0,68 $, soit 13 % — **sous la dispersion**. Cette étape se
-      justifie par la qualité du jugement, pas par le coût.
-- [ ] **Écrire `advisor.md`**, Sonnet 5. Trois choses le même jour, sinon le menu proposera un
-      rôle que la documentation interdit : retirer « designed but not written » d'`AGENTS.md`,
-      retirer « There is no advisor role today », ajouter une branche à `deriveNext()` — un avis
-      n'est jamais `done`, sa sortie est une entrée de décision.
-- [ ] **Balance Âgée rejoué**, contre le run 3.
-      *Lever l'ambiguïté :* `ls .pi-subagent-runs/*advisor*.json | wc -l` — zéro délégation
-      advisor = comparaison propre sur le seul reviewer.
+Qwen n'a jamais été atteint et la piste est abandonnée, pas réfutée : trois clés, trois
+régions, un 403 `AccessDenied.Unpurchased` inchangé. Le reviewer reste sur Sonnet après deux
+portes mesurées, et l'advisor est en service sur `grok-4.6`. Voir *Portes de modèle*.
 
-### Le test final — régime libre
+### ~~Le test final — régime libre~~ — fait
 
-- [ ] **Un sujet corsé, un seul prompt, aucun bundle, plusieurs pièges**, comparé à Claude Code
-      en Sonnet 5 `high`.
-
-      C'est le seul régime que treize runs n'ont **jamais** exercé. Tout ce qui est mesuré à ce
-      jour porte sur un backlog borné : livrables énumérés, critères de fin écrits, territoire
-      nommé. `AGENTS.md` décrit un « régime libre » que rien n'a jamais éprouvé — et la chaîne
-      d'invocation y est censée commencer par un scout, ce qui n'a jamais été observé.
-
-      *Ce que le sujet devra contenir, à écrire le moment venu :* une exigence qui ne peut être
-      satisfaite qu'en lisant une donnée réelle non décrite dans le prompt ; une optimisation
-      naturelle qui casse une propriété non énoncée ; une décision irréversible sans réponse
-      évidente — le cas advisor ; un piège de conformité que seul un test contre la réalité
-      révèle.
-
-      *Le critère de qualité s'écrit avant les deux runs.* Sinon il s'écrira en fonction de
-      celui qui aura le mieux marché.
+Deux benchmarks : `transactions-etl` avec ses six pièges, et la bibliothèque de récurrence
+depuis un dossier vide, en lecture aveugle. Voir *Régime libre*. Ce qu'ils ont appris sur la
+méthode, et qui vaut pour le prochain : **un livrable coupé de la conversation qui l'a produit
+ne se juge pas.** La lecture en aveugle reste le bon garde-fou contre le biais d'attribution,
+mais elle doit porter sur le code **plus les escalades**, anonymisées de la même façon.
 
 ### Dette, sans urgence
 
