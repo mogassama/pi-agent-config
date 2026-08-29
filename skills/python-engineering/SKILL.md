@@ -164,9 +164,24 @@ Walk these in order. Stop at the first rung that answers.
 2. **A feature of a library already installed.** pandas, SQLAlchemy, pydantic,
    httpx and the GCP clients each cover far more than the corner you use. Check
    before writing a helper beside one.
-3. **A new dependency, only if it earns its place.** A dependency is a version
-   to pin, a CVE to watch and a transitive tree to carry. It has to beat the
-   two rungs above by enough to justify that.
+3. **A new dependency, only if it earns its place — and the price differs.**
+   A dependency is a version to pin, a CVE to watch and a transitive tree to
+   carry. In a service that cost is yours. In a library it is paid by every
+   caller, including the one pinned to an incompatible major, so the bar is
+   higher there and the answer can differ for the same package.
+
+   **Weigh what it replaces, not what it is.** A package that reimplements the
+   domain has to beat the two rungs above outright — three simple recurrence
+   kinds do not buy `dateutil`. A package that removes plumbing is a different
+   question: measured on the free-regime benchmark, declining `pydantic` on a
+   small library turned three lines of declaration into twenty-three lines of
+   hand-written `isinstance` checks, plus an `object.__setattr__` written to
+   defeat the `frozen=True` of the line above it. Both were refused in one
+   breath, and only one of the two refusals was right.
+
+   **Say which rung answered, and why**, in the deliverable — not only in the
+   commit. A renunciation that leaves no trace reads as an oversight, and the
+   next reader has no way to tell a decision from a gap.
 4. **One line, if one line does it.** A comprehension, a `functools.reduce`, a
    `dict.get` with a default.
 5. **The minimum that works, and nothing beyond.** No hook for a case nobody
@@ -177,6 +192,13 @@ Walk these in order. Stop at the first rung that answers.
 crossing from outside the process. Anything whose failure loses data. Anything
 that touches credentials or permissions. Error handling on a write path. These
 are the payload, not the packaging.
+
+**And a rung that costs more than it saves has not answered.** The ladder ranks
+by cost of ownership, not by purity: if staying on a lower rung means
+reimplementing what a higher one does — writing the type checks a validator
+performs, defeating your own immutability to normalise a field — the rung did
+not answer and the walk continues. Standard library first is a default, not a
+result.
 
 **And it is about the code, not the task.** Whether the task itself should
 exist is the orchestrator's question, not yours: a scoped instruction is
