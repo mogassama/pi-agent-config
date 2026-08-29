@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch } from "../../subagent-only/dispatch.js";
-import { aggregateFanout } from "../../subagent-only/fanout.js";
+import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -224,11 +224,7 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
   // fan-out, including one whose question came out of a `gaps` the fan-out
   // itself reported. The mechanism meant to stop three unread inventories would
   // have punished the batching this batch exists to encourage.
-  const seen = new Set<string>();
-  for (let i = HISTORY.length - 1; i >= 0 && HISTORY[i].agent === agentName; i--) {
-    seen.add(HISTORY[i].batch);
-  }
-  const streak = seen.size;
+  const streak = streakOf(HISTORY, agentName);
   if (isReadOnly(tools) && streak >= 2) {
     return (
       `Refused: ${streak} ${agentName} delegations already ran back to back, and the role ` +
@@ -703,8 +699,8 @@ export default function (pi: ExtensionAPI) {
               ];
         publish();
 
-        // One HISTORY entry per delegation, as before: the guard counts
-        // delegations, and four scouts are four, not one.
+        // One HISTORY entry per child, which is what ran. The guard counts the
+        // calls behind them — see `streakOf`, and the `batch` field they share.
         const batch = randomBytes(4).toString("hex");
         for (const r of results) {
           HISTORY.push({

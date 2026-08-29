@@ -145,23 +145,57 @@ export function markProgress(role: RoleName, turns: number): void {
   if (r) r.turns = Math.max(r.turns, turns);
 }
 
-export function markEnd(
+/**
+ * Tokens and cost of one *attempt*, whether or not it becomes the delegation.
+ *
+ * The lifecycle counts delegations and the accounting counts attempts, and the
+ * two must not share a function: a child that fails on its primary model and
+ * succeeds on a fallback is one delegation and two attempts. Both were charged
+ * through `markEnd` until the split, which made `runs` five for four scouts and
+ * left the failed attempt's outcome in the batch.
+ *
+ * Charged against the model that actually ran, not against a flag set by
+ * whichever start happened to be last.
+ */
+export function recordAttempt(
   role: RoleName,
   model: string,
   tokens: number,
   cacheRead: number,
   cost: number,
-  outcome: Outcome,
 ): void {
   const s = get(role);
-  s.runs += 1;
   s.tokens += tokens;
   s.cacheRead += cacheRead;
-  // Charged against the model that actually answered, not against whichever
-  // start happened to be last: a batch straddling a subscription model and a
-  // metered one used to attribute by order of arrival.
   s.cost += isBilled(model) ? cost : 0;
   s.billed = s.billed || isBilled(model);
+  s.lastModel = model;
+}
+
+/**
+ * What a finished delegation counts as, from the result the caller receives.
+ *
+ * Lives here rather than inside `dispatch` so a test can call it: the version
+ * inlined in the dispatcher classed a submitted `status: "failed"` as a verdict,
+ * so `ok` won the tie and a batch holding one displayed as a success. That is
+ * the `timeout` defect again, narrower — and it was invisible because no test
+ * could reach the expression.
+ */
+export function outcomeOf(r: {
+  failure?: string;
+  status: "ok" | "blocked" | "failed";
+  verdict?: string;
+}): Outcome {
+  if (r.failure) return { kind: "error", label: r.failure };
+  if (r.status === "failed") return { kind: "error", label: "failed" };
+  if (r.status === "blocked") return { kind: "blocked", label: r.verdict ?? "blocked" };
+  return { kind: "verdict", label: r.verdict ?? r.status };
+}
+
+/** One delegation has finished, whatever it took. Called by `dispatch`, never by an attempt. */
+export function markEnd(role: RoleName, model: string, outcome: Outcome): void {
+  const s = get(role);
+  s.runs += 1;
   s.lastModel = model;
 
   // The totals were already right — they accumulate on every end. What was

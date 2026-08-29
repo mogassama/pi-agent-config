@@ -19,7 +19,15 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
-import { markStart, markProgress, markModel, markEnd, type Outcome, type RoleName } from "./run-state.js";
+import {
+  markStart,
+  markProgress,
+  markModel,
+  markEnd,
+  outcomeOf,
+  recordAttempt,
+  type RoleName,
+} from "./run-state.js";
 
 export interface RunResult {
   role: string;
@@ -239,11 +247,10 @@ async function runOnce(
   // exactly the question that decides a role's tool set and model. Local file,
   // gitignored, cheap.
   const transcript: string[] = [];
-  // Display only. The batch is opened and closed by `dispatch`, which is the
-  // only place that knows whether this attempt is the delegation's last: a
-  // fallback runs `runOnce` again, and counting attempts made a provider error
-  // recovered on the second model survive as the batch's outcome.
-  markStart(agent.name as RoleName, model, agent.maxTurns);
+  // The batch slot belongs to `dispatch`: it is the only place that knows
+  // whether this attempt is the delegation's last. A fallback runs `runOnce`
+  // again, and an attempt that opens and closes the slot made four scouts count
+  // as five delegations and left a recovered provider error in the batch.
   let failure: RunResult["failure"];
 
   const child = spawn(opts.piPath ?? "pi", plan.args, {
@@ -382,19 +389,13 @@ async function runOnce(
   );
 
   // Flat envelope now: verdict sits beside status, not under a payload key.
-  const outcome: Outcome = envelope
-    ? {
-        kind: envelope.status === "blocked" ? "blocked" : "verdict",
-        label: String(envelope.verdict ?? envelope.status ?? "ok"),
-      }
-    : { kind: "error", label: failure ?? "failed" };
-  markEnd(
+  // Tokens and cost of this attempt, whether or not it becomes the delegation.
+  recordAttempt(
     agent.name as RoleName,
     model,
     state.usage.total,
     state.usage.cacheRead,
     estimateCost(model, state.usage),
-    outcome,
   );
 
   if (!envelope) {
@@ -623,6 +624,23 @@ export async function dispatch(
   const chain = [agent.model, ...agent.fallbackModels];
   let last: RunResult | null = null;
 
+  /*
+   * One delegation, however many attempts it takes.
+   *
+   * `runOnce` used to open and close the batch slot itself, so a child that
+   * failed on its primary model and succeeded on a fallback counted twice:
+   * `runs` came out five for four scouts, and the failed attempt's outcome
+   * stayed in the batch, so four delegations that all succeeded displayed as a
+   * failure. The slot is opened here, once, and closed once with the result the
+   * caller actually gets. Attempts still pay for their tokens through
+   * `recordAttempt` — they consumed them.
+   */
+  markStart(agent.name as RoleName, agent.model, agent.maxTurns);
+  const finish = (r: RunResult): RunResult => {
+    markEnd(agent.name as RoleName, r.modelUsed, outcomeOf(r));
+    return r;
+  };
+
   // A read-only role may write nothing, so running it twice cannot corrupt
   // anything — and one class of failure is worth exactly one retry.
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
@@ -659,12 +677,12 @@ export async function dispatch(
     if (result.failure === "no_submit" && (!mutates || wroteNothing) && !opts.signal?.aborted) {
       const retry = await runOnce(agent, model, task, opts);
       if (!retry.failure) {
-        return { ...retry, summary: `${retry.summary} (retried after an empty first attempt)` };
+        return finish({ ...retry, summary: `${retry.summary} (retried after an empty first attempt)` });
       }
       result = retry;
     }
 
-    if (!result.failure || !RETRYABLE.has(result.failure)) return result;
+    if (!result.failure || !RETRYABLE.has(result.failure)) return finish(result);
 
     // The next model in the chain takes this child's place in the batch's
     // model count, so the footer names what is running rather than what
@@ -677,13 +695,13 @@ export async function dispatch(
 
   // Every model in the chain refused. Say so, with the last reason, rather
   // than reporting the last attempt as if it were the only one.
-  return {
+  return finish({
     ...last!,
     summary:
       chain.length > 1
         ? `${agent.name}: all ${chain.length} models refused. Last — ${last!.summary}`
         : last!.summary,
-  };
+  });
 }
 
 /**

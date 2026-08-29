@@ -103,3 +103,24 @@ export function aggregateFanout(results: ChildResult[]): FanoutDetails {
     })),
   };
 }
+
+/**
+ * How many *calls* of one role ran back to back, counting a fan-out as one.
+ *
+ * The journal keeps one entry per child, which is honest — four scouts really
+ * ran. The guard means calls: what it exists to stop is three unread
+ * inventories in a row, and a fan-out is one decision. Counting children made a
+ * two-question fan-out put the streak at two and the next scout was refused,
+ * including one asking about a `gaps` that same fan-out had reported.
+ *
+ * Here rather than inside the extension so a test can call it: the version
+ * living in `index.ts` could only be tested by a copy, which is the arrangement
+ * that let the first fan-out defects through.
+ */
+export function streakOf(history: Array<{ agent: string; batch: string }>, agentName: string): number {
+  const seen = new Set<string>();
+  for (let i = history.length - 1; i >= 0 && history[i].agent === agentName; i--) {
+    seen.add(history[i].batch);
+  }
+  return seen.size;
+}

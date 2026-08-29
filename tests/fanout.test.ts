@@ -35,12 +35,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { aggregateFanout, type ChildResult } from "../subagent-only/fanout.ts";
+import { aggregateFanout, streakOf, type ChildResult } from "../subagent-only/fanout.ts";
 import {
   markEnd,
   markModel,
   markProgress,
   markStart,
+  outcomeOf,
+  recordAttempt,
   snapshot,
   worseOutcome,
   type Outcome,
@@ -174,12 +176,12 @@ test("the slot survives until the last child ends, not the first", () => {
   const r = role();
   for (let i = 0; i < 4; i++) markStart(r, FLASH, 12);
   assert.equal(snapshot()[r]?.running?.active, 4);
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok"));
+  markEnd(r, FLASH, verdict("ok"));
   assert.ok(snapshot()[r]?.running, "le premier enfant a effacé le créneau");
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok"));
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok"));
+  markEnd(r, FLASH, verdict("ok"));
+  markEnd(r, FLASH, verdict("ok"));
   assert.ok(snapshot()[r]?.running, "trois terminés, un tourne encore");
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok"));
+  markEnd(r, FLASH, verdict("ok"));
   assert.equal(snapshot()[r]?.running, undefined);
 });
 
@@ -195,22 +197,33 @@ test("the displayed turn count is the highest child, never the sum", () => {
 test("one dead child among four does not display as a success", () => {
   const r = role();
   for (let i = 0; i < 4; i++) markStart(r, FLASH, 12);
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok"));
-  markEnd(r, FLASH, 600, 0, 0, err("timeout"));
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok"));
-  markEnd(r, FLASH, 600, 0, 0, verdict("ok")); // le dernier à finir réussit
+  markEnd(r, FLASH, verdict("ok"));
+  markEnd(r, FLASH, err("timeout"));
+  markEnd(r, FLASH, verdict("ok"));
+  markEnd(r, FLASH, verdict("ok")); // le dernier à finir réussit
   assert.equal(snapshot()[r]?.lastOutcome, "timeout");
 });
 
 test("a provider error recovered on a fallback does not survive the batch", () => {
-  // dispatch records one outcome per *delegation*, and a failed attempt is not
-  // one. Four children, of which one moved to Gemini and succeeded there.
+  // The sequence dispatch now produces: one markStart per delegation, an
+  // attempt that fails and pays its tokens, markModel on the fallback, the
+  // fallback's attempt, and one markEnd. Four children, four delegations.
   const r = role();
   for (let i = 0; i < 4; i++) markStart(r, FLASH, 12);
+  assert.equal(snapshot()[r]?.running?.active, 4);
+  recordAttempt(r, FLASH, 600, 0, 0); // la tentative qui échoue
   markModel(r, FLASH, GEMINI);
-  assert.deepEqual(snapshot()[r]?.running?.models, { [FLASH]: 3, [GEMINI]: 1 });
-  for (let i = 0; i < 4; i++) markEnd(r, i === 0 ? GEMINI : FLASH, 600, 0, 0, verdict("ok"));
-  assert.equal(snapshot()[r]?.lastOutcome, "ok");
+  assert.deepEqual(
+    snapshot()[r]?.running?.models,
+    { [FLASH]: 3, [GEMINI]: 1 },
+    "le repli a déplacé un frère au lieu de l'enfant qui bascule",
+  );
+  assert.equal(snapshot()[r]?.running?.active, 4, "le repli a ouvert un cinquième enfant");
+  recordAttempt(r, GEMINI, 600, 0, 0);
+  markEnd(r, GEMINI, verdict("ok"));
+  for (let i = 0; i < 3; i++) markEnd(r, FLASH, verdict("ok"));
+  assert.equal(snapshot()[r]?.runs, 4);
+  assert.equal(snapshot()[r]?.lastOutcome, "ok", "l'échec de la tentative a survécu au lot");
 });
 
 test("the models in flight are counted, not the first one to start", () => {
@@ -219,23 +232,27 @@ test("the models in flight are counted, not the first one to start", () => {
   markStart(r, FLASH, 12);
   markStart(r, GEMINI, 12);
   assert.deepEqual(snapshot()[r]?.running?.models, { [FLASH]: 2, [GEMINI]: 1 });
-  markEnd(r, GEMINI, 600, 0, 0, verdict("ok"));
+  markEnd(r, GEMINI, verdict("ok"));
   assert.deepEqual(snapshot()[r]?.running?.models, { [FLASH]: 2 });
 });
 
-test("totals accumulate across children, as they already did", () => {
+test("tokens count attempts, runs count delegations", () => {
+  // A child that fails on its primary and succeeds on a fallback is one
+  // delegation and two attempts. Both consumed tokens; only one finished.
   const r = role();
   for (let i = 0; i < 4; i++) markStart(r, FLASH, 12);
-  for (let i = 0; i < 4; i++) markEnd(r, FLASH, 600, 100, 0.01, verdict("ok"));
-  assert.equal(snapshot()[r]?.runs, 4);
-  assert.equal(snapshot()[r]?.tokens, 2400);
-  assert.equal(snapshot()[r]?.cacheRead, 400);
+  for (let i = 0; i < 4; i++) recordAttempt(r, FLASH, 600, 100, 0);
+  recordAttempt(r, GEMINI, 600, 100, 0); // la tentative de repli
+  for (let i = 0; i < 4; i++) markEnd(r, FLASH, verdict("ok"));
+  assert.equal(snapshot()[r]?.runs, 4, "cinq tentatives ont compté pour cinq délégations");
+  assert.equal(snapshot()[r]?.tokens, 3000, "la tentative ratée n'a pas payé ses tokens");
+  assert.equal(snapshot()[r]?.cacheRead, 500);
 });
 
 test("a verdict is not mistaken for a failure", () => {
   const r = role();
   markStart(r, FLASH, 12);
-  markEnd(r, FLASH, 600, 0, 0, verdict("approved"));
+  markEnd(r, FLASH, verdict("approved"));
   assert.equal(snapshot()[r]?.lastOutcome, "approved");
 });
 
@@ -245,7 +262,7 @@ test("a lone run behaves exactly as before", () => {
   markProgress(r, 3);
   assert.equal(snapshot()[r]?.running?.active, 1);
   assert.equal(snapshot()[r]?.running?.turns, 3);
-  markEnd(r, FLASH, 600, 0, 0, verdict("needs_rework"));
+  markEnd(r, FLASH, verdict("needs_rework"));
   assert.equal(snapshot()[r]?.running, undefined);
   assert.equal(snapshot()[r]?.lastOutcome, "needs_rework");
   assert.equal(snapshot()[r]?.runs, 1);
@@ -258,15 +275,6 @@ test("a lone run behaves exactly as before", () => {
 interface Entry {
   agent: string;
   batch: string;
-}
-
-/** The guard's three lines, kept here because they live inside a pi extension. */
-function streakOf(history: Entry[], agentName: string): number {
-  const seen = new Set<string>();
-  for (let i = history.length - 1; i >= 0 && history[i].agent === agentName; i--) {
-    seen.add(history[i].batch);
-  }
-  return seen.size;
 }
 
 test("a fan-out of four counts as one call, not four", () => {
@@ -294,4 +302,32 @@ test("a different role between them breaks the streak", () => {
     { agent: "scout", batch: "c" },
   ];
   assert.equal(streakOf(h, "scout"), 1);
+});
+
+// ---------------------------------------------------------------------------
+// outcomeOf — the classification `dispatch` applies, callable at last
+// ---------------------------------------------------------------------------
+
+test("a submitted status of failed is an error, not a verdict", () => {
+  // The envelope schema allows ok | blocked | failed. Classing `failed` as a
+  // verdict let `ok` win the tie and a batch holding one displayed as success.
+  assert.equal(outcomeOf({ status: "failed" }).kind, "error");
+  assert.equal(
+    worseOutcome(outcomeOf({ status: "ok", verdict: "ok" }), outcomeOf({ status: "failed" })).kind,
+    "error",
+  );
+  assert.equal(
+    worseOutcome(outcomeOf({ status: "failed" }), outcomeOf({ status: "ok", verdict: "ok" })).kind,
+    "error",
+    "l'ordre de terminaison a changé le résultat",
+  );
+});
+
+test("a harness failure outranks whatever the envelope said", () => {
+  assert.deepEqual(outcomeOf({ failure: "timeout", status: "ok" }), { kind: "error", label: "timeout" });
+});
+
+test("blocked and a plain verdict keep their kinds", () => {
+  assert.equal(outcomeOf({ status: "blocked", verdict: "blocked" }).kind, "blocked");
+  assert.equal(outcomeOf({ status: "ok", verdict: "approved" }).label, "approved");
 });
