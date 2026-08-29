@@ -38,13 +38,15 @@ const RESET = "\x1b[22m";
  */
 const ICON = {
   model: "\uf2db", //  microchip
-  // Font Awesome rather than Material, though both render here. Same range as
-  // the microchip, wrench, eye and magnifier below, and a BMP codepoint, so it
-  // needs no surrogate pair. Verified against glyphnames.json from the Nerd
-  // Fonts repository — the Material glyph this file labels "brain" two lines
-  // down is md-spa, a plant, which is what a cheat-sheet label is worth.
-  orchestrator: "\uee9c", //  fa-brain
-  think: "\udb83\udcd1", // 󰧑 brain
+  // A root with branches: the orchestrator decides who speaks and when, and
+  // line 1 was the only one opening on bare text.
+  orchestrator: "\uf0e8", //  fa-sitemap
+  // The brain belongs next to the reasoning level, not next to the role name.
+  // Font Awesome rather than Material: same range as the microchip beside it,
+  // and a BMP codepoint, so no surrogate pair. This replaces md-spa — a plant —
+  // which sat here labelled "brain". Codepoints verified against glyphnames.json
+  // in the Nerd Fonts repository, which is what a cheat-sheet label is worth.
+  think: "\uee9c", //  fa-brain
   folder: "\uf07b", //  folder
   branch: "\ue725", //  git branch
   context: "\uf1c0", //  database
