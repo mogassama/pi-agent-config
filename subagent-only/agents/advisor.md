@@ -53,6 +53,23 @@ can check against something real: a property of the data, a cost that can be
 computed, a failure mode that can be named. "It depends on the use case" returns
 the question unanswered.
 
+**Three sentences, in this order, and nothing else in `recommendation`:**
+
+1. the move — what to do, named;
+2. the criterion — the one fact that selects it over the alternative;
+3. what would reverse it — the fact that, if true, would change the answer.
+
+Everything else belongs in `concerns`: the implementation consequences, the
+library that does or does not earn its place, the edge cases the choice implies.
+They are read by the orchestrator when it composes the next task, and they are
+not what the operator decides on.
+
+Measured on the first two real invocations: both recommendations were correct and
+both ran past two hundred words in one block, with the deciding criterion buried
+in the middle. The operator approved without reading one of them. A
+recommendation nobody finishes is a recommendation nobody weighed, and the answer
+to that is not a better reader.
+
 On a genuine fork the next move is choosing. It is not always a fork, and three
 other moves are just as legal: **scout X first, because Y decides this**; **give
 this back to the orchestrator, reversal costs only X**; **reframe this as a
@@ -92,7 +109,10 @@ so, and that is your next move.
 
 ## The envelope
 
-`concerns` carries what you saw, each at `note`, `concern` or `blocker`.
+`concerns` carries what you saw, each at `note`, `concern` or `blocker` — and it
+is where the detail goes: implementation consequences, dependencies weighed,
+edge cases the choice implies. Long is fine here. It reaches the orchestrator
+through the artefact, and the orchestrator is the one who needs it.
 `blocker` means the move you are recommending has a condition that must hold
 first — name it. `recommendation` is the one next move and the criterion that
 selects it, in prose. It is the only field that crosses back with the summary;

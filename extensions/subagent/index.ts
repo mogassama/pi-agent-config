@@ -305,6 +305,20 @@ function gitDiffFor(paths: string[]): string {
  * entirely, handing the reviewer a diff of a status field. Neither had bitten
  * yet, which is the only reason this is a correction and not an incident.
  */
+/**
+ * `\uXXXX` sequences that survived as literal text, turned back into characters.
+ *
+ * A child writing JSON sometimes escapes a character its own encoder would have
+ * passed through, and that escape is then embedded as a string value in the
+ * envelope: parsing yields the six characters rather than the one. Measured on
+ * the advisor's first invocation, where every em-dash of the recommendation
+ * reached the operator as `\u2014` — in the one field written to be read by a
+ * human, which is the one place it matters.
+ */
+function decodeEscapes(text: string): string {
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 function changedSinceLastReview(): string[] {
   const paths: string[] = [];
   for (let i = HISTORY.length - 1; i >= 0; i--) {
@@ -733,7 +747,7 @@ export default function (pi: ExtensionAPI) {
               // other role's payload waits on disk because a head plus a count
               // says whether opening it is worth a turn; an advice has no such
               // signal — the sentence is the deliverable.
-              (result.recommendation ? `\nRecommendation: ${result.recommendation}` : "") +
+              (result.recommendation ? `\nRecommendation: ${decodeEscapes(result.recommendation)}` : "") +
               `\n${result.artifact}`;
 
         return {
