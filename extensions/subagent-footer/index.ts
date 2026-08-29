@@ -38,6 +38,12 @@ const RESET = "\x1b[22m";
  */
 const ICON = {
   model: "\uf2db", //  microchip
+  // Font Awesome rather than Material, though both render here. Same range as
+  // the microchip, wrench, eye and magnifier below, and a BMP codepoint, so it
+  // needs no surrogate pair. Verified against glyphnames.json from the Nerd
+  // Fonts repository — the Material glyph this file labels "brain" two lines
+  // down is md-spa, a plant, which is what a cheat-sheet label is worth.
+  orchestrator: "\uee9c", //  fa-brain
   think: "\udb83\udcd1", // 󰧑 brain
   folder: "\uf07b", //  folder
   branch: "\ue725", //  git branch
@@ -292,7 +298,8 @@ export default function (pi: ExtensionAPI) {
 
             const think = THINK_SHORT[ctx.thinkingLevel ?? ""] ?? ctx.thinkingLevel ?? "";
             const left = [
-              accent("orchestrator"),
+              // Icon then name, the same shape every subagent line uses.
+              accent(ICON.orchestrator) + " " + accent("orchestrator"),
               dim(ICON.model) + " " + muted(shortModel(model?.id)),
               dim(ICON.think) + " " + muted(think),
               dim(ICON.context) + " " + theme.fg(ctxRole, ctxText),
