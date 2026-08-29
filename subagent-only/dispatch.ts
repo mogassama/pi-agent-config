@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
-import { markStart, markProgress, markEnd, type RoleName } from "./run-state.js";
+import { markStart, markProgress, markModel, markEnd, type Outcome, type RoleName } from "./run-state.js";
 
 export interface RunResult {
   role: string;
@@ -239,6 +239,10 @@ async function runOnce(
   // exactly the question that decides a role's tool set and model. Local file,
   // gitignored, cheap.
   const transcript: string[] = [];
+  // Display only. The batch is opened and closed by `dispatch`, which is the
+  // only place that knows whether this attempt is the delegation's last: a
+  // fallback runs `runOnce` again, and counting attempts made a provider error
+  // recovered on the second model survive as the batch's outcome.
   markStart(agent.name as RoleName, model, agent.maxTurns);
   let failure: RunResult["failure"];
 
@@ -378,9 +382,12 @@ async function runOnce(
   );
 
   // Flat envelope now: verdict sits beside status, not under a payload key.
-  const outcome = envelope
-    ? String(envelope.verdict ?? envelope.status ?? "ok")
-    : (failure ?? "failed");
+  const outcome: Outcome = envelope
+    ? {
+        kind: envelope.status === "blocked" ? "blocked" : "verdict",
+        label: String(envelope.verdict ?? envelope.status ?? "ok"),
+      }
+    : { kind: "error", label: failure ?? "failed" };
   markEnd(
     agent.name as RoleName,
     model,
@@ -658,6 +665,12 @@ export async function dispatch(
     }
 
     if (!result.failure || !RETRYABLE.has(result.failure)) return result;
+
+    // The next model in the chain takes this child's place in the batch's
+    // model count, so the footer names what is running rather than what
+    // started.
+    const next = chain[chain.indexOf(model) + 1];
+    if (next) markModel(agent.name as RoleName, model, next);
     last = result;
     if (opts.signal?.aborted) break;
   }

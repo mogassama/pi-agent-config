@@ -11,6 +11,32 @@
 
 export type RoleName = "worker" | "reviewer" | "scout" | "advisor";
 
+/**
+ * What a delegation ended as, in the only three classes the display needs.
+ *
+ * `dispatch` knows which it is and says so, because inferring it from a string
+ * was already wrong: the rank list held six failure names and `RunResult`
+ * declares eight, so `timeout` and `aborted` fell through as ordinary verdicts
+ * and a batch containing one displayed as a success — the exact symptom the
+ * batch accounting exists to prevent. A closed union cannot silently gain a
+ * ninth member the way a list of strings can.
+ */
+export type OutcomeKind = "error" | "blocked" | "verdict";
+
+export interface Outcome {
+  kind: OutcomeKind;
+  /** What to show: a failure name, a verdict, or a status. */
+  label: string;
+}
+
+const KIND_RANK: Record<OutcomeKind, number> = { error: 0, blocked: 1, verdict: 2 };
+
+/** The worse of two outcomes; ties keep the first, so the order of ends does not matter. */
+export function worseOutcome(a: Outcome | undefined, b: Outcome): Outcome {
+  if (a === undefined) return b;
+  return KIND_RANK[a.kind] <= KIND_RANK[b.kind] ? a : b;
+}
+
 export interface RoleState {
   /** Runs completed this session. */
   runs: number;
@@ -39,14 +65,28 @@ export interface RoleState {
    * number is watched for is proximity to `maxTurns`, and a sum would cross the
    * ceiling with every child still far from it.
    */
-  running?: { turns: number; maxTurns: number; startedAt: number; model: string; active: number };
+  running?: {
+    turns: number;
+    maxTurns: number;
+    startedAt: number;
+    /** Model → how many children are on it. Four scouts can straddle a fallback. */
+    models: Record<string, number>;
+    active: number;
+  };
   /**
-   * Outcomes of the children that have finished in the current batch. Kept
+   * Outcomes of the delegations that have finished in the current batch. Kept
    * until the last one ends, so `lastOutcome` can be the worst of them rather
    * than whichever finished last — a fan-out where one child hits its ceiling
    * and three succeed used to display as a success.
+   *
+   * One entry per *delegation*, not per attempt. `dispatch` may run a child
+   * twice — a fallback model after a provider error, one retry after an empty
+   * turn — and only its final result belongs here. Recording attempts turned
+   * the first defect inside out: a provider error recovered by a fallback
+   * survived to the end of the batch and displayed as a failure although every
+   * delegation had succeeded.
    */
-  pending?: string[];
+  pending?: Outcome[];
 }
 
 export type SubagentSnapshot = Partial<Record<RoleName, RoleState>>;
@@ -80,12 +120,23 @@ export function markStart(role: RoleName, model: string, maxTurns: number): void
     // earliest start is kept, since that is what an elapsed-time display means.
     s.running.active += 1;
     s.running.maxTurns = Math.max(s.running.maxTurns, maxTurns);
+    s.running.models[model] = (s.running.models[model] ?? 0) + 1;
   } else {
-    s.running = { turns: 0, maxTurns, startedAt: Date.now(), model, active: 1 };
+    s.running = { turns: 0, maxTurns, startedAt: Date.now(), models: { [model]: 1 }, active: 1 };
     s.pending = [];
   }
   s.lastModel = model;
-  s.billed = isBilled(model);
+}
+
+/** The model a child moved to after a fallback, while its siblings keep theirs. */
+export function markModel(role: RoleName, from: string, to: string): void {
+  const r = get(role).running;
+  if (!r) return;
+  const left = (r.models[from] ?? 1) - 1;
+  if (left > 0) r.models[from] = left;
+  else delete r.models[from];
+  r.models[to] = (r.models[to] ?? 0) + 1;
+  get(role).lastModel = to;
 }
 
 export function markProgress(role: RoleName, turns: number): void {
@@ -94,31 +145,23 @@ export function markProgress(role: RoleName, turns: number): void {
   if (r) r.turns = Math.max(r.turns, turns);
 }
 
-/** Failure-shaped outcomes, worst first. Anything else is a verdict or a status. */
-const OUTCOME_RANK = ["failed", "provider_error", "spawn_error", "max_turns", "no_submit", "blocked"];
-
-function worseOutcome(a: string | undefined, b: string): string {
-  if (a === undefined) return b;
-  const ra = OUTCOME_RANK.indexOf(a);
-  const rb = OUTCOME_RANK.indexOf(b);
-  if (ra === -1) return rb === -1 ? b : b;
-  if (rb === -1) return a;
-  return ra <= rb ? a : b;
-}
-
 export function markEnd(
   role: RoleName,
   model: string,
   tokens: number,
   cacheRead: number,
   cost: number,
-  outcome: string,
+  outcome: Outcome,
 ): void {
   const s = get(role);
   s.runs += 1;
   s.tokens += tokens;
   s.cacheRead += cacheRead;
-  s.cost += s.billed ? cost : 0;
+  // Charged against the model that actually answered, not against whichever
+  // start happened to be last: a batch straddling a subscription model and a
+  // metered one used to attribute by order of arrival.
+  s.cost += isBilled(model) ? cost : 0;
+  s.billed = s.billed || isBilled(model);
   s.lastModel = model;
 
   // The totals were already right — they accumulate on every end. What was
@@ -127,10 +170,13 @@ export function markEnd(
   (s.pending ??= []).push(outcome);
   if (s.running && s.running.active > 1) {
     s.running.active -= 1;
+    const left = (s.running.models[model] ?? 1) - 1;
+    if (left > 0) s.running.models[model] = left;
+    else delete s.running.models[model];
     return;
   }
   s.running = undefined;
-  s.lastOutcome = s.pending.reduce<string | undefined>(worseOutcome, undefined) ?? outcome;
+  s.lastOutcome = (s.pending.reduce<Outcome | undefined>(worseOutcome, undefined) ?? outcome).label;
   s.pending = undefined;
 }
 

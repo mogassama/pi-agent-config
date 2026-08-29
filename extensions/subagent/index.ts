@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch } from "../../subagent-only/dispatch.js";
+import { aggregateFanout } from "../../subagent-only/fanout.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -58,6 +59,16 @@ let SCOUT_CALLS = 0;
  */
 interface Delegation {
   agent: string;
+  /**
+   * The `task` call this entry came from. Four scouts of one fan-out share it.
+   *
+   * The journal counts children, which is honest — four really ran. The streak
+   * guard counts calls, because what it exists to stop is three unread
+   * inventories in a row, and a fan-out is one decision. Without this, a
+   * two-question fan-out put the counter at two and the next scout was refused,
+   * including one asking about a `gaps` that same fan-out had reported.
+   */
+  batch: string;
   /** False when the child returned no envelope. A delegation that answered nothing must not block its own retry. */
   produced: boolean;
   readOnly: boolean;
@@ -205,10 +216,19 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
   // be three different questions. What ac451a actually showed was three
   // *identical* inventories — same role, back to back — and that is what this
   // counts. A scout following a reviewer is not a streak.
-  const streak = HISTORY.reduce(
-    (n, d) => (d.agent === agentName ? n + 1 : 0),
-    0,
-  );
+  //
+  // Counted in *calls*, not children. A fan-out of four scouts writes four
+  // HISTORY entries — which is honest, four children really ran — but it is one
+  // decision by the orchestrator, and one reconnaissance turn. Counting the
+  // children made the guard refuse the very next scout after a two-question
+  // fan-out, including one whose question came out of a `gaps` the fan-out
+  // itself reported. The mechanism meant to stop three unread inventories would
+  // have punished the batching this batch exists to encourage.
+  const seen = new Set<string>();
+  for (let i = HISTORY.length - 1; i >= 0 && HISTORY[i].agent === agentName; i--) {
+    seen.add(HISTORY[i].batch);
+  }
+  const streak = seen.size;
   if (isReadOnly(tools) && streak >= 2) {
     return (
       `Refused: ${streak} ${agentName} delegations already ran back to back, and the role ` +
@@ -454,7 +474,7 @@ export default function (pi: ExtensionAPI) {
     if (last?.agent === "orchestrator") {
       if (!last.changedFiles.includes(path)) last.changedFiles.push(path);
     } else {
-      HISTORY.push({ agent: "orchestrator", produced: true, readOnly: false, changedFiles: [path] });
+      HISTORY.push({ agent: "orchestrator", batch: randomBytes(4).toString("hex"), produced: true, readOnly: false, changedFiles: [path] });
     }
     return undefined;
   });
@@ -685,9 +705,11 @@ export default function (pi: ExtensionAPI) {
 
         // One HISTORY entry per delegation, as before: the guard counts
         // delegations, and four scouts are four, not one.
+        const batch = randomBytes(4).toString("hex");
         for (const r of results) {
           HISTORY.push({
             agent: params.agent,
+            batch,
             produced: !r.failure,
             readOnly: isReadOnly(agent.tools),
             changedFiles: r.changedFiles ?? [],
@@ -757,58 +779,14 @@ export default function (pi: ExtensionAPI) {
               (result.recommendation ? `\nRecommendation: ${decodeEscapes(result.recommendation)}` : "") +
               `\n${result.artifact}`;
 
-        /*
-         * `details` describes the whole call, not its first child.
-         *
-         * It used to be built from `results[0]`, which was invisible while the
-         * fan-out was never used: a simulated four-scout call reported six turns
-         * out of thirty-four, and `isError: false` with one child dead at its
-         * ceiling. The text said `[scout: max_turns]` on block four; the only
-         * structured field said the call had succeeded.
-         *
-         * A single child keeps the shape it always had — `status`, `turns` and
-         * `usage` are its own, and `children` is a list of one.
-         */
-        const failures = results.flatMap((r) => (r.failure ? [r.failure] : []));
-        const status = results.some((r) => r.status === "failed")
-          ? "failed"
-          : results.some((r) => r.status === "blocked")
-            ? "blocked"
-            : "ok";
-        const usage = results.reduce<Record<string, number>>((acc, r) => {
-          for (const [k, v] of Object.entries(r.usage ?? {})) {
-            if (typeof v === "number") acc[k] = (acc[k] ?? 0) + v;
-          }
-          return acc;
-        }, {});
+        // `details` describes the whole call, not its first child — see
+        // subagent-only/fanout.ts, which the tests import rather than copy.
+        const details = aggregateFanout(results);
 
         return {
           content: [{ type: "text" as const, text: body }],
-          details: {
-            role: result.role,
-            // One model when they agree, the list when a fallback split them.
-            model: [...new Set(results.map((r) => r.modelUsed))].join(", "),
-            status,
-            verdict: result.verdict ?? null,
-            findings: result.findings ?? null,
-            outOfScope: result.outOfScope ?? null,
-            next: result.next,
-            turns: results.reduce((n, r) => n + r.turns, 0),
-            usage,
-            artifact: results.map((r) => r.artifact).join(" "),
-            // Kept for whoever reads a single string; `failures` is the truth.
-            failure: failures[0] ?? null,
-            failures,
-            children: results.map((r) => ({
-              role: r.role,
-              model: r.modelUsed,
-              status: r.status,
-              turns: r.turns,
-              artifact: r.artifact,
-              failure: r.failure ?? null,
-            })),
-          },
-          isError: status === "failed",
+          details,
+          isError: details.status === "failed",
         };
       },
     }),
