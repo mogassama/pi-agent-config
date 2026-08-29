@@ -86,7 +86,7 @@ export function aggregateFanout(results: ChildResult[]): FanoutDetails {
     findings: first.findings ?? null,
     outOfScope: first.outOfScope ?? null,
     // Anything short of every child succeeding comes back to the orchestrator.
-    next: first.next,
+    next: results.every((r) => r.next === "done") ? "done" : "orchestrator",
     turns: results.reduce((n, r) => n + r.turns, 0),
     usage,
     artifact: results.map((r) => r.artifact).join(" "),
