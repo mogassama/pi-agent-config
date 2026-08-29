@@ -226,6 +226,32 @@ test("a provider error recovered on a fallback does not survive the batch", () =
   assert.equal(snapshot()[r]?.lastOutcome, "ok", "l'échec de la tentative a survécu au lot");
 });
 
+test("the batch's finishing models are counted, whatever order children end in", () => {
+  // `lastModel` was one name, so three children on Flash and one on a fallback
+  // rendered differently depending on which the scheduler ended last.
+  const a = role();
+  for (let i = 0; i < 4; i++) markStart(a, FLASH, 12);
+  markEnd(a, GEMINI, verdict("ok"));
+  for (let i = 0; i < 3; i++) markEnd(a, FLASH, verdict("ok"));
+  const b = role();
+  for (let i = 0; i < 4; i++) markStart(b, FLASH, 12);
+  for (let i = 0; i < 3; i++) markEnd(b, FLASH, verdict("ok"));
+  markEnd(b, GEMINI, verdict("ok")); // le repli finit dernier
+  assert.deepEqual(snapshot()[a]?.lastModels, snapshot()[b]?.lastModels);
+  assert.deepEqual(snapshot()[a]?.lastModels, { [FLASH]: 3, [GEMINI]: 1 });
+});
+
+test("two failures of the same class render the same in either order", () => {
+  const a = role();
+  markStart(a, FLASH, 12); markStart(a, FLASH, 12);
+  markEnd(a, FLASH, err("max_turns")); markEnd(a, FLASH, err("provider_error"));
+  const b = role();
+  markStart(b, FLASH, 12); markStart(b, FLASH, 12);
+  markEnd(b, FLASH, err("provider_error")); markEnd(b, FLASH, err("max_turns"));
+  assert.equal(snapshot()[a]?.lastOutcome, snapshot()[b]?.lastOutcome);
+  assert.equal(snapshot()[a]?.lastOutcomeKind, "error");
+});
+
 test("the models in flight are counted, not the first one to start", () => {
   const r = role();
   markStart(r, FLASH, 12);

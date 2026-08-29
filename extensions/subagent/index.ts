@@ -750,7 +750,10 @@ export default function (pi: ExtensionAPI) {
           SCOUT_CALLS === 0 && result.role === "reviewer" && (result.outOfScope ?? 0) > 0
             ? "\n(out_of_scope is a where-question answered inside a review. A scout resolves it for a fraction of the cost, and the locations it returns are files the next review may weigh.)"
             : "";
-        if (params.agent === "scout") SCOUT_CALLS += results.length;
+        // One call, not one per child: the counter is named for calls and its only
+        // use is "has a scout ever run", so a fan-out of four is one. The same
+        // child-versus-call ambiguity the streak guard just lost.
+        if (params.agent === "scout") SCOUT_CALLS += 1;
 
         // A fan-out returns one block per scout, in the order the questions were
         // asked. Nothing is merged: four answers to four questions are four

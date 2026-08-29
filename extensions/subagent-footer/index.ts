@@ -447,7 +447,7 @@ function renderRole(
     ].join(p.dim(SEP));
   }
 
-  const usedModel = shortModel(st.lastModel);
+  const usedModel = runningModels(st.lastModels ?? {});
   // Name the model only when a fallback replaced the declared one — silence
   // means the definition is what ran.
   const modelCell =
@@ -461,7 +461,7 @@ function renderRole(
     ? p.dim(ICON.cost) + p.theme.fg("warning", `~${st.cost.toFixed(2)}`)
     : p.dim(ICON.cost) + p.dim("\u2205");
   const outcome = st.lastOutcome
-    ? p.dim(SEP) + p.theme.fg(outcomeRole(st.lastOutcome), st.lastOutcome)
+    ? p.dim(SEP) + p.theme.fg(outcomeRole(st.lastOutcome, st.lastOutcomeKind), st.lastOutcome)
     : "";
 
   return (
@@ -479,8 +479,9 @@ function renderRole(
   );
 }
 
-function outcomeRole(outcome: string): string {
+function outcomeRole(outcome: string, kind?: "error" | "blocked" | "verdict"): string {
   if (outcome === "approved" || outcome === "ok") return "success";
-  if (outcome === "blocked" || outcome === "failed") return "error";
+  if (kind === "error") return "error";
+  if (kind === "blocked") return "error";
   return "warning";
 }

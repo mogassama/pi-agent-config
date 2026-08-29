@@ -18,6 +18,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
+import { runAttempts } from "./attempts.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
 import {
   markStart,
@@ -635,73 +636,59 @@ export async function dispatch(
    * caller actually gets. Attempts still pay for their tokens through
    * `recordAttempt` — they consumed them.
    */
-  markStart(agent.name as RoleName, agent.model, agent.maxTurns);
-  const finish = (r: RunResult): RunResult => {
-    markEnd(agent.name as RoleName, r.modelUsed, outcomeOf(r));
-    return r;
-  };
-
   // A read-only role may write nothing, so running it twice cannot corrupt
   // anything — and one class of failure is worth exactly one retry.
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
 
-  for (const model of chain) {
-    let result = await runOnce(agent, model, task, opts);
+  markStart(agent.name as RoleName, agent.model, agent.maxTurns);
+  let closed = false;
+  let currentModel = agent.model;
 
+  try {
+    return await runAttempts<RunResult>({
+      chain,
+      mutates,
+      retryable: RETRYABLE as ReadonlySet<string>,
+      aborted: () => Boolean(opts.signal?.aborted),
+      attempt: (model) => {
+        currentModel = model;
+        return runOnce(agent, model, task, opts);
+      },
+      onFallback: (from, to) => {
+        currentModel = to;
+        markModel(agent.name as RoleName, from, to);
+      },
+      finish: (r) => {
+        closed = true;
+        markEnd(agent.name as RoleName, r.modelUsed, outcomeOf(r));
+        return r;
+      },
+      exhausted: (last) => ({
+        ...last,
+        summary:
+          chain.length > 1
+            ? `${agent.name}: all ${chain.length} models refused. Last — ${last.summary}`
+            : last.summary,
+      }),
+    });
+  } catch (err) {
     /*
-     * One retry on `no_submit`, for a read-only role only.
+     * The slot must close even when nothing returns.
      *
-     * Measured on `b9baad-18-scout`: nine turns of twelve, 90,240 tokens, and
-     * the last message carried a `thinking` block and nothing else — no text,
-     * no tool call. Then `agent_end`, a normal termination. It did not hit a
-     * ceiling, did not time out, and the provider did not refuse: the model
-     * produced a turn of pure reasoning and stopped. No guard covers that, and
-     * the whole delegation was lost.
-     *
-     * It is stochastic, so a fresh process on the same input is worth trying,
-     * and it is bounded at one so a role that cannot answer does not answer
-     * twice as expensively. Never for a writer: re-running one that stopped
-     * mid-edit would redo edits against a tree it already changed.
+     * `runOnce` writes its artefact and its transcript before anything else, and
+     * a disk error there throws rather than becoming a `RunResult`. Without this
+     * the batch would keep an open child forever: the footer would show the role
+     * working with no process behind it, and `active` would never come back
+     * down. The error still propagates — this only says why the slot closed.
      */
-    // A writer qualifies only when it wrote nothing.
-    //
-    // The exclusion was right and too wide. Measured on run 48acec: `31-worker`
-    // stopped after five turns of thirty with no submit and no changed files —
-    // nothing on disk, nothing to redo, and the deliverable simply did not get
-    // done by that delegation. The danger of re-running a writer is that it
-    // replays edits against a tree it already changed; when the before/after
-    // snapshots are identical there is no such tree, and the safety condition is
-    // mechanical rather than a judgement. `salvaged` is that comparison and it
-    // is already computed.
-    const wroteNothing = mutates && result.changedFiles === undefined;
-    if (result.failure === "no_submit" && (!mutates || wroteNothing) && !opts.signal?.aborted) {
-      const retry = await runOnce(agent, model, task, opts);
-      if (!retry.failure) {
-        return finish({ ...retry, summary: `${retry.summary} (retried after an empty first attempt)` });
-      }
-      result = retry;
+    if (!closed) {
+      markEnd(agent.name as RoleName, currentModel, {
+        kind: "error",
+        label: opts.signal?.aborted ? "aborted" : "internal_error",
+      });
     }
-
-    if (!result.failure || !RETRYABLE.has(result.failure)) return finish(result);
-
-    // The next model in the chain takes this child's place in the batch's
-    // model count, so the footer names what is running rather than what
-    // started.
-    const next = chain[chain.indexOf(model) + 1];
-    if (next) markModel(agent.name as RoleName, model, next);
-    last = result;
-    if (opts.signal?.aborted) break;
+    throw err;
   }
-
-  // Every model in the chain refused. Say so, with the last reason, rather
-  // than reporting the last attempt as if it were the only one.
-  return finish({
-    ...last!,
-    summary:
-      chain.length > 1
-        ? `${agent.name}: all ${chain.length} models refused. Last — ${last!.summary}`
-        : last!.summary,
-  });
 }
 
 /**

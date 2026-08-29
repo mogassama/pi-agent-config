@@ -48,10 +48,24 @@ export interface RoleState {
   cost: number;
   /** Whether the provider bills per token. Drives ∅ vs a figure. */
   billed: boolean;
-  /** Model that actually answered last — may differ from the declared one after a fallback. */
-  lastModel?: string;
-  /** Verdict or status of the last completed run. */
+  /**
+   * Models the last completed batch finished on, with their counts.
+   *
+   * `lastModel` was a single name, so a fan-out of three on one model and one on
+   * a fallback displayed whichever child the scheduler happened to end last —
+   * the same work rendering two different ways. Kept as a count for the same
+   * reason `running.models` is one.
+   */
+  lastModels?: Record<string, number>;
+  /** Verdict or failure name of the last completed batch. */
   lastOutcome?: string;
+  /**
+   * What class that outcome was. Carried through rather than re-derived from the
+   * label: the footer coloured only `blocked` and `failed` as errors, so
+   * `timeout`, `aborted`, `provider_error` and `spawn_error` — all classed as
+   * errors here — arrived as warnings.
+   */
+  lastOutcomeKind?: OutcomeKind;
   /**
    * Set while at least one run of this role is in flight.
    *
@@ -87,6 +101,8 @@ export interface RoleState {
    * delegation had succeeded.
    */
   pending?: Outcome[];
+  /** Models the delegations of the current batch finished on. Becomes `lastModels`. */
+  finished?: Record<string, number>;
 }
 
 export type SubagentSnapshot = Partial<Record<RoleName, RoleState>>;
@@ -124,8 +140,8 @@ export function markStart(role: RoleName, model: string, maxTurns: number): void
   } else {
     s.running = { turns: 0, maxTurns, startedAt: Date.now(), models: { [model]: 1 }, active: 1 };
     s.pending = [];
+    s.finished = {};
   }
-  s.lastModel = model;
 }
 
 /** The model a child moved to after a fallback, while its siblings keep theirs. */
@@ -136,7 +152,6 @@ export function markModel(role: RoleName, from: string, to: string): void {
   if (left > 0) r.models[from] = left;
   else delete r.models[from];
   r.models[to] = (r.models[to] ?? 0) + 1;
-  get(role).lastModel = to;
 }
 
 export function markProgress(role: RoleName, turns: number): void {
@@ -169,7 +184,8 @@ export function recordAttempt(
   s.cacheRead += cacheRead;
   s.cost += isBilled(model) ? cost : 0;
   s.billed = s.billed || isBilled(model);
-  s.lastModel = model;
+  // Deliberately not touching the last-model record: an attempt that failed is
+  // precisely not the model the delegation finished on.
 }
 
 /**
@@ -196,7 +212,7 @@ export function outcomeOf(r: {
 export function markEnd(role: RoleName, model: string, outcome: Outcome): void {
   const s = get(role);
   s.runs += 1;
-  s.lastModel = model;
+  (s.finished ??= {})[model] = (s.finished[model] ?? 0) + 1;
 
   // The totals were already right — they accumulate on every end. What was
   // wrong is everything about *this batch*: the slot cleared on the first
@@ -210,8 +226,15 @@ export function markEnd(role: RoleName, model: string, outcome: Outcome): void {
     return;
   }
   s.running = undefined;
-  s.lastOutcome = (s.pending.reduce<Outcome | undefined>(worseOutcome, undefined) ?? outcome).label;
+  // One representation per batch, whatever order its children ended in: the
+  // worst class, and every label of that class, sorted.
+  const worst = s.pending.reduce<Outcome | undefined>(worseOutcome, undefined) ?? outcome;
+  const labels = [...new Set(s.pending.filter((o) => o.kind === worst.kind).map((o) => o.label))];
+  s.lastOutcomeKind = worst.kind;
+  s.lastOutcome = labels.sort().join(", ");
+  s.lastModels = s.finished;
   s.pending = undefined;
+  s.finished = undefined;
 }
 
 export function snapshot(): SubagentSnapshot {
