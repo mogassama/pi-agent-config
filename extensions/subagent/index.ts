@@ -485,16 +485,23 @@ export default function (pi: ExtensionAPI) {
     find: Type.Optional(
       Type.Union([Type.String(), Type.Array(Type.String())], {
         description:
-          "Scout only, and required for it: the single thing to locate, as one " +
-          "question. Where X is defined, who calls Y, which module owns Z. One " +
-          "question — not a list, not \"every occurrence of\", not \"check that A " +
-          "matches B\".\n\n" +
-          "Pass an array of questions to run that many scouts at once, in " +
-          "parallel, against the same scope — each still answering one question, " +
-          "each returning its own envelope. This is how a comparison between two " +
-          "sets is asked: give the two questions here and do the subtraction " +
-          "yourself when both come back. Up to four; beyond that, ask the four " +
-          "that matter.",
+          "Scout only, and required for it. Holds one to four narrow " +
+          "reconnaissance questions, each locating one thing — where X is " +
+          "defined, who calls Y, which module owns Z. Never an exhaustive " +
+          "inventory, never \"check that A matches B\": a comparison of two " +
+          "states is two questions here and a subtraction you do yourself.\n\n" +
+          "**Before sending a scout, collect the reconnaissance questions you " +
+          "already know you need before you can act.** Those that share a " +
+          "`scope` go in one call — they run at once, each returning its own " +
+          "envelope, and nothing is merged.\n\n" +
+          "  find: [\n" +
+          "    \"Where are the output roots defined?\",\n" +
+          "    \"Where is each business cutoff date defined?\",\n" +
+          "    \"Where are the checkpoint files written?\"\n" +
+          "  ]\n" +
+          "  scope: [\"src/\", \"conf/\"]\n\n" +
+          "A bare string is accepted as shorthand when a single question is " +
+          "all you know.",
       }),
     ),
     scope: Type.Optional(
@@ -537,7 +544,7 @@ export default function (pi: ExtensionAPI) {
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
-        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume, and it reaches the ceiling and returns nothing. Ask where one thing is, or split it — `find` takes an array and the scouts run at once, so three narrow questions cost what the slowest one costs and beat one exhaustive scout that dies. **If you are about to send a second scout before acting on the first, the two were one call**: measured on two runs, four consecutive scouts were delegated one at a time where a single array would have answered all four in the time of the slowest.",
+        "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume: it reaches the ceiling and returns nothing. Split it into questions that each locate one thing — how to send them is in the `find` parameter of task.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
         "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
@@ -750,22 +757,58 @@ export default function (pi: ExtensionAPI) {
               (result.recommendation ? `\nRecommendation: ${decodeEscapes(result.recommendation)}` : "") +
               `\n${result.artifact}`;
 
+        /*
+         * `details` describes the whole call, not its first child.
+         *
+         * It used to be built from `results[0]`, which was invisible while the
+         * fan-out was never used: a simulated four-scout call reported six turns
+         * out of thirty-four, and `isError: false` with one child dead at its
+         * ceiling. The text said `[scout: max_turns]` on block four; the only
+         * structured field said the call had succeeded.
+         *
+         * A single child keeps the shape it always had — `status`, `turns` and
+         * `usage` are its own, and `children` is a list of one.
+         */
+        const failures = results.flatMap((r) => (r.failure ? [r.failure] : []));
+        const status = results.some((r) => r.status === "failed")
+          ? "failed"
+          : results.some((r) => r.status === "blocked")
+            ? "blocked"
+            : "ok";
+        const usage = results.reduce<Record<string, number>>((acc, r) => {
+          for (const [k, v] of Object.entries(r.usage ?? {})) {
+            if (typeof v === "number") acc[k] = (acc[k] ?? 0) + v;
+          }
+          return acc;
+        }, {});
+
         return {
           content: [{ type: "text" as const, text: body }],
           details: {
             role: result.role,
-            model: result.modelUsed,
-            status: result.status,
+            // One model when they agree, the list when a fallback split them.
+            model: [...new Set(results.map((r) => r.modelUsed))].join(", "),
+            status,
             verdict: result.verdict ?? null,
             findings: result.findings ?? null,
             outOfScope: result.outOfScope ?? null,
             next: result.next,
-            turns: result.turns,
-            usage: result.usage,
-            artifact: result.artifact,
-            failure: result.failure ?? null,
+            turns: results.reduce((n, r) => n + r.turns, 0),
+            usage,
+            artifact: results.map((r) => r.artifact).join(" "),
+            // Kept for whoever reads a single string; `failures` is the truth.
+            failure: failures[0] ?? null,
+            failures,
+            children: results.map((r) => ({
+              role: r.role,
+              model: r.modelUsed,
+              status: r.status,
+              turns: r.turns,
+              artifact: r.artifact,
+              failure: r.failure ?? null,
+            })),
           },
-          isError: result.status === "failed",
+          isError: status === "failed",
         };
       },
     }),
