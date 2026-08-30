@@ -678,51 +678,44 @@ export default function (pi: ExtensionAPI) {
          * by the harness instead of merely suffered.
          */
         /*
-         * `allSettled`, not `all`.
+         * One path, one exit, published whatever happens.
          *
-         * `Promise.all` rejects on the first child that throws, and the three
-         * others keep running — with nothing left to publish their state, record
-         * them in HISTORY or close the tool call. The batch would return while
-         * its own processes were still working, and the footer would hold
-         * whatever the last publish said. Waiting for every child costs the
-         * duration of the slowest, which is what a fan-out costs anyway.
+         * `Promise.all` rejected on the first child that threw while the three
+         * others kept running, with nothing left to publish their state, record
+         * them in HISTORY or close the call. `allSettled` waits for every child,
+         * which costs the duration of the slowest — what a fan-out costs anyway.
+         *
+         * The singleton branch used to await `dispatch` directly, and a
+         * rejection there skipped the publish below: `run-state` closed in
+         * memory while the footer kept a snapshot showing the role still
+         * running. Two exceptional paths, one of them handled — the same
+         * singleton/fan-out asymmetry this whole series has been removing. So a
+         * lone child goes through `tasks[]` and `allSettled` like any other, and
+         * `finally` gives the nominal and the exceptional path the same final
+         * publish.
+         *
+         * Nothing enters HISTORY for a batch that did not complete: the guard
+         * must not count a reconnaissance the orchestrator cannot act on.
          */
-        const settled =
-          tasks.length > 1
-            ? await Promise.allSettled(
-                tasks.map((t) =>
-                  dispatch(effective, t, {
-                    ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
-                    seq: ++CALL_SEQ,
-                    signal,
-                    onProgress: publish,
-                  }),
-                ),
-              )
-            : null;
-        if (settled) {
+        let results: RunResult[];
+        try {
+          const settled = await Promise.allSettled(
+            tasks.map((t) =>
+              dispatch(effective, t, {
+                ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
+                seq: ++CALL_SEQ,
+                signal,
+                onProgress: publish,
+              }),
+            ),
+          );
           const rejected = settled.find((r) => r.status === "rejected");
-          if (rejected && rejected.status === "rejected") {
-            // Every child has finished, so the state is settled and publishable
-            // before the error leaves. Nothing is recorded in HISTORY: a batch
-            // that did not complete did not happen, and the guard must not count
-            // it as a reconnaissance the orchestrator can act on.
-            publish();
-            throw rejected.reason;
-          }
+          if (rejected && rejected.status === "rejected") throw rejected.reason;
+          // Safe: any rejection has thrown above.
+          results = settled.map((r) => (r as PromiseFulfilledResult<RunResult>).value);
+        } finally {
+          publish();
         }
-        const results =
-          settled
-            ? settled.map((r) => (r as PromiseFulfilledResult<RunResult>).value)
-            : [
-                await dispatch(effective, tasks[0], {
-                  ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
-                  seq: ++CALL_SEQ,
-                  signal,
-                  onProgress: publish,
-                }),
-              ];
-        publish();
 
         // One HISTORY entry per child, which is what ran. The guard counts the
         // calls behind them — see `streakOf`, and the `batch` field they share.

@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `8df48bd` + le durcissement du fan-out.
+Branche `feat/subagent-extension`. État courant : `85d5644` + le lot de sortie unique.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -40,7 +40,7 @@ même réglage ; seuls `high` et `max` déplacent quelque chose.
 Huit extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-lint-gate`,
 `pi-project-brief`, `pi-secret-gate`, `subagent`, `subagent-footer`.
 
-Suite de tests : `bin/test-guards`, **154 cas**. Quatre modules feuilles sans import pi —
+Suite de tests : `bin/test-guards`, **156 cas**. Quatre modules feuilles sans import pi —
 `fanout.ts`, `attempts.ts`, `tree.ts`, plus les fonctions pures de `run-state.ts` — existent
 pour que les tests appellent la production au lieu de la recopier. Chacun a été extrait après
 qu'un défaut est passé sous une suite verte qui décrivait sa propre copie.
@@ -346,7 +346,7 @@ qu'un défaut est passé sous une suite verte qui décrivait sa propre copie.
       Validation à ≥ 70 % sur ≥ 5 groupes. Zéro sur cinq voudrait dire que le prompt n'est pas
       le levier, et le passage à `find: string[]` devient l'essai suivant.
 
-- [x] **Neuf défauts sur un chemin jamais exécuté**, trouvés par simulation et par cinq
+- [x] **Onze défauts sur un chemin jamais exécuté**, trouvés par simulation et par cinq
       relectures externes — jamais par un run, puisqu'il n'y en a jamais eu.
       *Les deux premiers :* `details` construit depuis `results[0]` — six tours rapportés sur
       trente-quatre, `isError: false` avec un enfant mort — et un créneau `running` unique par
@@ -363,6 +363,16 @@ qu'un défaut est passé sous une suite verte qui décrivait sa propre copie.
       *Et le neuvième était dans le correctif :* un abandon entre deux tentatives tombait dans
       `exhausted`, qui annonce que toute la chaîne a refusé — alors que les modèles suivants
       n'avaient pas été essayés.
+      *Les deux derniers, dans le correctif du correctif :* `abandon` fermait la délégation au
+      nom du modèle de départ, donc une exception après un repli retirait du lot le modèle d'un
+      frère encore vivant ; et il ne posait pas `closed`, alors que son commentaire promettait
+      qu'il était sans effet une fois la délégation terminée. Tous deux trouvés dans
+      `batchLifecycle` — la fonction extraite au lot précédent pour qu'un test puisse
+      l'atteindre, ce qui est exactement ce qui les a rendus visibles.
+      *Et le onzième, sur le dernier chemin exceptionnel restant :* un rejet sur un appel à un
+      seul enfant fermait l'état en mémoire sans le republier, donc le footer gardait un
+      instantané montrant le rôle en cours. Le chemin singleton disparaît : `allSettled` sert
+      pour un enfant comme pour quatre, et un `finally` publie sur les deux issues.
       **Le point commun de tous :** la primitive savait représenter la bonne chose et
       l'appelant faisait autre chose, dans un module que les tests ne pouvaient pas atteindre.
       D'où les quatre modules feuilles, et `tests/attempts.test.ts` qui observe la séquence

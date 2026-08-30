@@ -161,7 +161,10 @@ test("blocked sits between an error and a verdict", () => {
   assert.equal(worseOutcome(blocked("blocked"), err("timeout")).kind, "error");
 });
 
-test("ties keep the first, so the order in which children end does not matter", () => {
+// `worseOutcome` alone does depend on the order for the label. What makes the
+// public result independent of it is `markEnd`, which keeps every label of the
+// worst class, deduplicated and sorted — covered by the test two above.
+test("a tie between two outcomes of one class keeps the first", () => {
   assert.equal(worseOutcome(err("max_turns"), err("timeout")).label, "max_turns");
   assert.equal(worseOutcome(verdict("approved"), verdict("needs_rework")).label, "approved");
 });
