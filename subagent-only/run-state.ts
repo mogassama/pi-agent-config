@@ -237,6 +237,53 @@ export function markEnd(role: RoleName, model: string, outcome: Outcome): void {
   s.finished = undefined;
 }
 
+/**
+ * The batch lifecycle of one delegation, as an object a test can drive.
+ *
+ * `dispatch` used to build these three callbacks inline, which meant nothing
+ * could check that its `finish` actually called `markEnd` — the machine's tests
+ * watch that a `finish` callback is invoked, not what the callback does. That is
+ * the same gap, one level down, as the one that let four defects through: the
+ * primitive was right and only the caller could be wrong.
+ *
+ * `abandon` exists for the path where nothing returns at all. It is a no-op once
+ * the delegation has finished, so a catch block can call it unconditionally.
+ */
+export function batchLifecycle(role: RoleName, model: string, maxTurns: number) {
+  markStart(role, model, maxTurns);
+  let closed = false;
+  return {
+    onFallback(from: string, to: string): void {
+      markModel(role, from, to);
+    },
+    finish<R extends { modelUsed: string; status: "ok" | "blocked" | "failed"; verdict?: string; failure?: string }>(
+      r: R,
+    ): R {
+      closed = true;
+      markEnd(role, r.modelUsed, outcomeOf(r));
+      return r;
+    },
+    abandon(label: string): void {
+      if (!closed) markEnd(role, model, { kind: "error", label });
+    },
+  };
+}
+
+/**
+ * The models of a batch, rendered for a footer.
+ *
+ * Here rather than in the footer extension so a test can call it — the same
+ * reason `streakOf` and `outcomeOf` moved. Sorted, because two batches with the
+ * same models must read identically whatever order the scheduler inserted them
+ * in, and `Object.entries` preserves insertion order.
+ */
+export function formatModels(models: Record<string, number>, short: (m: string) => string): string {
+  const entries = Object.entries(models).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return "?";
+  if (entries.length === 1) return short(entries[0][0]);
+  return entries.map(([m, n]) => `${short(m)}×${n}`).join(" + ");
+}
+
 export function snapshot(): SubagentSnapshot {
   return state;
 }

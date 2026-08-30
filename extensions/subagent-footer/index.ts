@@ -17,7 +17,8 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadAgents, type AgentDefinition } from "../../subagent-only/agents.js";
-import { parse, STATUS_KEY, type RoleName, type RoleState } from "../../subagent-only/run-state.js";
+import {
+  formatModels, parse, STATUS_KEY, type RoleName, type RoleState } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const AGENTS_DIR = join(AGENT_DIR, "subagent-only", "agents");
@@ -83,21 +84,6 @@ const ALERT = 0.85;
  * Mechanical: drop the provider prefix, the vendor prefix and a `-preview`
  * suffix. A lookup table would be one more thing to keep in step with reality.
  */
-/**
- * The models a batch is running on, however many that is.
- *
- * `running` used to carry one `model`, which four concurrent scouts overwrote
- * in turn. It carries a count per model now, and this reads it: one name when
- * they agree, names with their counts when a fallback split them mid-batch.
- * Reading the field that no longer exists rendered `?` — a footer showing less
- * than before the change that was meant to show more.
- */
-function runningModels(models: Record<string, number>): string {
-  const entries = Object.entries(models);
-  if (entries.length === 0) return "?";
-  if (entries.length === 1) return shortModel(entries[0][0]);
-  return entries.map(([m, n]) => `${shortModel(m)}×${n}`).join(" + ");
-}
 
 function shortModel(id: string | undefined): string {
   if (!id) return "?";
@@ -433,7 +419,7 @@ function renderRole(
     const r = st.running;
     const body = [
       `${p.accent(p.frame)} ${p.accent(role)}`,
-      p.dim(ICON.model) + " " + p.muted(runningModels(r.models)) + think,
+      p.dim(ICON.model) + " " + p.muted(formatModels(r.models, shortModel)) + think,
       p.dim(ICON.turn) + " " + p.theme.fg("accent", `${r.turns}/${r.maxTurns}`),
       p.dim(fmtElapsed(r.startedAt)),
     ].join(p.dim(SEP));
@@ -447,7 +433,7 @@ function renderRole(
     ].join(p.dim(SEP));
   }
 
-  const usedModel = runningModels(st.lastModels ?? {});
+  const usedModel = formatModels(st.lastModels ?? {}, shortModel);
   // Name the model only when a fallback replaced the declared one — silence
   // means the definition is what ran.
   const modelCell =

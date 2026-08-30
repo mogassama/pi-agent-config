@@ -113,6 +113,16 @@ test("an abort stops before announcing a model that will never run", async () =>
   assert.equal(h.finished.length, 1, "l'abandon a laissé la délégation ouverte");
 });
 
+test("an abort is not reported as the whole chain refusing", async () => {
+  // It fell through to `exhausted`, which says every model refused — when the
+  // later ones were never tried. `exhausted` has to mean exhausted.
+  const h = harness([{ failure: "provider_error", summary: "provider down" }], { abortAfter: 1 });
+  const r = await runAttempts(h.plan);
+  assert.doesNotMatch(r.summary, /all refused/, "un abandon a été présenté comme un épuisement");
+  assert.equal(r.summary, "provider down");
+  assert.equal(h.attempts.length, 1, "un modèle a été essayé après l'abandon");
+});
+
 test("every model refusing still finishes exactly once", async () => {
   const h = harness([{ failure: "provider_error" }, { failure: "spawn_error" }]);
   const r = await runAttempts(h.plan);

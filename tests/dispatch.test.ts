@@ -1,12 +1,10 @@
 /**
- * dispatch — what the tree says a delegation did.
+ * The tree snapshot, on the production functions.
  *
- * `dispatch.ts` imports pi at module load, so it cannot be required from a bare
- * `node --test`. What is tested here is the pair of pure functions the salvage
- * rests on, reimplemented byte-for-byte from the source: `treeState`'s parsing
- * of `git status -z`, and `changedBetween`'s union. If either drifts from the
- * source, these tests stop describing the code — so they are written to fail
- * loudly rather than to pass quietly.
+ * These reimplemented `treeState` and `changedBetween` with a comment asking
+ * that the copies be kept identical — a convention, not a mechanism, green while
+ * production drifts. They live in `subagent-only/tree.ts` now, a leaf module
+ * with no pi import, and these tests call them.
  *
  * Each case here is an incident, not an invention:
  *
@@ -25,50 +23,12 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-// ---------------------------------------------------------------------------
-// Copied from subagent-only/dispatch.ts. Keep them identical.
-// ---------------------------------------------------------------------------
-
-function treeState(cwd: string): Map<string, string> {
-  const files = new Map<string, string>();
-  let names: string[];
-  try {
-    const out = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
-      cwd,
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    const records = out.split("\0").filter(Boolean);
-    names = records.map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r)).filter(Boolean);
-  } catch {
-    return files;
-  }
-  for (const name of names) {
-    // Distinct from both a hash and an absent entry — see dispatch.ts.
-    let hash = "\u0000gone";
-    try {
-      hash = createHash("sha1").update(readFileSync(join(cwd, name))).digest("hex");
-    } catch {
-      /* gone from disk */
-    }
-    files.set(name, hash);
-  }
-  return files;
-}
-
-function changedBetween(before: Map<string, string>, after_: Map<string, string>): string[] {
-  const paths = new Set([...before.keys(), ...after_.keys()]);
-  return [...paths].filter((p) => (before.get(p) ?? "") !== (after_.get(p) ?? "")).sort();
-}
-
-// ---------------------------------------------------------------------------
+import { changedBetween, treeState } from "../subagent-only/tree.ts";
 
 const repos: string[] = [];
 

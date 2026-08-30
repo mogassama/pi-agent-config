@@ -70,11 +70,13 @@ export async function runAttempts<R extends AttemptOutcome>(plan: AttemptPlan<R>
 
     last = result;
 
-    // The abort check comes before announcing the next model, not after: a
-    // signal already raised means the fallback will never run, and saying it
-    // has taken this child's place left a model in the batch's count that
-    // nothing was running on.
-    if (plan.aborted()) break;
+    // An abort is not an exhaustion. The check comes before announcing the next
+    // model — a signal already raised means the fallback will never run, and
+    // saying it had taken this child's place left a model in the batch's count
+    // that nothing was running on — and it returns the last result as it stands
+    // rather than falling through to `exhausted`, which would claim every model
+    // in the chain had refused when the later ones were never tried.
+    if (plan.aborted()) return plan.finish(last);
 
     const next = plan.chain[plan.chain.indexOf(model) + 1];
     if (next) plan.onFallback?.(model, next);

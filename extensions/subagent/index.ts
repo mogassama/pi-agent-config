@@ -16,7 +16,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
-import { dispatch } from "../../subagent-only/dispatch.js";
+import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 
@@ -677,9 +677,19 @@ export default function (pi: ExtensionAPI) {
          * `3ed33e` failure — a schema nobody wrote, every test green — rebuilt
          * by the harness instead of merely suffered.
          */
-        const results =
+        /*
+         * `allSettled`, not `all`.
+         *
+         * `Promise.all` rejects on the first child that throws, and the three
+         * others keep running — with nothing left to publish their state, record
+         * them in HISTORY or close the tool call. The batch would return while
+         * its own processes were still working, and the footer would hold
+         * whatever the last publish said. Waiting for every child costs the
+         * duration of the slowest, which is what a fan-out costs anyway.
+         */
+        const settled =
           tasks.length > 1
-            ? await Promise.all(
+            ? await Promise.allSettled(
                 tasks.map((t) =>
                   dispatch(effective, t, {
                     ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
@@ -689,6 +699,21 @@ export default function (pi: ExtensionAPI) {
                   }),
                 ),
               )
+            : null;
+        if (settled) {
+          const rejected = settled.find((r) => r.status === "rejected");
+          if (rejected && rejected.status === "rejected") {
+            // Every child has finished, so the state is settled and publishable
+            // before the error leaves. Nothing is recorded in HISTORY: a batch
+            // that did not complete did not happen, and the guard must not count
+            // it as a reconnaissance the orchestrator can act on.
+            publish();
+            throw rejected.reason;
+          }
+        }
+        const results =
+          settled
+            ? settled.map((r) => (r as PromiseFulfilledResult<RunResult>).value)
             : [
                 await dispatch(effective, tasks[0], {
                   ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },

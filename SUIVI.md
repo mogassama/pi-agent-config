@@ -3,7 +3,7 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `d0d5954`.
+Branche `feat/subagent-extension`. État courant : `8df48bd` + le durcissement du fan-out.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste.
 
@@ -40,10 +40,10 @@ même réglage ; seuls `high` et `max` déplacent quelque chose.
 Huit extensions : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`, `pi-lint-gate`,
 `pi-project-brief`, `pi-secret-gate`, `subagent`, `subagent-footer`.
 
-Suite de tests : `bin/test-guards`, 125 cas — huit sur le salvage du dispatch, neuf sur le
-câblage de `pi-secret-gate`, quinze sur le fan-out. Les deux derniers groupes ont été écrits
-après coup, chacun sur un chemin dont les règles étaient justes et le câblage jamais
-exercé.
+Suite de tests : `bin/test-guards`, **154 cas**. Quatre modules feuilles sans import pi —
+`fanout.ts`, `attempts.ts`, `tree.ts`, plus les fonctions pures de `run-state.ts` — existent
+pour que les tests appellent la production au lieu de la recopier. Chacun a été extrait après
+qu'un défaut est passé sous une suite verte qui décrivait sa propre copie.
 
 ---
 
@@ -346,20 +346,31 @@ exercé.
       Validation à ≥ 70 % sur ≥ 5 groupes. Zéro sur cinq voudrait dire que le prompt n'est pas
       le levier, et le passage à `find: string[]` devient l'essai suivant.
 
-- [x] **Deux défauts sur un chemin jamais exécuté**, trouvés en vérifiant la forme de ce que
-      rend un fan-out — et non par un run, puisqu'il n'y en a jamais eu.
-      `details` était construit depuis `results[0]` : sur quatre scouts dont un mort au
-      plafond, **six tours rapportés sur trente-quatre** et `isError: false`. Le bloc texte
-      disait `[scout: max_turns]` sur le quatrième ; le seul champ structuré disait que
-      l'appel avait réussi.
-      `run-state` n'avait qu'un créneau `running` par rôle, or un fan-out lance quatre enfants
-      du **même** rôle : chaque `markStart` écrasait le précédent, le **premier** `markEnd`
-      vidait le créneau alors que trois travaillaient encore, et `lastOutcome` était celui qui
-      finissait en dernier — donc un fan-out avec un enfant mort s'affichait en succès.
-      → agrégation complète, créneau à compteur d'enfants, tours au maximum et non en somme,
-      pire verdict du lot. `tests/fanout.test.ts`, quinze cas. **Même forme que
-      `pi-secret-gate`** : des règles justes et un câblage jamais exercé — trouvé cette fois
-      avant que ça ne serve.
+- [x] **Neuf défauts sur un chemin jamais exécuté**, trouvés par simulation et par cinq
+      relectures externes — jamais par un run, puisqu'il n'y en a jamais eu.
+      *Les deux premiers :* `details` construit depuis `results[0]` — six tours rapportés sur
+      trente-quatre, `isError: false` avec un enfant mort — et un créneau `running` unique par
+      rôle, écrasé par chaque `markStart`, vidé par le premier `markEnd`.
+      *Les trois suivants :* la liste de sévérité tenait six noms d'échec là où `RunResult` en
+      déclare huit, donc `timeout` et `aborted` valaient `ok` ; les tentatives comptaient pour
+      des délégations, donc un `provider_error` rattrapé par un repli survivait au lot ;
+      `details.next` restait celui du premier enfant, donc `status: failed` et `next: done`
+      dans la même réponse.
+      *Les trois derniers, sur les chemins exceptionnels :* une exception laissait le créneau
+      ouvert pour toujours ; `recordAttempt` venait après les écritures, donc une panne disque
+      effaçait une consommation déjà réelle ; et `Promise.all` rendait la main alors que trois
+      enfants du même appel tournaient encore.
+      *Et le neuvième était dans le correctif :* un abandon entre deux tentatives tombait dans
+      `exhausted`, qui annonce que toute la chaîne a refusé — alors que les modèles suivants
+      n'avaient pas été essayés.
+      **Le point commun de tous :** la primitive savait représenter la bonne chose et
+      l'appelant faisait autre chose, dans un module que les tests ne pouvaient pas atteindre.
+      D'où les quatre modules feuilles, et `tests/attempts.test.ts` qui observe la séquence
+      d'appels plutôt que le résultat.
+      *Un installeur a aussi saboté un arbre de travail* — une vérification qui cassait un
+      fichier pour prouver que les tests l'attrapent, dans un script portant `set -euo
+      pipefail`, donc la restauration n'a jamais tourné. Le sabotage a été commité et la suite
+      l'a rattrapé sur un clone frais.
 
 
 - [ ] **Lire un module de Balance Âgée en entier**, avec les sept critères de la revue en

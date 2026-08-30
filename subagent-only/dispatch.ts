@@ -19,13 +19,11 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { runAttempts } from "./attempts.js";
+import { changedBetween, treeState } from "./tree.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
 import {
-  markStart,
+  batchLifecycle,
   markProgress,
-  markModel,
-  markEnd,
-  outcomeOf,
   recordAttempt,
   type RoleName,
 } from "./run-state.js";
@@ -329,6 +327,18 @@ async function runOnce(
   // No envelope from a role that writes: ask the tree what it did.
   const salvaged = !envelope && mutates ? changedBetween(before, treeState(process.cwd())) : [];
 
+  // Before any persistence. The tokens are spent whatever happens next, and a
+  // disk error writing the artefact used to erase a consumption that had
+  // already occurred — the lifecycle closed by the catch above, the accounting
+  // silently not.
+  recordAttempt(
+    agent.name as RoleName,
+    model,
+    state.usage.total,
+    state.usage.cacheRead,
+    estimateCost(model, state.usage),
+  );
+
   mkdirSync(artifactDir, { recursive: true });
   if (agent.keepTranscript !== false) {
     writeFileSync(artifact.replace(/\.json$/, ".jsonl"), transcript.join("\n") + "\n", "utf-8");
@@ -391,13 +401,6 @@ async function runOnce(
 
   // Flat envelope now: verdict sits beside status, not under a payload key.
   // Tokens and cost of this attempt, whether or not it becomes the delegation.
-  recordAttempt(
-    agent.name as RoleName,
-    model,
-    state.usage.total,
-    state.usage.cacheRead,
-    estimateCost(model, state.usage),
-  );
 
   if (!envelope) {
     return {
@@ -442,73 +445,6 @@ async function runOnce(
   };
 }
 
-/**
- * What the tree says changed, when the child could not say it itself.
- *
- * Measured on the Balance Agee run: `32-worker` hit its twenty-turn ceiling
- * after 946,918 tokens on the deliverable that split `io.py` into three
- * modules. The three modules were on disk at the end of the run. The
- * orchestrator never learnt it: no envelope, so `changed_files` came back empty,
- * so the next review was handed no diff at all. Nothing was lost on disk and
- * everything was lost as information.
- *
- * Snapshotted before and after rather than read once, because nothing is
- * committed during a run: a single `git status` would return every change since
- * the bundle, not this delegation's. The list is reported as coming from the
- * tree, never mixed with what an envelope claims — a child that did not submit
- * did not validate anything, and the difference has to stay visible.
- */
-function treeState(cwd: string): Map<string, string> {
-  // Path plus content hash, not path alone.
-  //
-  // A set of paths cannot see a file that was already dirty before the
-  // delegation and that the worker changed again: the path is in both
-  // snapshots, the difference is empty, and the dispatcher concludes the worker
-  // wrote nothing. On a run that produced no envelope, that is the difference
-  // between salvaging the work and relaunching over the top of it.
-  //
-  // `git status --porcelain` still supplies the candidate list — it already
-  // knows about `.gitignore` and costs one call — and each candidate is hashed
-  // from disk. A file that vanished hashes to the empty string, which is a
-  // change like any other.
-  const files = new Map<string, string>();
-  let names: string[];
-  try {
-    const out = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
-      cwd,
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    // -z, because the default format quotes and escapes any path that is not
-    // plain ASCII and writes a rename as `old -> new`. Either produces a string
-    // that names no file on disk, so the hash comes back empty and the
-    // comparison silently lies. With -z each record is NUL-terminated and a
-    // rename emits its two paths as two records: the status prefix is two
-    // characters plus a space, and what follows is the path, verbatim.
-    const records = out.split("\0").filter(Boolean);
-    names = records.map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r)).filter(Boolean);
-  } catch {
-    return files;
-  }
-  for (const name of names) {
-    // A path git reports but that cannot be read is gone — deleted, or renamed
-    // away. It needs a value that no hash can equal *and* that no absent entry
-    // can equal: the empty string fails the second test, because a path missing
-    // from a snapshot also defaults to empty, and a file deleted from a clean
-    // tree is absent from the first snapshot and empty in the second. The two
-    // then compare equal and the deletion is invisible.
-    let hash = "\u0000gone";
-    try {
-      hash = createHash("sha1").update(readFileSync(join(cwd, name))).digest("hex");
-    } catch {
-      // Absent, unreadable, or a directory. The empty string is a legal state
-      // and differs from any real hash, which is what the comparison needs.
-    }
-    files.set(name, hash);
-  }
-  return files;
-}
 
 /*
  * There is no rule downgrading a verdict here, and there was one.
@@ -528,23 +464,6 @@ function treeState(cwd: string): Map<string, string> {
  * worst of the two arrangements. The loop reads the verdict, and nothing else.
  */
 
-/**
- * Paths whose content differs between two snapshots, in either direction.
- *
- * The union matters, not the second snapshot's keys. A file the operator had
- * modified before the delegation, and that the worker put back to its committed
- * state, leaves `git status` entirely: it is a key of `before` and of neither
- * `after` nor the difference. Iterating over `after` alone reports nothing
- * changed — and "nothing changed" is exactly the condition that lets a writer be
- * relaunched, on a tree where it has just erased somebody else's work.
- *
- * A missing file hashes to the empty string, so a deletion and a revert-to-HEAD
- * are both a difference like any other.
- */
-function changedBetween(before: Map<string, string>, after: Map<string, string>): string[] {
-  const paths = new Set([...before.keys(), ...after.keys()]);
-  return [...paths].filter((p) => (before.get(p) ?? "") !== (after.get(p) ?? "")).sort();
-}
 
 /**
  * What runs next, decided here rather than asked of the child.
@@ -640,8 +559,7 @@ export async function dispatch(
   // anything — and one class of failure is worth exactly one retry.
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
 
-  markStart(agent.name as RoleName, agent.model, agent.maxTurns);
-  let closed = false;
+  const life = batchLifecycle(agent.name as RoleName, agent.model, agent.maxTurns);
   let currentModel = agent.model;
 
   try {
@@ -656,13 +574,9 @@ export async function dispatch(
       },
       onFallback: (from, to) => {
         currentModel = to;
-        markModel(agent.name as RoleName, from, to);
+        life.onFallback(from, to);
       },
-      finish: (r) => {
-        closed = true;
-        markEnd(agent.name as RoleName, r.modelUsed, outcomeOf(r));
-        return r;
-      },
+      finish: life.finish,
       exhausted: (last) => ({
         ...last,
         summary:
@@ -675,18 +589,14 @@ export async function dispatch(
     /*
      * The slot must close even when nothing returns.
      *
-     * `runOnce` writes its artefact and its transcript before anything else, and
-     * a disk error there throws rather than becoming a `RunResult`. Without this
-     * the batch would keep an open child forever: the footer would show the role
-     * working with no process behind it, and `active` would never come back
-     * down. The error still propagates — this only says why the slot closed.
+     * `runOnce` writes its artefact and its transcript, and a disk error there
+     * throws rather than becoming a `RunResult`. Without this the batch would
+     * keep an open child forever: the footer would show the role working with no
+     * process behind it, and `active` would never come back down. The error
+     * still propagates — this only says why the slot closed. `abandon` is a
+     * no-op if the delegation already finished, so it is safe unconditionally.
      */
-    if (!closed) {
-      markEnd(agent.name as RoleName, currentModel, {
-        kind: "error",
-        label: opts.signal?.aborted ? "aborted" : "internal_error",
-      });
-    }
+    life.abandon(opts.signal?.aborted ? "aborted" : "internal_error");
     throw err;
   }
 }

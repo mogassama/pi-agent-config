@@ -37,6 +37,8 @@ import { test } from "node:test";
 
 import { aggregateFanout, streakOf, type ChildResult } from "../subagent-only/fanout.ts";
 import {
+  batchLifecycle,
+  formatModels,
   markEnd,
   markModel,
   markProgress,
@@ -356,4 +358,60 @@ test("a harness failure outranks whatever the envelope said", () => {
 test("blocked and a plain verdict keep their kinds", () => {
   assert.equal(outcomeOf({ status: "blocked", verdict: "blocked" }).kind, "blocked");
   assert.equal(outcomeOf({ status: "ok", verdict: "approved" }).label, "approved");
+});
+
+// ---------------------------------------------------------------------------
+// batchLifecycle — the callbacks dispatch hands to the machine
+// ---------------------------------------------------------------------------
+
+test("finish closes the delegation and records its outcome", () => {
+  // The machine's tests watch that a `finish` callback is invoked. Nothing
+  // checked what dispatch's callback *did* — the same gap, one level down.
+  const r = role();
+  const life = batchLifecycle(r, FLASH, 12);
+  assert.equal(snapshot()[r]?.running?.active, 1);
+  life.finish({ modelUsed: FLASH, status: "ok", verdict: "approved" });
+  assert.equal(snapshot()[r]?.running, undefined, "le créneau est resté ouvert");
+  assert.equal(snapshot()[r]?.runs, 1);
+  assert.equal(snapshot()[r]?.lastOutcome, "approved");
+});
+
+test("abandon closes a delegation that never returned", () => {
+  const r = role();
+  const life = batchLifecycle(r, FLASH, 12);
+  life.abandon("internal_error");
+  assert.equal(snapshot()[r]?.running, undefined, "une exception a laissé le rôle en cours");
+  assert.equal(snapshot()[r]?.lastOutcome, "internal_error");
+  assert.equal(snapshot()[r]?.lastOutcomeKind, "error");
+});
+
+test("abandon after finish does nothing, so a catch may call it blindly", () => {
+  const r = role();
+  const life = batchLifecycle(r, FLASH, 12);
+  life.finish({ modelUsed: FLASH, status: "ok", verdict: "ok" });
+  life.abandon("internal_error");
+  assert.equal(snapshot()[r]?.runs, 1, "la délégation a été comptée deux fois");
+  assert.equal(snapshot()[r]?.lastOutcome, "ok");
+});
+
+test("onFallback moves the model without opening a child", () => {
+  const r = role();
+  const life = batchLifecycle(r, FLASH, 12);
+  life.onFallback(FLASH, GEMINI);
+  assert.equal(snapshot()[r]?.running?.active, 1);
+  assert.deepEqual(snapshot()[r]?.running?.models, { [GEMINI]: 1 });
+});
+
+test("the same models render identically whatever order they were inserted", () => {
+  const short = (m: string) => m;
+  const a = formatModels({ gemini: 1, flash: 3 }, short);
+  const b = formatModels({ flash: 3, gemini: 1 }, short);
+  assert.equal(a, b, "l'ordre d'insertion a changé le rendu");
+  assert.equal(a, "flash×3 + gemini×1");
+});
+
+test("a single model renders as its name, an empty set as a question mark", () => {
+  const short = (m: string) => m;
+  assert.equal(formatModels({ flash: 4 }, short), "flash");
+  assert.equal(formatModels({}, short), "?");
 });
