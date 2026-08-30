@@ -394,6 +394,27 @@ test("abandon after finish does nothing, so a catch may call it blindly", () => 
   assert.equal(snapshot()[r]?.lastOutcome, "ok");
 });
 
+test("an exception after a fallback closes under the model in flight", () => {
+  // `abandon` captured the model the delegation started on, so an exception on
+  // the fallback removed a sibling's model from the batch and left the count
+  // describing a child that was still running on something else.
+  const r = role();
+  const life = batchLifecycle(r, FLASH, 12);
+  life.onFallback(FLASH, GEMINI);
+  life.abandon("internal_error");
+  assert.deepEqual(snapshot()[r]?.lastModels, { [GEMINI]: 1 }, "fermé au nom du modèle initial");
+});
+
+test("two abandons count one delegation", () => {
+  // The comment promised `abandon` was a no-op once closed; only `finish` set
+  // the flag.
+  const r = role();
+  const life = batchLifecycle(r, FLASH, 12);
+  life.abandon("internal_error");
+  life.abandon("internal_error");
+  assert.equal(snapshot()[r]?.runs, 1, "une exception a compté deux délégations");
+});
+
 test("onFallback moves the model without opening a child", () => {
   const r = role();
   const life = batchLifecycle(r, FLASH, 12);

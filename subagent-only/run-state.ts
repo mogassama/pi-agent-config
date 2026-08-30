@@ -31,7 +31,13 @@ export interface Outcome {
 
 const KIND_RANK: Record<OutcomeKind, number> = { error: 0, blocked: 1, verdict: 2 };
 
-/** The worse of two outcomes; ties keep the first, so the order of ends does not matter. */
+/**
+ * The worse of two outcomes, by class.
+ *
+ * Ties keep the first, so *this function* depends on the order of ends for the
+ * label — `markEnd` is what makes the public result deterministic, by keeping
+ * every label of the worst class, deduplicated and sorted.
+ */
 export function worseOutcome(a: Outcome | undefined, b: Outcome): Outcome {
   if (a === undefined) return b;
   return KIND_RANK[a.kind] <= KIND_RANK[b.kind] ? a : b;
@@ -252,19 +258,31 @@ export function markEnd(role: RoleName, model: string, outcome: Outcome): void {
 export function batchLifecycle(role: RoleName, model: string, maxTurns: number) {
   markStart(role, model, maxTurns);
   let closed = false;
+  // The model actually in flight, which is not the one this started on once a
+  // fallback has moved it. `abandon` used to close the delegation under the
+  // initial name, so an exception on the fallback removed a sibling's model
+  // from the batch and left the count describing a child that was still
+  // running on something else.
+  let currentModel = model;
   return {
     onFallback(from: string, to: string): void {
       markModel(role, from, to);
+      currentModel = to;
     },
     finish<R extends { modelUsed: string; status: "ok" | "blocked" | "failed"; verdict?: string; failure?: string }>(
       r: R,
     ): R {
+      if (closed) return r;
       closed = true;
       markEnd(role, r.modelUsed, outcomeOf(r));
       return r;
     },
     abandon(label: string): void {
-      if (!closed) markEnd(role, model, { kind: "error", label });
+      // Closing here too, which the comment already promised and the code did
+      // not: two abandons counted two delegations for one child.
+      if (closed) return;
+      closed = true;
+      markEnd(role, currentModel, { kind: "error", label });
     },
   };
 }

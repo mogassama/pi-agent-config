@@ -560,7 +560,6 @@ export async function dispatch(
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
 
   const life = batchLifecycle(agent.name as RoleName, agent.model, agent.maxTurns);
-  let currentModel = agent.model;
 
   try {
     return await runAttempts<RunResult>({
@@ -568,14 +567,8 @@ export async function dispatch(
       mutates,
       retryable: RETRYABLE as ReadonlySet<string>,
       aborted: () => Boolean(opts.signal?.aborted),
-      attempt: (model) => {
-        currentModel = model;
-        return runOnce(agent, model, task, opts);
-      },
-      onFallback: (from, to) => {
-        currentModel = to;
-        life.onFallback(from, to);
-      },
+      attempt: (model) => runOnce(agent, model, task, opts),
+      onFallback: life.onFallback,
       finish: life.finish,
       exhausted: (last) => ({
         ...last,
