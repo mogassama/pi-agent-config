@@ -506,10 +506,14 @@ export default function (pi: ExtensionAPI) {
           "defined, who calls Y, which module owns Z. Never an exhaustive " +
           "inventory, never \"check that A matches B\": a comparison of two " +
           "states is two questions here and a subtraction you do yourself.\n\n" +
-          "**Before sending a scout, collect the reconnaissance questions you " +
-          "already know you need before you can act.** Those that share a " +
-          "`scope` go in one call — they run at once, each returning its own " +
-          "envelope, and nothing is merged.\n\n" +
+          "**Scout only when you cannot name a concrete location required to " +
+          "formulate the next delegation.** Ask only for the missing location " +
+          "that blocks that delegation. If several independently blocking " +
+          "locations are already known to be missing, batch those that share a " +
+          "`scope` — they run at once, each returning its own envelope, and " +
+          "nothing is merged. Stop as soon as the next delegation can be " +
+          "written. Do not scout for confirmation, completeness, possible " +
+          "callers, or context that the next delegation does not require.\n\n" +
           "  find: [\n" +
           "    \"Where are the output roots defined?\",\n" +
           "    \"Where is each business cutoff date defined?\",\n" +
@@ -559,7 +563,7 @@ export default function (pi: ExtensionAPI) {
       promptGuidelines: [
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
-        "Asking whether something just written is consistent, or reached every caller, is a where-question — scout it first and name the locations. Not a question you can already answer: scouting a tree you have just read yourself returns what you gave it.",
+        "Consistency within the change is reviewer work, not preflight scout work. Whether the change reached an unknown caller or pattern is scouted only when the reviewer returns that specific where-question in `open_risks`; do not scout it speculatively before the worker. And a question you can already answer is not scout work either — scouting a tree you have just read yourself returns what you gave it.",
         "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume: it reaches the ceiling and returns nothing. Split it into questions that each locate one thing — how to send them is in the `find` parameter of task.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
