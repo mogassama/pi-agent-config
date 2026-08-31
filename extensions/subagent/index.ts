@@ -17,7 +17,9 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
+import { countsLine } from "../../subagent-only/counts.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
+import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -335,13 +337,15 @@ function decodeEscapes(text: string): string {
   return text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+/**
+ * Files the open review covers.
+ *
+ * The state machine lives in `subagent-only/review-boundary.ts`, a leaf module
+ * the tests call directly. Kept as a wrapper here so the call sites read the
+ * same as before and `HISTORY` stays the single source.
+ */
 function changedSinceLastReview(): string[] {
-  const paths: string[] = [];
-  for (let i = HISTORY.length - 1; i >= 0; i--) {
-    if (HISTORY[i].agent === "reviewer") break;
-    paths.unshift(...HISTORY[i].changedFiles);
-  }
-  return [...new Set(paths)];
+  return openReviewBoundary(HISTORY);
 }
 
 /**
@@ -564,6 +568,7 @@ export default function (pi: ExtensionAPI) {
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files is scout work: the moment the question is *where* rather than *what*, delegate it instead of grepping.",
         "Consistency within the change is reviewer work, not preflight scout work. Whether the change reached an unknown caller or pattern is scouted only when the reviewer returns that specific where-question in `open_risks`; do not scout it speculatively before the worker. And a question you can already answer is not scout work either — scouting a tree you have just read yourself returns what you gave it.",
+        "When a reviewer result reports one or more `open-risks`, open its artifact. For each `open_risks` entry that is a where-question naming a term, file, caller, or pattern the reviewer could not search, route that question to scout before any further mutation of the same change. Use only the search target the reviewer named; do not broaden it or add questions. If several such risks from that review share a scope, batch them in one call. The scout's locations go into a follow-up review of the same open change, not to a worker: it is the review that was left open, and only a confirmed defect sends a worker.",
         "A scout task asking for every occurrence, a full inventory, or a comparison of two states is an audit wearing a scout costume: it reaches the ceiling and returns nothing. Split it into questions that each locate one thing — how to send them is in the `find` parameter of task.",
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
@@ -747,12 +752,7 @@ export default function (pi: ExtensionAPI) {
         // `ok`. The counts follow so the artefact is opened when there is
         // something in it, rather than on every review to find out.
         const outcome = result.verdict ?? result.status;
-        const counts = [
-          result.findings ? `${result.findings} finding${result.findings > 1 ? "s" : ""}` : "",
-          result.outOfScope ? `${result.outOfScope} out-of-scope` : "",
-        ]
-          .filter(Boolean)
-          .join(", ");
+        const counts = countsLine(result);
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`

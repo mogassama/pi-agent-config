@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { runAttempts } from "./attempts.js";
+import { envelopeCounts } from "./counts.js";
 import { changedBetween, treeState } from "./tree.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
 import {
@@ -46,6 +47,18 @@ export interface RunResult {
   verdict?: string;
   findings?: number;
   outOfScope?: number;
+  /**
+   * How many risks the review left open.
+   *
+   * The counts above exist so the artefact is opened when there is something in
+   * it. `open_risks` was not among them, and run 12 measured the consequence:
+   * sixteen reviews wrote twenty-seven of them, several naming a term the
+   * reviewer could not search for — and the orchestrator, handed
+   * `[reviewer: approved, 2 findings]`, had no signal that anything was
+   * waiting. One of those questions reached a scout. A field that decides an
+   * action has to be visible to whoever takes it.
+   */
+  openRisks?: number;
   /**
    * Paths the delegation says it wrote.
    *
@@ -433,8 +446,7 @@ async function runOnce(
     verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
     recommendation:
       typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,
-    findings: Array.isArray(envelope.findings) ? envelope.findings.length : undefined,
-    outOfScope: Array.isArray(envelope.out_of_scope) ? envelope.out_of_scope.length : undefined,
+    ...envelopeCounts(envelope),
     changedFiles: Array.isArray(envelope.changed_files)
       ? envelope.changed_files.filter((f: unknown): f is string => typeof f === "string")
       : undefined,
