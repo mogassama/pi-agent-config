@@ -409,6 +409,32 @@ qu'un défaut est passé sous une suite verte qui décrivait sa propre copie.
       *Mesurer, pas le coût — la dispersion l'écrase :* délégations scout, fichiers nommés par
       texte de tâche, tours worker avant la première écriture, nombre de `needs_rework`.
 
+- [ ] **Identifiant de flux par livrable** — idée de Mo, après le run 12. Chaque délégation
+      porte le livrable qu'elle sert ; à terme un couloir par livrable, chacun avec sa propre
+      séquence.
+      *Ce que ça débloque :* `HISTORY`, `sinceReview` et `wroteNothing` sont aujourd'hui des
+      structures globales qui supposent une ligne de délégations ordonnée. En `Map<laneId, …>`
+      la garde de série redevient sensée — une séquence par couloir — et le reviewer retrouve
+      un diff attribuable. La plomberie de dispatch existe déjà : `tasks[]` + `allSettled` est
+      générique, seul le scout multiplie ses tâches (`index.ts:610`).
+      *Ce que ça ne règle pas :* l'isolation disque. Un identifiant sans `git worktree` par
+      couloir est de la comptabilité posée sur une course. Et la réconciliation de fin de
+      couloirs n'a pas de titulaire — l'orchestrateur ne code pas.
+      *La vraie forme :* les livrables 2 à 11 importent ce que le 1 a créé. Ce n'est pas onze
+      couloirs, c'est un préfixe série puis un éventail. Où l'éventail commence est une
+      propriété du bundle, à déclarer par Strategic Forge, pas à inférer par l'orchestrateur —
+      sinon on repaie en scouts ce qu'on gagne en horloge.
+      *Valeur immédiate, à concurrence 1 :* le champ seul permet de lire les questions scout
+      par worker **par livrable** au lieu d'une moyenne sur quinze. C'est l'angle mort de la
+      cible ≤ 1,5 — un worker peut légitimement demander trois localisations. Coût : un champ
+      dans le schéma de `task` et dans l'artefact. Donc pas dans le run 12 : ça change le
+      schéma de l'outil.
+      *Règle, non négociable :* le champ est auto-déclaré par l'orchestrateur. Tant qu'il ne
+      sert qu'à mesurer, un mauvais label coûte de la précision. **Ne jamais brancher une garde
+      sur un champ que le modèle remplit lui-même.**
+      *Note de méthode :* le gain est le mur d'horloge, pas le coût — la parallélisation ne
+      retire pas un token. À confronter avec gpt sol avant de toucher l'architecture.
+
 ### ~~Séquence Qwen / advisor~~ — close
 
 Qwen n'a jamais été atteint et la piste est abandonnée, pas réfutée : trois clés, trois
