@@ -74,6 +74,19 @@ const dead = (n: number, failure: string): ChildResult =>
 // aggregateFanout
 // ---------------------------------------------------------------------------
 
+// A reviewer never fans out, so its counts reach `details` through the single
+// child. `open_risks` was absent from this record as well as from the head
+// line, and both had to be reported for the orchestrator to act on it.
+test("a review's open risks reach the structured details", () => {
+  const d = aggregateFanout([child(1, { role: "reviewer", verdict: "approved", findings: 2, openRisks: 3 })]);
+  assert.equal(d.openRisks, 3);
+  assert.equal(d.findings, 2);
+});
+
+test("a child without the field reports null rather than nothing", () => {
+  assert.equal(aggregateFanout([child(1)]).openRisks, null);
+});
+
 test("four successes: turns and usage are summed, not the first child's", () => {
   const d = aggregateFanout([
     child(1),

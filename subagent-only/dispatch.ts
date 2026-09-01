@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { runAttempts } from "./attempts.js";
-import { envelopeCounts } from "./counts.js";
+import { envelopeCounts, type EnvelopeCounts } from "./counts.js";
 import { changedBetween, treeState } from "./tree.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
 import {
@@ -29,36 +29,34 @@ import {
   type RoleName,
 } from "./run-state.js";
 
-export interface RunResult {
+/**
+ * What a delegation returned.
+ *
+ * Extends `EnvelopeCounts` rather than restating it. The three counts are one
+ * contract, read from the envelope by `envelopeCounts` and rendered by
+ * `countsLine`; declaring them again here is what let `open_risks` be read in
+ * this file and never rendered in `index.ts`. And the compiler would not catch
+ * the next drift on its own: every count is optional, so a `RunResult` missing
+ * a field added to `EnvelopeCounts` stays structurally assignable to it.
+ */
+export interface RunResult extends EnvelopeCounts {
   role: string;
   status: "ok" | "blocked" | "failed";
   summary: string;
   next: string;
   /**
-   * The role's own outcome, when it has one, and the two counts that decide
-   * whether the artefact is worth opening.
+   * The role's own outcome, when it has one.
    *
    * `status` answers "did the delegation complete", and it is `ok` on every run
    * that reached submit — including a review that rejects the change. Measured
    * on run 3ed33e: four of seven reviews returned `needs_rework` and all four
    * reached the orchestrator as `[reviewer: ok, next=done]`. The verdict was
    * computed one line above, for the footer, and never left this file.
+   *
+   * The counts that decide whether the artefact is worth opening come from
+   * `EnvelopeCounts`.
    */
   verdict?: string;
-  findings?: number;
-  outOfScope?: number;
-  /**
-   * How many risks the review left open.
-   *
-   * The counts above exist so the artefact is opened when there is something in
-   * it. `open_risks` was not among them, and run 12 measured the consequence:
-   * sixteen reviews wrote twenty-seven of them, several naming a term the
-   * reviewer could not search for — and the orchestrator, handed
-   * `[reviewer: approved, 2 findings]`, had no signal that anything was
-   * waiting. One of those questions reached a scout. A field that decides an
-   * action has to be visible to whoever takes it.
-   */
-  openRisks?: number;
   /**
    * Paths the delegation says it wrote.
    *

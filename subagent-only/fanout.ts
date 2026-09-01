@@ -10,7 +10,15 @@
  * right beside a wiring nobody exercises.
  */
 
-export interface ChildResult {
+import type { EnvelopeCounts } from "./counts.js";
+
+/**
+ * What one child of a call returned. Extends `EnvelopeCounts` rather than
+ * restating it: these counts were declared here, in `RunResult`, and in
+ * `FanoutDetails` below, and `open_risks` was added to none of the four places
+ * that needed it.
+ */
+export interface ChildResult extends EnvelopeCounts {
   role: string;
   modelUsed: string;
   status: "ok" | "blocked" | "failed";
@@ -20,8 +28,6 @@ export interface ChildResult {
   usage: Record<string, number>;
   failure?: string;
   verdict?: string;
-  findings?: number;
-  outOfScope?: number;
 }
 
 export interface FanoutDetails {
@@ -31,6 +37,7 @@ export interface FanoutDetails {
   verdict: string | null;
   findings: number | null;
   outOfScope: number | null;
+  openRisks: number | null;
   next: string;
   turns: number;
   usage: Record<string, number>;
@@ -80,11 +87,15 @@ export function aggregateFanout(results: ChildResult[]): FanoutDetails {
     // One model when they agree, the list when a fallback split them.
     model: [...new Set(results.map((r) => r.modelUsed))].join(", "),
     status,
-    // Only the scout can fan out and its envelope carries none of these three,
-    // so a single child's values are the only ones there are.
+    // Only the scout can fan out and its envelope carries none of these four,
+    // so a single child's values are the only ones there are. They are the
+    // structured twin of the head line: a count missing here is invisible to
+    // whoever reads `details` instead of the text, which is how `open_risks`
+    // was missing from both until run 12 measured the cost.
     verdict: first.verdict ?? null,
     findings: first.findings ?? null,
     outOfScope: first.outOfScope ?? null,
+    openRisks: first.openRisks ?? null,
     // Anything short of every child succeeding comes back to the orchestrator.
     next: results.every((r) => r.next === "done") ? "done" : "orchestrator",
     turns: results.reduce((n, r) => n + r.turns, 0),

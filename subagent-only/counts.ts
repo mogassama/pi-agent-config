@@ -11,9 +11,14 @@
  *
  * The field was read from the envelope in `dispatch.ts` and rendered in
  * `index.ts` — two files, three lines each, no test between them. Producer and
- * consumer of the same contract live here now, so adding a fourth count is one
- * edit in one place and the drift that caused the incident has nowhere to
- * happen.
+ * consumer of the same contract live here now, and `RunResult` extends
+ * `EnvelopeCounts` rather than restating it, so a fourth count is one edit in
+ * one place.
+ *
+ * That last part is not stylistic. Every count is optional, so a `RunResult`
+ * that redeclared them would stay structurally assignable to `EnvelopeCounts`
+ * after a field was added to only one of the two — the compiler would report
+ * nothing, which is how the first drift went unnoticed.
  */
 
 export interface EnvelopeCounts {
