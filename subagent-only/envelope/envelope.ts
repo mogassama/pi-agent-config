@@ -133,8 +133,32 @@ const payloads = {
     }),
     open_risks: Type.Array(Type.String(), {
       description:
-        "What could not be settled within scope, and why. Empty array is legal — say nothing rather than padding.",
+        "What could not be settled within scope, and why. Empty array is legal — " +
+        "say nothing rather than padding. A continuation risk you were asked to " +
+        "re-examine and still cannot settle does not go here: leave it out of " +
+        "`resolved_risks` and it stays open under the id it already has. This " +
+        "array is for concerns discovered now.",
     }),
+    /*
+     * The one field a review may say about a risk it did not raise, and it is a
+     * claim rather than a decision.
+     *
+     * Optional because most reviews are not continuations, and forcing an empty
+     * array on every review is the cost measured on run 3ed33e: five of seven
+     * first submits failed on a required field with no legal empty form.
+     *
+     * There is no field for classifying a risk — no kind, no scoutable, no
+     * where-versus-exhaustive. Routing is the orchestrator's, and a reviewer
+     * that labelled its own risks would become the authority on it.
+     */
+    resolved_risks: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Ids of the continuation risks listed at the top of this task that you " +
+          "have now settled, copied exactly. Only those: an id you were not given " +
+          "is ignored. Omit rather than send an empty array.",
+      }),
+    ),
     top_priority: Type.Union([Type.String(), Type.Null()], {
       description: "The single thing to fix first, or null when there is nothing to fix.",
     }),

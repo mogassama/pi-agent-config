@@ -58,6 +58,14 @@ export interface RunResult extends EnvelopeCounts {
    */
   verdict?: string;
   /**
+   * Ids of the risks this review says it settled, as submitted.
+   *
+   * Only ever a claim, and only meaningful on a follow-up review. Not a count,
+   * so it does not belong in `EnvelopeCounts`: the ledger checks each id
+   * against what this delegation was actually handed before closing anything.
+   */
+  resolvedRisks?: string[];
+  /**
    * Paths the delegation says it wrote.
    *
    * Two consumers: the diff handed to the next review, and the loop guard's
@@ -442,9 +450,12 @@ async function runOnce(
     summary: String(envelope.summary ?? "").trim() || "(empty summary)",
     next: deriveNext(envelope),
     verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
+    resolvedRisks: Array.isArray(envelope.resolved_risks)
+      ? envelope.resolved_risks.filter((r: unknown): r is string => typeof r === "string")
+      : undefined,
     recommendation:
       typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,
-    ...envelopeCounts(envelope),
+    ...envelopeCounts(envelope, `${opts.ctx.runId}-${seq}`),
     changedFiles: Array.isArray(envelope.changed_files)
       ? envelope.changed_files.filter((f: unknown): f is string => typeof f === "string")
       : undefined,

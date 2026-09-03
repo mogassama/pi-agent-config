@@ -1,0 +1,669 @@
+#!/usr/bin/env python3
+"""
+subagent-shadow — what the plan predicted, what the risks did, what actually ran.
+
+    subagent-shadow                        # the most recent run
+    subagent-shadow <runId>
+    subagent-shadow --session <path.jsonl> # also count artefact accesses
+
+Reads what the subagent extension wrote into .pi-subagent-runs/:
+
+    <runId>-plan.json           the orchestrator's frozen decomposition
+    <runId>-delegations.jsonl   one line per child: role, work_unit, changed files
+    <runId>-risks.jsonl         one line per ledger transition
+    <runId>-<seq>-<role>.json   the envelopes themselves
+
+The projection lives here and not in pi. The runtime records facts, because
+those have to be right while the run is happening. Deciding what they add up to
+does not, and `OPEN > 0` changes no decision pi makes today.
+
+This is the fifth instrument on this branch and earlier ones produced a wrong
+measurement more than once, so it refuses more than it reports:
+
+  * Nothing execution-linked is printed unless every worker attempt carries a
+    work_unit, the plan validates strictly, and the delegation journal accounts
+    for every child artefact on disk. A plausible number computed on partial
+    data is worse than no number.
+  * A dependency miss is not computable from changed_files. What a unit writes
+    is recorded; what it reads is not.
+  * Whether an artefact was opened only to recover open_risks, and whether a
+    scout was provoked by writing the plan, are read in the session by a person.
+    Neither is counted here, because neither can be.
+"""
+
+import fnmatch
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+RUNS = Path.cwd() / ".pi-subagent-runs"
+
+
+# ------------------------------------------------------------------- loading
+
+
+def read_jsonl(path):
+    """
+    Returns (rows, malformed). The second number is not decoration.
+
+    Skipping an unparseable line silently was the quiet version of every failure
+    this script exists to prevent. A half-written append leaves one truncated
+    line, and `opened 12 / resolved 3 / open 9` prints exactly the same whether
+    the ledger saw twelve transitions or thirteen. The delegation journal has
+    the artefacts as an independent witness; `<runId>-risks.jsonl` has nothing,
+    so the count of lines that did not parse has to travel with the rows.
+    """
+    rows, malformed = [], 0
+    if not Path(path).exists():
+        return rows, malformed
+    for raw in Path(path).read_text().splitlines():
+        if not raw.strip():
+            continue
+        try:
+            rows.append(json.loads(raw))
+        except Exception:
+            malformed += 1
+    return rows, malformed
+
+
+def latest_run(runs=RUNS):
+    seen = list(runs.glob("*-delegations.jsonl")) + list(runs.glob("*-risks.jsonl"))
+    if not seen:
+        return None
+    return max(seen, key=lambda p: p.stat().st_mtime).name.split("-")[0]
+
+
+# ---------------------------------------------------------------------- plan
+
+
+def validate_plan(doc):
+    """
+    Strict. Returns ("usable" | "invalid" | "absent", reason, units).
+
+    Every check here exists because the number this plan feeds — DAG width — is
+    the one that decides whether the lanes get built. The first version accepted
+    a plan as long as one unit survived cleaning, and levelled it after silently
+    dropping dependencies naming units the plan never defined. That widens the
+    DAG by discarding exactly the constraint being measured. So there is no
+    partial acceptance: a plan is usable whole, or it is invalid and nothing
+    downstream of it is printed.
+    """
+    if doc is None:
+        return "absent", "no plan was written", []
+    if not isinstance(doc, dict):
+        return "invalid", "top level is not an object", []
+    if doc.get("version") != 1:
+        return "invalid", f"version is {doc.get('version')!r}, expected 1", []
+
+    raw = doc.get("work_units")
+    if not isinstance(raw, list) or not raw:
+        return "invalid", "work_units is missing or empty", []
+
+    problems, units, ids = [], [], []
+    for i, u in enumerate(raw):
+        if not isinstance(u, dict):
+            problems.append(f"unit {i} is not an object")
+            continue
+        uid = u.get("id")
+        if not isinstance(uid, str) or not uid.strip():
+            problems.append(f"unit {i} has no usable id")
+            continue
+        if uid in ids:
+            problems.append(f"{uid}: duplicate id")
+            continue
+        # `goal` is deliberately not checked here. See `goal_gaps`: it is the one
+        # field of the format that feeds no calculation, so a missing one is
+        # reported rather than allowed to delete a ninety-minute run's numbers.
+        deps, scope = u.get("depends_on"), u.get("expected_write_scope")
+        if not isinstance(deps, list) or any(not isinstance(d, str) or not d.strip() for d in deps):
+            problems.append(f"{uid}: depends_on is not a list of ids")
+            deps = []
+        if not isinstance(scope, list) or not scope or any(
+            not isinstance(p, str) or not p.strip() for p in scope
+        ):
+            problems.append(f"{uid}: expected_write_scope is not a non-empty list of paths")
+            scope = []
+        if uid in deps:
+            problems.append(f"{uid}: depends on itself")
+        ids.append(uid)
+        units.append({"id": uid, "goal": u.get("goal"), "depends_on": deps, "scope": scope})
+
+    known = set(ids)
+    for u in units:
+        for d in u["depends_on"]:
+            if d not in known:
+                problems.append(f"{u['id']}: depends on {d}, which the plan does not define")
+
+    if not problems:
+        cyclic = cycles(units)
+        if cyclic:
+            problems.append(f"dependency cycle among {', '.join(cyclic)}")
+
+    if problems:
+        return "invalid", "; ".join(problems), []
+    return "usable", "", units
+
+
+def goal_gaps(units):
+    """
+    Units with no stated goal. A warning, and never a reason to discard the plan.
+
+    Two kinds of validity are being kept apart here. `id`, `depends_on`,
+    `expected_write_scope`, `version` and acyclicity decide the numbers — a
+    fault in any of them can falsify the width, the coverage or the overlaps, so
+    `validate_plan` refuses the whole plan. `goal` feeds no calculation. It is
+    what a reader uses to judge that a unit is one coherent, independently
+    reviewable change, which is a question about the decomposition rather than
+    about the topology.
+
+    Making it structural was briefly the rule and it was the wrong trade: a
+    field the orchestrator might phrase badly would have deleted every
+    measurement of a ninety-minute run. But waving it through would be the other
+    error, because an unstated goal is exactly what hides a unit that is really
+    two. So the structural numbers stand and the semantic completeness is
+    reported beside them: a plan with a gap here has not validated the shadow
+    for a real scheduler, however sound its width.
+    """
+    return [u["id"] for u in units if not isinstance(u.get("goal"), str) or not u["goal"].strip()]
+
+
+def load_plan(path):
+    p = Path(path)
+    if not p.exists():
+        return validate_plan(None)
+    try:
+        return validate_plan(json.loads(p.read_text()))
+    except Exception as exc:
+        return "invalid", f"not JSON: {exc}", []
+
+
+def cycles(units):
+    """Ids that cannot be levelled: in a cycle, or behind one."""
+    known = {u["id"] for u in units}
+    deps = {u["id"]: [d for d in u["depends_on"] if d in known] for u in units}
+    settled, pending, changed = set(), set(deps), True
+    while changed:
+        changed = False
+        for uid in list(pending):
+            if all(d in settled for d in deps[uid]):
+                settled.add(uid)
+                pending.discard(uid)
+                changed = True
+    return sorted(pending)
+
+
+def reachable(units):
+    """Transitive dependency closure, so `independent` means no path either way."""
+    deps = {u["id"]: set(u["depends_on"]) for u in units}
+    closure = {}
+
+    def walk(uid, seen):
+        if uid in closure:
+            return closure[uid]
+        out = set()
+        for d in deps.get(uid, ()):
+            if d in seen:
+                continue
+            out.add(d)
+            out |= walk(d, seen | {uid})
+        closure[uid] = out
+        return out
+
+    for uid in deps:
+        walk(uid, set())
+    return closure
+
+
+def dag_width(units):
+    """
+    The real width: the largest set of units none of which precedes another.
+
+    The first version reported the biggest longest-path level and called it the
+    width, which is a different quantity. On
+
+        W0 → W1
+        W0 → W2
+        W3   independent
+
+    the levels are {W0, W3} and {W1, W2}, so it reported 2 — while {W1, W2, W3}
+    is a three-way antichain and three lanes could be busy at once. The old test
+    used a perfectly stratified fan, where the two quantities happen to agree,
+    so it passed.
+
+    This is the number that decides whether the lanes are worth building, so it
+    is computed rather than approximated. Dilworth: the maximum antichain equals
+    the minimum chain cover, which is |V| minus a maximum matching on the
+    bipartite graph of the transitive closure. At ten to thirty units the cost
+    is nothing.
+    """
+    closure = reachable(units)
+    ids = [u["id"] for u in units]
+    precedes = {u: [v for v in ids if u in closure[v]] for u in ids}
+    matched = {}
+
+    def augment(u, seen):
+        for v in precedes[u]:
+            if v in seen:
+                continue
+            seen.add(v)
+            if v not in matched or augment(matched[v], seen):
+                matched[v] = u
+                return True
+        return False
+
+    return len(ids) - sum(1 for u in ids if augment(u, set()))
+
+
+def layers(units):
+    """
+    Longest-path levels: dependency depth, and how many units share a level.
+
+    Not the width of the DAG — see `dag_width`. Kept because depth and the
+    shape of the levels are worth seeing, under names that say what they are.
+    """
+    deps = {u["id"]: u["depends_on"] for u in units}
+    level, pending = {}, set(deps)
+    while pending:
+        ready = [u for u in pending if all(d in level for d in deps[u])]
+        if not ready:
+            break
+        for uid in ready:
+            level[uid] = 1 + max((level[d] for d in deps[uid]), default=-1)
+            pending.discard(uid)
+    by_level = defaultdict(list)
+    for uid, lv in level.items():
+        by_level[lv].append(uid)
+    return dict(by_level)
+
+
+# --------------------------------------------------------------------- scope
+
+
+def literal_prefix(pattern):
+    i = len(pattern)
+    for ch in "*?[":
+        j = pattern.find(ch)
+        if j != -1:
+            i = min(i, j)
+    return pattern[:i]
+
+
+def patterns_overlap(a, b):
+    """
+    Conservative: yes whenever two declarations could name a common file.
+
+    `set(a) & set(b)` was the first version, and it called `src/**` and
+    `src/foo.py` disjoint — backwards for a metric whose job is to find units
+    that cannot safely run side by side. Over-reporting an overlap costs a look;
+    missing one corrupts the decision about lanes.
+    """
+    a, b = a.rstrip("/"), b.rstrip("/")
+    if a == b:
+        return True
+    if fnmatch.fnmatch(a, b) or fnmatch.fnmatch(b, a):
+        return True
+    if a.startswith(b + "/") or b.startswith(a + "/"):
+        return True
+    pa, pb = literal_prefix(a), literal_prefix(b)
+    if pa != a or pb != b:  # at least one of the two is a glob
+        # A pattern opening on a wildcard has an empty literal prefix, and
+        # `if short` then took that for "no common ground" — so `*/foo.py` and
+        # `src/*.py` were called disjoint although `src/foo.py` satisfies both.
+        # Empty means unconstrained, which is the opposite of disjoint, so it
+        # answers yes. Deliberately pessimistic: over-reporting costs an
+        # inspection, under-reporting lets two incompatible writers into the
+        # same file.
+        if not pa or not pb:
+            return True
+        return pa.startswith(pb) or pb.startswith(pa)
+    return False
+
+
+def scopes_overlap(a_scope, b_scope):
+    return sorted({f"{p} ~ {q}" for p in a_scope for q in b_scope if patterns_overlap(p, q)})
+
+
+def in_scope(path, patterns):
+    for p in patterns:
+        if path == p or fnmatch.fnmatch(path, p):
+            return True
+        if path.startswith(p.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def wide(pattern):
+    """A scope that can score full coverage and still be useless for lanes."""
+    return "*" in pattern or "?" in pattern or "." not in Path(pattern).name
+
+
+# -------------------------------------------------------------------- ledger
+
+
+def fold_risks(events):
+    state, chars, still_open, ignored, routed = {}, {}, 0, defaultdict(int), 0
+    for e in events:
+        ev, rid = e.get("event"), e.get("id")
+        if not rid:
+            continue
+        if ev == "opened":
+            state[rid] = "open"
+            chars[rid] = e.get("chars", 0)
+        elif ev == "routed":
+            state[rid] = "routed"
+            routed += 1
+        elif ev == "resolved":
+            state[rid] = "resolved"
+        elif ev == "still-open":
+            state[rid] = "open"
+            still_open += 1
+        elif ev == "ignored":
+            ignored[e.get("reason", "?")] += 1
+    return {
+        "state": state,
+        "chars": chars,
+        "still_open": still_open,
+        "ignored": dict(ignored),
+        "routed_events": routed,
+    }
+
+
+# ---------------------------------------------------------------- instrument
+
+
+def annotation(delegations):
+    """
+    Coverage over *every* worker attempt, not only those that changed a file.
+
+    Filtering to attempts with changed_files first was the defect: a worker that
+    wrote nothing and carried no work_unit left both numerator and denominator,
+    so a run of two workers with one unannotated reported 1/1 and declared its
+    metrics complete. The annotation question is about delegations, the scope
+    question is about files, and they get separate denominators.
+    """
+    attempts = [d for d in delegations if d.get("role") == "worker"]
+    annotated = [d for d in attempts if d.get("work_unit")]
+    return {
+        "attempts": attempts,
+        "annotated": annotated,
+        "writing": [d for d in annotated if d.get("changed_files")],
+        "missing": [d.get("artifact", "?") for d in attempts if not d.get("work_unit")],
+        "complete": bool(attempts) and len(annotated) == len(attempts),
+    }
+
+
+def reconcile(run_id, delegations, runs=RUNS):
+    """
+    Every child artefact on disk must have a line in the journal.
+
+    `logDelegations` swallows its own write errors so a full disk cannot fail a
+    run, which is right — and it means the journal can be short with nothing
+    saying so, and a short journal reports 9/9 annotated for a run of ten
+    workers. The artefacts are written by a different call on a different path,
+    so they are an independent witness to how many children there were.
+    """
+    pattern = re.compile(rf"^{re.escape(run_id)}-\d+-[A-Za-z0-9_-]+\.json$")
+    on_disk = {p.name for p in runs.glob(f"{run_id}-*.json") if pattern.match(p.name)}
+    recorded = {Path(d.get("artifact", "")).name for d in delegations}
+    return sorted(on_disk - recorded)
+
+
+def artifact_accesses(session_path):
+    """
+    A raw count. Not a target, and not the metric the transport was built for.
+
+    A reviewer artefact is opened legitimately — findings, out_of_scope, the
+    full diagnostic. What run 14 measured, and what this lot is aimed at, is the
+    narrower `opened only to recover open_risks`, and deciding which access that
+    was means reading what the orchestrator did next. So this counts accesses
+    and leaves the classification where it belongs, beside plan-induced scout
+    questions: a person reads the session.
+
+    Counted across tools rather than `read` alone, since five of run 14's
+    fourteen recoveries went through a python heredoc, which is not a read call.
+    """
+    by_tool = defaultdict(int)
+    for e in read_jsonl(session_path)[0]:
+        if e.get("type") != "tool_execution_start":
+            continue
+        if "-reviewer.json" not in json.dumps(e):
+            continue
+        by_tool[e.get("tool") or e.get("name") or "?"] += 1
+    return dict(by_tool)
+
+
+# ------------------------------------------------------------------ printing
+
+
+def line(label, value=""):
+    print(f"  {label:<34}{value}")
+
+
+def note(text):
+    print(f"      {text}")
+
+
+def report(run_id, session=None, runs=RUNS):
+    delegations, bad_delegations = read_jsonl(runs / f"{run_id}-delegations.jsonl")
+    risks, bad_risks = read_jsonl(runs / f"{run_id}-risks.jsonl")
+    status, reason, units = load_plan(runs / f"{run_id}-plan.json")
+
+    print(f"run {run_id}")
+
+    # ----------------------------------------------------------------- plan
+    print("\nPLAN")
+    line("status", status if not reason else f"{status} — {reason}")
+    if status == "usable":
+        by_level = layers(units)
+        closure = reachable(units)
+        line("work units", len(units))
+        gaps = goal_gaps(units)
+        line("goal coverage", f"{len(units) - len(gaps)}/{len(units)}")
+        if gaps:
+            print("  PLAN SEMANTICS: INCOMPLETE")
+            for g in gaps:
+                note(f"{g}: no stated goal")
+            note("the structural numbers below stand — goal feeds none of them. What")
+            note("cannot be judged is whether each unit is one coherent, independently")
+            note("reviewable change, so this shadow has not validated the decomposition")
+            note("for a real scheduler.")
+        line("dag width", dag_width(units))
+        note("maximum antichain: units none of which precedes another, so the most")
+        note("lanes that could ever be busy at once. Structural potential, not")
+        note("expected speedup: five units of ten seconds hanging off ninety minutes")
+        note("of sequential work is a width of five and almost no wall-clock to win.")
+        line("dependency depth", len(by_level))
+        line("max layer size", max((len(v) for v in by_level.values()), default=0))
+        note("longest-path levels, which is a different quantity from the width")
+        line("runnable at start", len(by_level.get(0, [])))
+        overlaps = []
+        for i, a in enumerate(units):
+            for b in units[i + 1 :]:
+                if b["id"] in closure[a["id"]] or a["id"] in closure[b["id"]]:
+                    continue
+                shared = scopes_overlap(a["scope"], b["scope"])
+                if shared:
+                    overlaps.append(f"{a['id']}~{b['id']}: {'; '.join(shared)}")
+        line("predicted scope overlap", len(overlaps))
+        note("conservative: two declarations that could name a common file")
+        for o in overlaps:
+            note(o)
+        broad = sorted({p for u in units for p in u["scope"] if wide(p)})
+        if broad:
+            line("wide scope patterns", ", ".join(broad))
+            note("a wide scope can score full coverage and still be unusable for lanes")
+
+    # --------------------------------------------------------------- ledger
+    print("\nRISK LEDGER")
+    if bad_risks:
+        # No independent witness exists for this file, unlike the delegation
+        # journal, so a lost transition would be invisible in the numbers below.
+        print("  RISK LEDGER: INCOMPLETE")
+        note(f"malformed JSONL lines: {bad_risks}")
+        note("the counts below are computed on the lines that parsed")
+    if not risks:
+        line("(no transitions recorded)")
+    else:
+        f = fold_risks(risks)
+        counts = defaultdict(int)
+        for s in f["state"].values():
+            counts[s] += 1
+        line("opened", len(f["state"]))
+        line("routing events", f["routed_events"])
+        line("resolved", counts["resolved"])
+        line("open at end", counts["open"])
+        line("routed at end", counts["routed"])
+        line("still-open events", f["still_open"])
+        if f["chars"]:
+            line("risk chars", f"total {sum(f['chars'].values())}   max {max(f['chars'].values())}")
+        for k, n in sorted(f["ignored"].items()):
+            line(f"ignored ({k})", n)
+        print()
+        note("open at end    concern currently unresolved")
+        note("routed at end  continuation engaged from which no usable review came")
+        note("               back. The process may well have returned; what did not")
+        note("               is an envelope that could be read.")
+        note("still-open     a usable review came back and did not settle its risk.")
+        note("               Not a measure of a forgotten field: the runtime cannot")
+        note("               tell an examined-and-unresolved risk from an omitted")
+        note("               one, and no extra field would let it.")
+
+    # ------------------------------------------------------------ transport
+    print("\nTRANSPORT")
+    if session is None:
+        line("reviewer artefact accesses", "not measured (pass --session <orchestrator jsonl>)")
+    else:
+        by_tool = artifact_accesses(session)
+        line("reviewer artefact accesses", sum(by_tool.values()))
+        for tool, n in sorted(by_tool.items()):
+            note(f"{tool}: {n}")
+    note("a raw count, with no target. Opening a reviewer artefact is legitimate:")
+    note("findings, out_of_scope, the full diagnostic. The figure this lot is aimed")
+    note("at is `accesses whose only purpose was recovering open_risks`, target 0,")
+    note("and it is read in the session by a person — no heuristic here can tell")
+    note("the two apart.")
+
+    # --------------------------------------------------------------- shadow
+    print("\nSHADOW EXECUTION")
+    if not delegations:
+        line("(no delegations recorded)")
+        return
+
+    scouts = [d for d in delegations if d.get("role") == "scout"]
+    first_worker = next((i for i, d in enumerate(delegations) if d.get("role") == "worker"), None)
+    # `if first_worker` was the bug: a run whose first delegation is a worker
+    # gives index 0, which is falsy, and every scout in the run was counted as
+    # pre-worker.
+    pre = (
+        len([d for d in delegations[:first_worker] if d.get("role") == "scout"])
+        if first_worker is not None
+        else len(scouts)
+    )
+    line("scout questions", len(scouts))
+    line("pre-worker scout questions", pre)
+    note("a guard-rail, not a causal measure: whether a scout was provoked by")
+    note("writing the plan is read in the question, not counted here")
+
+    a = annotation(delegations)
+    line("worker attempts", len(a["attempts"]))
+    line("carrying work_unit", f"{len(a['annotated'])}/{len(a['attempts'])}")
+    orphans = reconcile(run_id, delegations, runs)
+
+    blockers = []
+    if not a["complete"]:
+        blockers.append("annotation below 100% of worker attempts")
+    if orphans:
+        blockers.append(f"{len(orphans)} child artefact(s) missing from the delegation journal")
+    if status != "usable":
+        blockers.append(f"the plan is {status}, so there is nothing to join the execution to")
+    if bad_delegations:
+        blockers.append(f"{bad_delegations} malformed line(s) in the delegation journal")
+
+    if blockers:
+        print("\n  SHADOW EXECUTION METRICS: INCOMPLETE")
+        for b in blockers:
+            note(b)
+        for m in a["missing"]:
+            note(f"unannotated worker: {m}")
+        for o in orphans:
+            note(f"artefact with no journal line: {o}")
+        note("every metric below this point joins the plan to the execution. On")
+        note("partial data each would return a plausible number, so none is printed.")
+        return
+
+    known = {u["id"]: u for u in units}
+    per_unit = defaultdict(list)
+    for d in a["writing"]:
+        per_unit[d["work_unit"]].extend(d["changed_files"])
+
+    unplanned = sorted(set(per_unit) - set(known))
+    if unplanned:
+        line("unplanned work units", ", ".join(unplanned))
+        note("work the frozen plan did not predict — a result, not an instrument fault")
+
+    planned_files, predicted, breaches, orphan_files = 0, 0, [], 0
+    for uid, files in per_unit.items():
+        if uid not in known:
+            orphan_files += len(set(files))
+            continue
+        for changed in sorted(set(files)):
+            planned_files += 1
+            if in_scope(changed, known[uid]["scope"]):
+                predicted += 1
+            else:
+                breaches.append(f"{uid}: {changed}")
+    if planned_files:
+        line("scope coverage", f"{predicted}/{planned_files} = {predicted / planned_files:.2f}")
+        note("changed files, under a unit the plan knows, that its own scope predicted")
+    if orphan_files:
+        line("files under unplanned units", orphan_files)
+        note("counted apart rather than folded in: they were not mispredicted, they")
+        note("were outside the prediction entirely")
+    line("scope breaches", len(breaches))
+    for b in breaches:
+        note(b)
+
+    closure = reachable(units)
+    ids = [u for u in per_unit if u in known]
+    shared = []
+    for i, x in enumerate(ids):
+        for y in ids[i + 1 :]:
+            if y in closure[x] or x in closure[y]:
+                continue
+            common = sorted(set(per_unit[x]) & set(per_unit[y]))
+            if common:
+                shared.append(f"{x}~{y}: {', '.join(common)}")
+    line("write overlap, independent", len(shared))
+    note("units the plan declared independent that wrote the same file")
+    for s in shared:
+        note(s)
+
+    line("dependency misses", "not computable here")
+    note("changed_files records what a unit wrote, never what it read. The overlap")
+    note("above is a write-side signal; a unit importing another's new module")
+    note("without writing it leaves no trace in this data. Read-side dependency")
+    note("misses stay a manual audit of the artefacts.")
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    session = None
+    if "--session" in args:
+        i = args.index("--session")
+        session = args[i + 1] if i + 1 < len(args) else None
+        del args[i : i + 2]
+    if not RUNS.exists():
+        print(f"no {RUNS}", file=sys.stderr)
+        return 1
+    run_id = args[0] if args else latest_run()
+    if not run_id:
+        print("no run found", file=sys.stderr)
+        return 1
+    report(run_id, session)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

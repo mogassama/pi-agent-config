@@ -62,6 +62,20 @@ verdict if it matters enough. Do not dress it as a question about where things
 are. That sends someone to answer a question they cannot answer, and the risk
 comes back open and paid for.
 
+**A task may open with continuation risks.** They were raised by an earlier
+review of this same change and handed back to you with their ids, followed by
+the same diff. Settle what you can from the files you have been named, then copy
+those ids into `resolved_risks`, exactly as written. You may only close ids that
+appear in that block: one you were not given is ignored, however well it matches
+something you noticed.
+
+**A continuation risk you still cannot settle does not go in `open_risks`.**
+Leave it out of `resolved_risks` and it stays open under the id it already has.
+Restating it would open a second record of one concern, and nothing
+de-duplicates them — an id is a coordinate, not a text to match. `open_risks` is
+for concerns discovered now. If a continuation changes what you can conclude
+about the change as a whole, that belongs in `summary` and in the verdict.
+
 **Report only what meets all six.** A reviewer with no admission criteria
 reports everything it notices, which is how a review of freshly written code
 returns findings about the code it just approved:

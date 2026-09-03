@@ -17,7 +17,15 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
-import { countsLine } from "../../subagent-only/counts.js";
+import { countsLine, riskLines } from "../../subagent-only/counts.js";
+import {
+  continuationReturned,
+  openRisks,
+  riskChannel,
+  routeRisks,
+  type LedgerEvent,
+  type RiskRecord,
+} from "../../subagent-only/risk-ledger.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
@@ -78,6 +86,105 @@ interface Delegation {
   changedFiles: string[];
 }
 const HISTORY: Delegation[] = [];
+
+/**
+ * Every risk a review left open in this session, and what became of it.
+ *
+ * Reassigned rather than mutated: the transitions in `risk-ledger.ts` are pure,
+ * so the state cannot be half-applied by a throw between two writes. Nothing
+ * reads this to allow or refuse anything — see the module header. It exists to
+ * be written down.
+ */
+let RISKS: RiskRecord[] = [];
+
+/** Where the instrumentation of a run is written. */
+const RUNS_DIR = ".pi-subagent-runs";
+
+/**
+ * The ledger's transitions, on disk, one JSON object per line.
+ *
+ * Append-only at each transition rather than a final snapshot, because the
+ * interesting states are the ones a snapshot cannot show: a risk that went
+ * `open → routed → open` was worked on and not settled, and the record of the
+ * attempt is the point. The external reading folds the file back.
+ */
+function logLedger(runId: string, events: readonly LedgerEvent[]): void {
+  if (events.length === 0) return;
+  try {
+    mkdirSync(join(process.cwd(), RUNS_DIR), { recursive: true });
+    appendFileSync(
+      join(process.cwd(), RUNS_DIR, `${runId}-risks.jsonl`),
+      events.map((e) => JSON.stringify({ at: new Date().toISOString(), ...e })).join("\n") + "\n",
+      "utf-8",
+    );
+  } catch {
+    // A ledger that cannot journal still holds its state for this session.
+  }
+}
+
+/**
+ * One line per child, joining what the plan predicted to what actually ran.
+ *
+ * Nothing else on disk can answer that. The artefact holds the role, the task
+ * text and the changed files, but not the `work_unit` the orchestrator declared
+ * — that lives in the tool call, and reconstructing it from the orchestrator's
+ * own session log means parsing a transcript to recover a field this process
+ * had in hand. `HISTORY` holds it in memory and dies with the session.
+ *
+ * The shape is deliberately flat and the file is deliberately per-run: the
+ * external reading joins it to `<runId>-plan.json` on `work_unit` and to the
+ * artefacts on `artifact`.
+ */
+interface DelegationRecord {
+  seq: number;
+  batch: string;
+  role: string;
+  work_unit: string | null;
+  for_risks: string[];
+  produced: boolean;
+  read_only: boolean;
+  changed_files: string[];
+  artifact: string;
+  failure: string | null;
+}
+
+function logDelegations(runId: string, rows: readonly DelegationRecord[]): void {
+  if (rows.length === 0) return;
+  try {
+    mkdirSync(join(process.cwd(), RUNS_DIR), { recursive: true });
+    appendFileSync(
+      join(process.cwd(), RUNS_DIR, `${runId}-delegations.jsonl`),
+      rows.map((r) => JSON.stringify({ at: new Date().toISOString(), ...r })).join("\n") + "\n",
+      "utf-8",
+    );
+  } catch {
+    // Losing the join table costs the shadow metrics, not the run.
+  }
+}
+
+/**
+ * The continuation risks, injected ahead of the diff.
+ *
+ * `for_risks` is a carrier, not a declaration: the orchestrator names the ids
+ * and the runtime pastes the texts it already holds, so the concerns cannot be
+ * paraphrased on the way through and the orchestrator does not spend a turn
+ * retyping them. An id the ledger does not know is dropped here and journalled
+ * by the transition — the review is not told about a risk nobody can produce.
+ */
+function continuationSection(ids: readonly string[], ledger: readonly RiskRecord[]): string {
+  const known = ids
+    .map((id) => ledger.find((r) => r.id === id))
+    .filter((r): r is RiskRecord => r !== undefined);
+  if (known.length === 0) return "";
+  return (
+    "Continuation risks — raised by an earlier review of this same change and\n" +
+    "handed back to you to settle. These, and only these:\n\n" +
+    known.map((r) => `${r.id}  ${r.text}`).join("\n") +
+    "\n\nCopy into `resolved_risks` the ids you can now settle. Leave out the ones you\n" +
+    "cannot: they stay open under these ids, and restating them in `open_risks`\n" +
+    "would open a second record of the same concern.\n\n"
+  );
+}
 
 /**
  * A role that cannot change a file.
@@ -420,7 +527,7 @@ function diffSection(paths: string[]): DiffPackage {
  */
 function logRefusal(runId: string, agentName: string, reason: string): void {
   try {
-    const dir = join(process.cwd(), ".pi-subagent-runs");
+    const dir = join(process.cwd(), RUNS_DIR);
     mkdirSync(dir, { recursive: true });
     appendFileSync(
       join(dir, `${runId}-refusals.jsonl`),
@@ -469,6 +576,20 @@ export default function (pi: ExtensionAPI) {
         ? (event.input as { path?: string })?.path
         : undefined;
     if (!path) return undefined;
+
+    /*
+     * Instrumentation is not a material change.
+     *
+     * The shadow plan is written by the orchestrator's own `write` into
+     * `.pi-subagent-runs/`, and without this the first plan of a run would
+     * enter `HISTORY` as a delegation that changed a file — which is what the
+     * review boundary keys on. The consequences are both wrong and quiet: a
+     * plan written after a review would open a new boundary and discard the
+     * files the next review was owed, and the plan itself would be listed as
+     * part of the change under review. The directory is instrumentation of the
+     * run, never its subject.
+     */
+    if (path.split(/[\\/]/).includes(RUNS_DIR)) return undefined;
 
     const last = HISTORY[HISTORY.length - 1];
     if (last?.agent === "orchestrator") {
@@ -538,6 +659,28 @@ export default function (pi: ExtensionAPI) {
           "it returns.",
       }),
     ),
+    for_risks: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Ids of open risks this call is meant to settle, copied exactly as they " +
+          "appeared under a reviewer's head line — `9a6766-04-2`. On a scout it " +
+          "records which risk the lookup was sent for. On a follow-up reviewer it " +
+          "also carries: the runtime pastes each risk's text ahead of the diff, so " +
+          "do not restate the concerns in `task`. A reviewer may only resolve ids " +
+          "it was given here.",
+      }),
+    ),
+    work_unit: Type.Optional(
+      Type.String({
+        description:
+          `The id of the work unit this delegation belongs to, from ${RUNS_DIR}/${RUN_ID}-plan.json — ` +
+          "`W03`. Every worker call needs one or the run's measurements are not " +
+          "usable, and a rework carries the same id as the attempt it repeats. If " +
+          "the work matches no unit in the plan, give it a new id rather than the " +
+          "nearest one: the plan is frozen, and work it did not predict is a " +
+          "result, not an error to tidy away.",
+      }),
+    ),
     task: Type.String({
       description:
         "The complete instruction. The child inherits nothing: no AGENTS.md, no " +
@@ -568,8 +711,9 @@ export default function (pi: ExtensionAPI) {
         "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
         "Searching across files for a bounded location is scout work: when the question is *where* rather than *what* and a bounded lookup can answer it, delegate it instead of grepping.",
         "Consistency within the change is reviewer work, not preflight scout work. Whether the change reached an unknown caller or pattern is scouted only when the reviewer returns that specific where-question in `open_risks`; do not scout it speculatively before the worker. And a question you can already answer is not scout work either — scouting a tree you have just read yourself returns what you gave it.",
-        "When a reviewer result reports one or more `open-risks`, open its artifact. Route an entry to scout only when a bounded lookup would settle it — a term, a file, a caller of a named symbol, a definition — and route it before any further mutation of the same change. An inventory, a completeness check, or a proof of absence that no exact bounded search can settle is not scoutable: leave that risk open rather than send someone to a ceiling. An absence with an exact target — a named symbol, a module path, a precise string — is scoutable, because one search concludes it. Preserve the reviewer's concern; do not broaden it and do not invent new ones. If its search target is too broad, narrow it only when the narrower lookup still settles the same review question; otherwise leave it open. If several routable risks from that review share a scope, batch them in one call. The scout's locations go into a follow-up review of the same open change, not to a worker: it is the review that was left open, and only a confirmed defect sends a worker.",
+        "When a reviewer result reports one or more `open-risks`, their text is printed under the head line, identified. Route an entry to scout only when a bounded lookup would settle it — a term, a file, a caller of a named symbol, a definition — and route it before any further mutation of the same change. An inventory, a completeness check, or a proof of absence that no exact bounded search can settle is not scoutable: leave that risk open rather than send someone to a ceiling. An absence with an exact target — a named symbol, a module path, a precise string — is scoutable, because one search concludes it. Preserve the reviewer's concern; do not broaden it and do not invent new ones. If its search target is too broad, narrow it only when the narrower lookup still settles the same review question; otherwise leave it open. If several routable risks from that review share a scope, batch them in one call. The scout's locations go into a follow-up review of the same open change, not to a worker: it is the review that was left open, and only a confirmed defect sends a worker. Carry the ids in `for_risks` on both calls — the follow-up review is handed the risk texts from them, and it can only close what it was handed.",
         "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
+        `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing.`,
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
         "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
@@ -612,12 +756,19 @@ export default function (pi: ExtensionAPI) {
         // reads the same one question and the same paths the schema enforced.
         // One task text per question, so a fan-out spawns children that differ
         // in exactly one line and nothing else.
+        // Ahead of the diff, so the review reads what it must settle before what
+        // it must judge. Only a reviewer gets it: a scout is given one bounded
+        // question and would treat a pasted concern as a second one.
+        const forRisks = params.for_risks ?? [];
+        const cont =
+          params.agent === "reviewer" ? continuationSection(forRisks, RISKS) : "";
+
         const questions = params.agent === "scout" ? scoutQuestions(params.find) : [];
         const scoutHeader = (q: string) =>
           `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
         const tasks = questions.length
           ? questions.map((q) => `${pkg.text}${scoutHeader(q)}${params.task}`)
-          : [`${pkg.text}${params.task}`];
+          : [`${cont}${pkg.text}${params.task}`];
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
@@ -706,13 +857,20 @@ export default function (pi: ExtensionAPI) {
          * Nothing enters HISTORY for a batch that did not complete: the guard
          * must not count a reconnaissance the orchestrator cannot act on.
          */
+        // Allocated before the spawn rather than inside the map: the sequence
+        // number is the artefact's name and half of every risk id built from it,
+        // and the delegation journal has to record the same one this child was
+        // given. Reading it back off the artefact path would work and would tie
+        // the journal to a filename format.
+        const seqs = tasks.map(() => ++CALL_SEQ);
+
         let results: RunResult[];
         try {
           const settled = await Promise.allSettled(
-            tasks.map((t) =>
+            tasks.map((t, i) =>
               dispatch(effective, t, {
                 ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
-                seq: ++CALL_SEQ,
+                seq: seqs[i],
                 signal,
                 onProgress: publish,
               }),
@@ -738,6 +896,65 @@ export default function (pi: ExtensionAPI) {
             changedFiles: r.changedFiles ?? [],
           });
         }
+        /*
+         * The ledger, and the join table, once the call is closed.
+         *
+         * Recorded after the children return rather than before they spawn, for
+         * the same reason nothing enters `HISTORY` for a batch that threw: a
+         * call that did not complete is not a continuation the orchestrator can
+         * act on, and a ledger claiming otherwise would be describing work that
+         * never happened.
+         *
+         * A reviewer that came back with an envelope has examined what it was
+         * handed, so its silence on a risk means the risk is not settled. A
+         * reviewer that came back with nothing examined nothing — a `max_turns`
+         * or a `no_submit` is not a considered answer — so its risks are
+         * recorded as a continuation engaged and not returned, which is exactly
+         * what a `routed` still standing at the end of a run means.
+         */
+        const events: LedgerEvent[] = [];
+        const channel = riskChannel(params.agent);
+        if (channel === "continuation") {
+          for (const r of results) {
+            const back = r.failure
+              ? routeRisks(RISKS, forRisks, `call:${batch}`)
+              : continuationReturned(RISKS, forRisks, r.resolvedRisks ?? [], r.artifact);
+            RISKS = back.ledger;
+            events.push(...back.events);
+
+            // New concerns after old ones, so a follow-up review that closes one
+            // and raises another reads in that order in the journal.
+            const fresh = openRisks(RISKS, r.openRiskItems, r.artifact);
+            RISKS = fresh.ledger;
+            events.push(...fresh.events);
+          }
+        } else if (channel === "route" && forRisks.length > 0) {
+          // Once per call, outside the loop over children. `routedTo` names the
+          // call and not a child, so a fan-out of three scouts carrying two
+          // risks is two transitions, not six — the same child-versus-call
+          // ambiguity the streak guard and the scout counter both had to lose.
+          const out = routeRisks(RISKS, forRisks, `call:${batch}`);
+          RISKS = out.ledger;
+          events.push(...out.events);
+        }
+        logLedger(RUN_ID, events);
+
+        logDelegations(
+          RUN_ID,
+          results.map((r, i) => ({
+            seq: seqs[i],
+            batch,
+            role: params.agent,
+            work_unit: params.work_unit ?? null,
+            for_risks: forRisks,
+            produced: !r.failure,
+            read_only: isReadOnly(agent.tools),
+            changed_files: r.changedFiles ?? [],
+            artifact: r.artifact,
+            failure: r.failure ?? null,
+          })),
+        );
+
         const result = results[0];
 
         // Only the summary crosses back. The envelope stays on disk; the
@@ -754,9 +971,15 @@ export default function (pi: ExtensionAPI) {
         const outcome = result.verdict ?? result.status;
         const counts = countsLine(result);
 
+        // The risks themselves, under the count that announces them. The count
+        // alone sent the orchestrator back to the artefact fourteen times on run
+        // 14, five of those through a python heredoc, to read strings this
+        // process had already parsed to produce the count.
+        const risks = riskLines(result.openRiskItems);
+
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`
-          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]`;
+          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]${risks ? `\n${risks}` : ""}`;
 
         // Say which skills came without a severity table. The review still
         // ran; the operator should know one domain was judged on the generic

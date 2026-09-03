@@ -16,6 +16,10 @@
 #   tests/config.test.ts   every declared extension and skill exists on disk,
 #                          every role has an envelope schema, no read-only role
 #                          holds a shell, no model both produces and judges
+#   tests/test_shadow.py   the shadow reading, on synthetic runs. Python, because
+#                          the reading is python. It is here rather than run by
+#                          eye because an instrument fails by printing a credible
+#                          number, not by crashing.
 #
 # What is NOT covered, and cannot be from here: whether a model honours a
 # prompt. That is measured by running a delegation, not by asserting on a
@@ -41,8 +45,20 @@ flags=(--test)
 if [ $# -gt 0 ]; then
   files=()
   for name in "$@"; do files+=("tests/${name%.test.ts}.test.ts"); done
-else
-  files=(tests/*.test.ts)
+  exec node "${flags[@]}" "${files[@]}"
 fi
 
-exec node "${flags[@]}" "${files[@]}"
+status=0
+node "${flags[@]}" tests/*.test.ts || status=$?
+
+echo
+if command -v python3 >/dev/null 2>&1; then
+  shadow_out="$(python3 tests/test_shadow.py 2>&1)" || status=1
+  echo "$shadow_out" | tail -3
+else
+  echo "python3 absent — tests/test_shadow.py has not run, and the shadow reading" >&2
+  echo "is the one component of this repository that fails by looking right" >&2
+  status=1
+fi
+
+exit "$status"
