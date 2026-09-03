@@ -410,10 +410,60 @@ def reconcile(run_id, delegations, runs=RUNS):
     return sorted(on_disk - recorded)
 
 
+# Shapes a tool invocation can take across session formats. Keyed on structure
+# rather than on one field name, because the first version keyed on
+# `type == "tool_execution_start"`, that event does not exist in a pi session
+# file, and the filter therefore discarded every line and reported zero.
+_CALL_TYPES = {"tool_use", "toolUse", "tool_call", "toolCall", "function"}
+_RESULT_TYPES = {"tool_result", "toolResult", "tool_execution_result", "toolCallResult"}
+_RESULT_KEYS = ("toolCallId", "tool_use_id", "toolUseId", "tool_call_id")
+_NAME_KEYS = ("name", "tool", "toolName", "tool_name")
+_INPUT_KEYS = ("input", "arguments", "args", "parameters")
+
+
+def tool_calls(node):
+    """
+    Every tool invocation in a session record, as (name, serialised input).
+
+    Invocations only. A result echoes the path it was given, and the orchestrator
+    prints each artefact path in its own prose, so 28 lines of run 15 mention a
+    reviewer artefact where seven tools actually opened one. Counting lines is
+    the error that turned `grep -c` on a transcript into a tool-call count on
+    run 11; this counts calls.
+
+    Structure rather than a field name: a node carrying both a tool name and an
+    input payload is a call, whatever the format labels it. Loose by design, and
+    bounded by the caller, which only counts payloads naming a reviewer artefact.
+    """
+    if isinstance(node, list):
+        for v in node:
+            yield from tool_calls(v)
+        return
+    if not isinstance(node, dict):
+        return
+
+    kind = node.get("type")
+    is_result = (isinstance(kind, str) and kind in _RESULT_TYPES) or any(
+        k in node for k in _RESULT_KEYS
+    )
+    if not is_result:
+        name = next((node[k] for k in _NAME_KEYS if isinstance(node.get(k), str)), None)
+        payload = next(
+            (node[k] for k in _INPUT_KEYS if isinstance(node.get(k), (dict, list, str))), None
+        )
+        if name and payload is not None and (kind is None or kind in _CALL_TYPES):
+            yield name, json.dumps(payload, ensure_ascii=False)
+            return
+
+    for v in node.values():
+        yield from tool_calls(v)
+
+
 def artifact_accesses(session_path):
     """
-    A raw count. Not a target, and not the metric the transport was built for.
+    Tool calls whose input names a reviewer artefact, by tool.
 
+    A raw count. Not a target, and not the metric the transport was built for.
     A reviewer artefact is opened legitimately — findings, out_of_scope, the
     full diagnostic. What run 14 measured, and what this lot is aimed at, is the
     narrower `opened only to recover open_risks`, and deciding which access that
@@ -421,16 +471,15 @@ def artifact_accesses(session_path):
     and leaves the classification where it belongs, beside plan-induced scout
     questions: a person reads the session.
 
-    Counted across tools rather than `read` alone, since five of run 14's
-    fourteen recoveries went through a python heredoc, which is not a read call.
+    Every tool, not `read` alone: three of run 15's seven accesses went through
+    a python heredoc in bash, which is not a read call.
     """
     by_tool = defaultdict(int)
-    for e in read_jsonl(session_path)[0]:
-        if e.get("type") != "tool_execution_start":
-            continue
-        if "-reviewer.json" not in json.dumps(e):
-            continue
-        by_tool[e.get("tool") or e.get("name") or "?"] += 1
+    rows, _ = read_jsonl(session_path)
+    for row in rows:
+        for name, payload in tool_calls(row):
+            if "-reviewer.json" in payload:
+                by_tool[name] += 1
     return dict(by_tool)
 
 

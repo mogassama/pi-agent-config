@@ -313,6 +313,65 @@ class MalformedInput(unittest.TestCase):
         self.assertIn("malformed line(s) in the delegation journal", out)
 
 
+class ArtefactAccesses(unittest.TestCase):
+    """
+    Counting calls, not lines, and across every session shape.
+
+    Run 15 reported zero reviewer artefact accesses against a session holding
+    seven, because the filter keyed on a `tool_execution_start` event that does
+    not exist in a pi session file. And 28 lines of that session mention a
+    reviewer artefact — the orchestrator prints each path in its own prose —
+    so a line count would have reported 28. Both numbers are credible and both
+    are wrong, which is the failure mode this whole reading exists to avoid.
+    """
+
+    ART = ".pi-subagent-runs/4e9499-29-reviewer.json"
+
+    def rows(self, *records):
+        d = tempfile.TemporaryDirectory()
+        _KEEP.append(d)
+        p = Path(d.name) / "s.jsonl"
+        p.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+        return p
+
+    def test_a_content_block_tool_call_is_seen(self):
+        r = {"type": "message", "message": {"content": [
+            {"type": "toolCall", "name": "read", "input": {"path": self.ART}}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {"read": 1})
+
+    def test_an_anthropic_tool_use_block_is_seen(self):
+        r = {"type": "message", "message": {"content": [
+            {"type": "tool_use", "name": "read", "input": {"path": self.ART}}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {"read": 1})
+
+    # Three of run 15's seven accesses went through a python heredoc, which is
+    # not a read call — counting `read` alone would have missed them.
+    def test_a_heredoc_in_bash_is_seen_and_named_bash(self):
+        r = {"type": "message", "message": {"content": [{"type": "toolCall", "name": "bash",
+             "input": {"command": f"python - <<PY\nopen('{self.ART}')\nPY"}}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {"bash": 1})
+
+    def test_an_openai_style_function_call_is_seen(self):
+        r = {"type": "message", "message": {"tool_calls": [{"type": "function", "function": {
+            "name": "read", "arguments": json.dumps({"path": self.ART})}}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {"read": 1})
+
+    def test_a_result_echoing_the_path_is_not_an_access(self):
+        r = {"type": "message", "message": {"content": [
+            {"type": "toolResult", "toolCallId": "x", "output": f"wrote {self.ART}"}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {})
+
+    def test_prose_naming_the_path_is_not_an_access(self):
+        r = {"type": "message", "message": {"content": [
+            {"type": "text", "text": f"artefact : {self.ART}"}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {})
+
+    def test_a_call_on_something_else_is_not_counted(self):
+        r = {"type": "message", "message": {"content": [
+            {"type": "toolCall", "name": "read", "input": {"path": "src/balance_agee/io.py"}}]}}
+        self.assertEqual(sh.artifact_accesses(self.rows(r)), {})
+
+
 class Ledger(unittest.TestCase):
     def test_a_still_open_event_returns_the_risk_to_open(self):
         f = sh.fold_risks(
