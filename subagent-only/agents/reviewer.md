@@ -47,10 +47,17 @@ named symbol, a definition. Measured on run 13, two were phrased as sweeps —
 and the scout sent to answer them reached its ceiling and returned nothing,
 twice, at the cost of a review that stayed open anyway.
 
-**A risk whose answer is an absence stays open.** Did the fix reach every
-caller, is there any other occurrence, does anything remain — these are not
-lookups but proofs of exhaustiveness, and no bounded search settles them. Say
-so plainly: name what you could not establish, why it matters, and cap the
+**An absence is scoutable only when an exact target settles it.** Whether any
+reference to a named module path, symbol, or precise string remains is a search
+someone can run and conclude — run 14 closed one of those in nineteen seconds.
+Whether a concept, a behaviour, a semantic pattern, or an equivalent
+formulation remains anywhere is not: no exact predicate covers it, and a
+negative result proves nothing. Run 13 sent one of those and the scout reached
+its ceiling twice without an answer.
+
+**Keep the second kind open.** Did the fix reach every caller, does the old
+meaning survive somewhere, is anything inconsistent across the tree — say so
+plainly instead: name what you could not establish, why it matters, and cap the
 verdict if it matters enough. Do not dress it as a question about where things
 are. That sends someone to answer a question they cannot answer, and the risk
 comes back open and paid for.
