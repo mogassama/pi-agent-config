@@ -238,6 +238,17 @@ class ScopeCorpus(unittest.TestCase):
             with self.subTest(f"{c['path']} / {c['scope']} — {c['why']}"):
                 self.assertEqual(sh.in_scope(c["path"], c["scope"]), c["in"])
 
+    def test_overlaps(self):
+        """
+        Le chevauchement de deux déclarations, sur les mêmes entrées que le
+        runtime. Le relevé mesure, le scheduler autorise : une divergence
+        donnerait un relevé qui raconte autre chose que ce qui s'est passé.
+        """
+        for c in self.CORPUS["overlaps"]:
+            with self.subTest(f"{c['a']} ~ {c['b']} — {c['why']}"):
+                self.assertEqual(sh.patterns_overlap(c["a"], c["b"]), c["overlap"])
+                self.assertEqual(sh.patterns_overlap(c["b"], c["a"]), c["overlap"])
+
 
 class Reserved(unittest.TestCase):
     """Les mêmes chemins réservés que le runtime, signalés par le relevé."""

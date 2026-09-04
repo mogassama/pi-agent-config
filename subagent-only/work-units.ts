@@ -291,6 +291,62 @@ function globMatch(path: string, pattern: string): boolean {
 }
 
 /**
+ * Ce qu'une lane possède : son scope déclaré, moins le réservé.
+ *
+ * Reporté depuis le lot 1, où il n'avait aucun consommateur et où sa sémantique
+ * littérale ne traitait ni `*.md`, ni `**`, ni `.`. L'admission en est le
+ * premier consommateur réel, et la comparaison de motifs existe maintenant.
+ *
+ * Retirer plutôt qu'interdire : deux unités déclarant `DESIGN.md` ne se
+ * disputent rien, aucune des deux n'en est propriétaire. Les compter en
+ * collision ferait attendre une lane sur une ressource sans propriétaire.
+ */
+export function ownedScope(unit: WorkUnit): string[] {
+  return unit.expectedWriteScope.filter((p) => !isReserved(p));
+}
+
+/** Le préfixe littéral d'un motif, c'est-à-dire ce qui précède son premier joker. */
+function literalPrefix(pattern: string): string {
+  const at = [...pattern].findIndex((c) => c === "*" || c === "?");
+  return at === -1 ? pattern : pattern.slice(0, at);
+}
+
+/**
+ * Deux déclarations peuvent-elles nommer un fichier commun ?
+ *
+ * Conservative : elle répond oui dès qu'un doute existe. Sur-signaler fait
+ * attendre une lane ; sous-signaler laisse deux écrivains dans le même fichier,
+ * et la seconde erreur est celle que les worktrees ne rattrapent pas.
+ *
+ * Un motif ouvrant sur un joker a un préfixe littéral vide, ce qui veut dire
+ * « aucune contrainte » et non « aucun terrain commun ». La confusion inverse
+ * avait fait déclarer disjoints un motif commençant par une étoile et un motif
+ * commençant par un répertoire, alors qu'un même fichier satisfait les deux.
+ * Miroir de `patterns_overlap` dans le relevé, éprouvé sur le même corpus.
+ */
+export function patternsOverlap(a: string, b: string): boolean {
+  const x = a.replace(/^\.\//, "").replace(/\/$/, "");
+  const y = b.replace(/^\.\//, "").replace(/\/$/, "");
+  if (x === y) return true;
+  if (x === "" || x === "." || y === "" || y === ".") return true;
+  if (inScope(x, [y]) || inScope(y, [x])) return true;
+  if (x.startsWith(`${y}/`) || y.startsWith(`${x}/`)) return true;
+  const px = literalPrefix(x);
+  const py = literalPrefix(y);
+  if (px !== x || py !== y) {
+    if (!px || !py) return true;
+    return px.startsWith(py) || py.startsWith(px);
+  }
+  return false;
+}
+
+/** Deux unités peuvent-elles écrire en même temps sans se marcher dessus ? */
+export function scopesCollide(a: WorkUnit, b: WorkUnit): boolean {
+  const owned = ownedScope(b);
+  return ownedScope(a).some((p) => owned.some((q) => patternsOverlap(p, q)));
+}
+
+/**
  * Les fichiers qu'une délégation a écrits hors de ce que son unité déclarait.
  *
  * Constaté, jamais empêché. Le run 15 a mesuré 6 dépassements sur 46 écritures,

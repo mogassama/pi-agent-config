@@ -20,6 +20,8 @@ import {
   cycles,
   inScope,
   isReserved,
+  ownedScope,
+  patternsOverlap,
   parsePlan,
   reservedTouched,
   validatePlan,
@@ -248,6 +250,7 @@ for (const c of corpus.texts) {
  */
 interface ScopeCorpus {
   cases: Array<{ path: string; scope: string[]; in: boolean; why: string }>;
+  overlaps: Array<{ a: string; b: string; overlap: boolean; why: string }>;
 }
 const scopeCorpus: ScopeCorpus = JSON.parse(
   readFileSync(join(import.meta.dirname, "scope-corpus.json"), "utf-8"),
@@ -258,3 +261,33 @@ for (const c of scopeCorpus.cases) {
     assert.equal(inScope(c.path, c.scope), c.in);
   });
 }
+
+/*
+ * Le chevauchement de deux déclarations, sur les mêmes entrées que le relevé.
+ *
+ * C'est la fonction où la parité compte le plus, malgré l'intuition inverse :
+ * le relevé mesure, le runtime autorise. Une divergence donnerait un relevé
+ * annonçant que deux unités ne sont pas parallélisables pendant que le
+ * scheduler les lance ensemble. Troisième corpus, et troisième fois que `.`
+ * divergeait — dans le même sens à chaque fois.
+ */
+for (const c of scopeCorpus.overlaps) {
+  test(`overlap · ${c.a} ~ ${c.b} — ${c.why}`, () => {
+    assert.equal(patternsOverlap(c.a, c.b), c.overlap);
+    // Symétrique par construction : deux déclarations se recouvrent ou non,
+    // l'ordre de la question n'y change rien.
+    assert.equal(patternsOverlap(c.b, c.a), c.overlap);
+  });
+}
+
+// Retirer une déclaration exactement réservée avant l'ownership : deux unités
+// qui déclarent toutes deux DESIGN.md ne se disputent rien.
+test("un chemin réservé sort de l'ownership", () => {
+  const u = { id: "W01", goal: "g", dependsOn: [], expectedWriteScope: ["src/io.py", "DESIGN.md"] };
+  assert.deepEqual(ownedScope(u), ["src/io.py"]);
+});
+
+test("une unité qui ne déclarait que du réservé ne possède rien", () => {
+  const u = { id: "W01", goal: "g", dependsOn: [], expectedWriteScope: ["DESIGN.md"] };
+  assert.deepEqual(ownedScope(u), []);
+});

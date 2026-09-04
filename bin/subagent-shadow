@@ -320,8 +320,13 @@ def patterns_overlap(a, b):
     that cannot safely run side by side. Over-reporting an overlap costs a look;
     missing one corrupts the decision about lanes.
     """
-    a, b = a.rstrip("/"), b.rstrip("/")
+    a, b = _norm(a).rstrip("/"), _norm(b).rstrip("/")
     if a == b:
+        return True
+    # `.` désigne la racine, donc il recouvre tout. Troisième fois que ce cas
+    # diverge entre les deux implémentations, et troisième fois dans le même
+    # sens : c'est le corpus partagé qui l'attrape, pas la relecture.
+    if a in ("", ".") or b in ("", "."):
         return True
     if fnmatch.fnmatch(a, b) or fnmatch.fnmatch(b, a):
         return True

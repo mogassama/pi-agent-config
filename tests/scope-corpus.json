@@ -49,5 +49,46 @@
     { "path": "src/a.py", "scope": [], "in": false, "why": "aucun motif ne couvre rien" },
 
     { "path": "src/a.py", "scope": ["src/[ab].py"], "in": false, "why": "les classes ne sont pas supportées, et ne matchent donc pas" }
+  ],
+
+  "_overlaps": [
+    "Deux déclarations peuvent-elles nommer un fichier commun ?",
+    "",
+    "Troisième fonction dont les deux langages doivent donner la même réponse,",
+    "après le contrat de plan et inScope. Et c'est celle où la parité compte le",
+    "plus, malgré l'intuition inverse : le relevé mesure, le runtime autorise.",
+    "Une divergence donnerait un relevé disant « ces unités ne sont pas",
+    "parallélisables » pendant que le scheduler les lance ensemble — ou",
+    "l'inverse, un potentiel affiché que le runtime n'exploitera jamais.",
+    "",
+    "La sémantique fixée ici est conservative et non l'intersection exacte : on",
+    "répond oui dès qu'un doute existe. Un faux positif coûte du parallélisme,",
+    "un faux négatif laisse deux écrivains dans le même fichier — et c'est la",
+    "seconde erreur que les worktrees ne rattrapent pas.",
+    "",
+    "Les chemins réservés sont retirés avant comparaison, par l'appelant."
+  ],
+
+  "overlaps": [
+    { "a": "a.py", "b": "a.py", "overlap": true, "why": "identiques" },
+    { "a": "src/a.py", "b": "src/b.py", "overlap": false, "why": "deux fichiers distincts" },
+    { "a": "docs/", "b": "src/a.py", "overlap": false, "why": "répertoires disjoints" },
+
+    { "a": "src/", "b": "src/a.py", "overlap": true, "why": "un répertoire couvre ce qu'il contient" },
+    { "a": "src/a.py", "b": "src/", "overlap": true, "why": "symétrique" },
+    { "a": "src/**", "b": "src/a.py", "overlap": true, "why": "glob et fichier" },
+    { "a": "src/*.py", "b": "src/a.py", "overlap": true, "why": "glob à un niveau" },
+    { "a": "src/*.py", "b": "tests/a.py", "overlap": false, "why": "préfixes littéraux disjoints" },
+
+    { "a": "*/foo.py", "b": "src/*.py", "overlap": true, "why": "conservative : src/foo.py satisfait les deux" },
+    { "a": "**/foo.py", "b": "src/**", "overlap": true, "why": "conservative : préfixe littéral vide" },
+    { "a": "*.md", "b": "docs/", "overlap": true, "why": "conservative : préfixe littéral vide" },
+
+    { "a": ".", "b": "tests/x.py", "overlap": true, "why": ". désigne la racine, donc tout" },
+    { "a": "src/a.py", "b": ".", "overlap": true, "why": "symétrique" },
+    { "a": "./src/", "b": "src/a.py", "overlap": true, "why": "les chemins sont normalisés" },
+
+    { "a": "src", "b": "src/a.py", "overlap": true, "why": "répertoire sans barre finale" },
+    { "a": "srcfoo/a.py", "b": "src/", "overlap": false, "why": "préfixe qui n'est pas un répertoire" }
   ]
 }

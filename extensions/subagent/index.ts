@@ -27,11 +27,18 @@ import {
   type RiskRecord,
 } from "../../subagent-only/risk-ledger.js";
 import { openLane, targetWorkUnit, type LaneContext } from "../../subagent-only/lane-context.js";
+import {
+  SchedulerInputError,
+  runLanes,
+  type Candidate,
+} from "../../subagent-only/scheduler.js";
+import { validateTaskCall } from "../../subagent-only/task-policy.js";
 import { ensureLane, laneChanges, mergeLane, removeLane, type MergeBlock } from "../../subagent-only/worktree.js";
 import {
   parsePlan,
   reservedTouched,
   scopeBreach,
+  scopesCollide,
   type PlanResult,
 } from "../../subagent-only/work-units.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
@@ -113,6 +120,20 @@ const HISTORY: Delegation[] = [];
  * `review-boundary.ts` reste une machine d'état sur une séquence, sans rien
  * savoir des worktrees.
  */
+/**
+ * Un appel qui n'a pas de sens : rien n'a été admis, rien n'a démarré.
+ *
+ * Étiqueté sur l'outil et non sur le lot : la même fonction répond à un worker
+ * simple sans unité, et « [batch: invalid] » l'aurait envoyé chercher un lot
+ * qu'il n'avait pas écrit.
+ */
+function invalidCall(reason: string) {
+  return {
+    content: [{ type: "text" as const, text: `[task: invalid] ${reason}` }],
+    isError: true,
+  };
+}
+
 function laneView(laneId: string | undefined): Delegation[] {
   return laneId === undefined ? HISTORY : HISTORY.filter((d) => d.laneId === laneId);
 }
@@ -146,6 +167,51 @@ let RISKS: RiskRecord[] = [];
 
 /** Where the instrumentation of a run is written. */
 const RUNS_DIR = ".pi-subagent-runs";
+
+/**
+ * Deux lanes au premier run parallèle, et pas quatre.
+ *
+ * La médiane de largeur utilisable mesurée sur la campagne de sondes tourne
+ * autour de quatre, donc il y a de la marge. Mais ce run doit d'abord prouver
+ * que l'isolation, la review locale, le rework local, l'ownership et
+ * l'intégration tiennent en production ; monter ensuite ne demandera aucune
+ * architecture nouvelle.
+ */
+function readMaxParallelLanes(): number {
+  const raw = process.env.PI_SUBAGENT_MAX_PARALLEL_LANES;
+  if (raw === undefined || raw.trim() === "") return 2;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    // Configuration opérateur et non faute de l'orchestrateur : il n'a pas
+    // choisi cette valeur et ne peut pas la corriger. Une correction
+    // silencieuse fabriquerait une concurrence que personne n'a demandée.
+    throw new Error(
+      `PI_SUBAGENT_MAX_PARALLEL_LANES doit être un entier >= 1, reçu ${JSON.stringify(raw)}`,
+    );
+  }
+  return n;
+}
+
+const MAX_PARALLEL_LANES = readMaxParallelLanes();
+
+/**
+ * Les unités déjà intégrées, ce qui rend leurs dépendantes admissibles.
+ *
+ * Intégrée et non terminée : une dépendance dont le travail existe mais n'est
+ * pas dans l'intégration laisserait la lane suivante partir d'une base qui ne
+ * contient pas ce dont elle dépend.
+ */
+const INTEGRATED = new Set<string>();
+
+/**
+ * Les unités dont la lane est ouverte : démarrées, pas encore intégrées.
+ *
+ * Elles possèdent leurs fichiers tant qu'elles ne sont pas dans la base, même
+ * quand plus aucun worker n'y tourne — la lane existe, elle n'est pas revue, et
+ * une candidate qui écrirait les mêmes fichiers partirait d'un état qui ne la
+ * contient pas.
+ */
+const OPEN_UNITS = new Set<string>();
 
 /**
  * Le plan gelé, relu depuis le disque à la première délégation qui en a besoin.
@@ -775,7 +841,28 @@ export default function (pi: ExtensionAPI) {
           "away.",
       }),
     ),
-    task: Type.String({
+    batch: Type.Optional(
+      Type.Array(
+        Type.Object({
+          work_unit: Type.String({ description: "L'unité, comme dans `work_unit`." }),
+          task: Type.String({ description: "L'instruction de cette unité, comme dans `task`." }),
+        }),
+        {
+          description:
+            "Plusieurs unités en un appel, chacune avec sa propre instruction — trois " +
+            "unités ont trois tâches. Réservé au worker, et exclusif de `task`. Le " +
+            "runtime vérifie l'admission de chaque candidate, ouvre une lane par unité " +
+            "et en fait tourner au plus deux à la fois : une candidate dont les fichiers " +
+            "recouvrent ceux d'une lane en cours attend son tour, elle n'est pas refusée. " +
+            "Une candidate absente du plan, ou dont une dépendance n'est pas encore " +
+            "intégrée, est refusée — c'est à toi de ne proposer que des unités prêtes. " +
+            "Préfère des unités dont les fichiers ne se recouvrent pas : le runtime met " +
+            "les autres en file sans risque, mais elles te coûteront un aller-retour. " +
+            "N'envoie pas de scout pour le vérifier — le plan le dit déjà.",
+        },
+      ),
+    ),
+    task: Type.Optional(Type.String({
       description:
         "The complete instruction. The child inherits nothing: no AGENTS.md, no " +
         "conversation history, no prior tool calls. Describe the work, not the " +
@@ -791,7 +878,7 @@ export default function (pi: ExtensionAPI) {
         "conversation, from a bundle file, from .pi/BRIEF.md, or stated anywhere " +
         "in the repository about the paths this task touches — AGENTS.md, " +
         "SECURITY.md, an ADR — must be pasted verbatim, not referred to.",
-    }),
+    })),
   });
 
   pi.registerTool(
@@ -848,6 +935,36 @@ export default function (pi: ExtensionAPI) {
         // Il ne redonne ni cwd, ni branche, ni identifiant de lane. Un scout de
         // continuation n'a même pas à nommer l'unité : ses risques savent d'où
         // ils viennent.
+        /*
+         * La présence, pas la valeur. `batch: []` avec un `task` rempli était
+         * lu comme un appel simple valide, alors que le contrat dit l'un ou
+         * l'autre : un lot vide est un lot, et il est vide.
+         */
+        const hasBatch = params.batch !== undefined;
+        const hasTask = params.task !== undefined;
+        if (hasBatch) {
+          const entries = params.batch ?? [];
+          if (entries.length === 0) {
+            return invalidCall("`batch` est vide : donne au moins une unité, ou utilise `task`.");
+          }
+          const creux = entries.findIndex((b) => !b.work_unit?.trim() || !b.task?.trim());
+          if (creux !== -1) {
+            return invalidCall(
+              `l'entrée ${creux + 1} de \`batch\` a une unité ou une tâche vide.`,
+            );
+          }
+        }
+        if (hasTask && !params.task?.trim()) {
+          return invalidCall("`task` est vide.");
+        }
+
+        /*
+         * L'unité est résolue avant d'être jugée : elle peut venir d'une
+         * déclaration ou de la provenance des risques, et la politique doit
+         * porter sur celle que `execute` utilisera réellement. Juger sur
+         * `params.work_unit` seul réintroduirait l'obligation de déclarer que
+         * le lot 1 a construite pour la supprimer.
+         */
         const target = targetWorkUnit(params.work_unit, forRisks, RISKS);
         if (target.kind === "conflict") {
           return {
@@ -856,6 +973,34 @@ export default function (pi: ExtensionAPI) {
           };
         }
         const unit = target.kind === "unit" ? target.workUnitId : undefined;
+
+        const policy = validateTaskCall({
+          agent: params.agent,
+          plannedMode: plan().status === "usable",
+          resolvedWorkUnit: unit,
+          hasBatch,
+          hasTask,
+          declaredWorkUnit: params.work_unit,
+        });
+        if (!policy.ok) return invalidCall(policy.reason);
+
+        /*
+         * Un lot exige un plan exploitable, et le dit.
+         *
+         * Sans cette porte, `plan().units` serait vide et le scheduler
+         * refuserait chaque candidate avec « ne figure pas dans le plan » —
+         * exact, et trompeur : le défaut n'est pas dans les candidates mais dans
+         * l'absence de plan. Même raison que la porte du chemin simple : un plan
+         * invalide se corrige tant que rien n'a démarré.
+         */
+        if (hasBatch) {
+          const p = plan();
+          if (p.status !== "usable") {
+            return invalidCall(
+              `un lot exige un plan exploitable ; il est ${p.status}${p.reason ? ` — ${p.reason}` : ""}.`,
+            );
+          }
+        }
 
         /*
          * Le plan est une porte, pas une annotation lue après coup.
@@ -889,6 +1034,7 @@ export default function (pi: ExtensionAPI) {
         if (unit) {
           try {
             lane = openLane(unit, { runId: RUN_ID, root: process.cwd() }, ensureLane);
+            OPEN_UNITS.add(unit);
           } catch (err) {
             return {
               content: [{
@@ -958,6 +1104,133 @@ export default function (pi: ExtensionAPI) {
           params.skills && params.skills.length > 0 ? { ...agent, skills: params.skills } : { ...agent };
         if (pkg.degraded) {
           effective.tools = [...new Set([...agent.tools, "grep", "find"])];
+        }
+
+        /*
+         * Le lot : plusieurs unités, chacune dans sa lane, au plus deux à la fois.
+         *
+         * Chemin séparé et non variante du chemin simple, parce que ce qui
+         * change n'est pas le nombre d'enfants mais leur contexte : chaque
+         * candidate a son worktree, donc son `cwd`, et le fan-out existant
+         * envoyait le même à tous. Une délégation simple continue de passer par
+         * le chemin qu'elle a toujours pris.
+         *
+         * Ni review ni intégration ici : un lot est fait de workers. Les
+         * reviews restent unitaires, ce qui garde les intégrations
+         * naturellement ordonnées sans file de merge.
+         */
+        if (hasBatch) {
+          const batchId = randomBytes(4).toString("hex");
+          const candidates: Candidate[] = params.batch!.map((b) => ({
+            workUnitId: b.work_unit,
+            task: b.task,
+          }));
+          const rows: DelegationRecord[] = [];
+          let outcomes;
+          try {
+            outcomes = await runLanes(
+              candidates,
+              {
+                units: plan().units,
+                integrated: INTEGRATED,
+                collide: scopesCollide,
+                // Toute lane ouverte et non intégrée possède encore ses fichiers,
+                // y compris celles d'un appel précédent : le scheduler ne les
+                // verrait pas autrement.
+                owners: plan().units.filter((u) => OPEN_UNITS.has(u.id)),
+              },
+              MAX_PARALLEL_LANES,
+              async (candidate, workUnit) => {
+                const lane = openLane(workUnit.id, { runId: RUN_ID, root: process.cwd() }, ensureLane);
+                OPEN_UNITS.add(workUnit.id);
+                const seq = ++CALL_SEQ;
+                const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
+                  ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd },
+                  seq,
+                  signal,
+                  onProgress: publish,
+                });
+                HISTORY.push({
+                  laneId: lane.laneId,
+                  agent: params.agent,
+                  batch: batchId,
+                  produced: !result.failure,
+                  changedFiles: result.changedFiles ?? [],
+                  readOnly: isReadOnly(agent.tools),
+                });
+                if (reservedTouched(result.changedFiles ?? []).length > 0) {
+                  blockLane(lane.laneId, "reserved-violation");
+                }
+                rows.push({
+                  seq,
+                  batch: batchId,
+                  role: params.agent,
+                  work_unit: workUnit.id,
+                  work_unit_declared: workUnit.id,
+                  lane_id: lane.laneId,
+                  cwd: lane.cwd,
+                  reserved_touched: reservedTouched(result.changedFiles ?? []),
+                  unplanned: false,
+                  for_risks: [],
+                  produced: !result.failure,
+                  read_only: isReadOnly(agent.tools),
+                  changed_files: result.changedFiles ?? [],
+                  artifact: result.artifact,
+                  failure: result.failure ?? null,
+                });
+                return result;
+              },
+            );
+          } catch (err) {
+            // Un appel mal formé revient à l'orchestrateur, qui peut le
+            // corriger. Un invariant rompu du scheduler est un défaut du
+            // runtime : le maquiller en conseil l'enverrait réparer un plan
+            // qui n'a rien.
+            if (err instanceof SchedulerInputError) {
+              return {
+                content: [{ type: "text" as const, text: `[worker batch: invalid] ${err.message}` }],
+                isError: true,
+              };
+            }
+            throw err;
+          }
+          // `rows` s'accumule dans l'ordre des fins ; `seq` est l'ordre des
+          // démarrages. Laisser le journal physique contredire son propre ordre
+          // logique serait une ambiguïté gratuite, et cette branche en a déjà
+          // coûté assez.
+          rows.sort((a, b) => a.seq - b.seq);
+          logDelegations(RUN_ID, rows);
+
+          const lines = outcomes.map((o) => {
+            if (o.state === "refused") return `  ${o.workUnitId}  REFUSÉ : ${o.reason}`;
+            if (o.state === "queued") return `  ${o.workUnitId}  EN FILE : ${o.reason}`;
+            const r = o.value as RunResult | undefined;
+            if (o.error) return `  ${o.workUnitId}  échec : ${String((o.error as Error)?.message ?? o.error)}`;
+            const files = r?.changedFiles?.length ?? 0;
+            const reserved = reservedTouched(r?.changedFiles ?? []);
+            return `  ${o.workUnitId}  ${r?.failure ?? "ok"}, ${files} fichier(s)` +
+              `${reserved.length ? `, RESERVED VIOLATION ${reserved.join(", ")}` : ""}` +
+              `\n     ${r?.artifact ?? ""}`;
+          });
+          const ran = outcomes.filter((o) => o.state === "done").length;
+          /*
+           * Toutes refusées est une faute d'admission que l'orchestrateur peut
+           * corriger, et un `0/3` absorbé comme un succès d'outil la lui
+           * cacherait. Une mise en file, elle, n'est pas une faute : les
+           * candidates sont légales et bloquées par l'état du runtime, il n'y a
+           * rien à corriger — seulement à intégrer le propriétaire et
+           * reproposer.
+           */
+          const allRefused = outcomes.every((o) => o.state === "refused");
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[worker batch: ${ran}/${outcomes.length} exécutée(s), ` +
+                `max_parallel_lanes=${MAX_PARALLEL_LANES}]\n` + lines.join("\n"),
+            }],
+            ...(allRefused ? { isError: true } : {}),
+          };
         }
         // There was a second branch here raising the ceiling for a large inlined
         // diff. Measured on run b9baad, ten reviews: turns were 1, 3, 3, 4, 5, 5,
@@ -1197,6 +1470,10 @@ export default function (pi: ExtensionAPI) {
           if (merged.ok) {
             removeLane(process.cwd(), lane.laneId);
             LANE_BLOCKS.delete(lane.laneId);
+            // C'est ici, et seulement ici, qu'une unité devient une dépendance
+            // satisfaite : intégrée, pas terminée.
+            INTEGRATED.add(lane.workUnitId);
+            OPEN_UNITS.delete(lane.workUnitId);
             integration = `  intégrée : ${lane.workUnitId}`;
           } else if (blocks.length > 0) {
             integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}`;
