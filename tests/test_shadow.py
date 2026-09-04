@@ -186,6 +186,59 @@ class PlanValidity(unittest.TestCase):
 # ------------------------------------------------------------------ dag shape
 
 
+class Corpus(unittest.TestCase):
+    """
+    Le contrat de plan, sur exactement les mêmes entrées que le validateur
+    TypeScript.
+
+    La duplication entre les deux implémentations avait déjà produit une
+    divergence : le TypeScript rognait les chaînes, ce validateur gardait la
+    valeur d'origine après avoir testé `.strip()`, donc `" W01 "` et `"W01"`
+    étaient deux ids distincts ici et un doublon là-bas. Des suites écrites
+    séparément ne pouvaient pas le montrer. Celle-ci lit le même fichier que
+    l'autre, et un cas ajouté s'impose aux deux.
+    """
+
+    CORPUS = json.loads((ROOT / "tests" / "plan-corpus.json").read_text())
+
+    def test_documents(self):
+        for c in self.CORPUS["documents"]:
+            with self.subTest(c["name"]):
+                status, reason, units = sh.validate_plan(c["doc"])
+                self.assertEqual(status, c["status"], reason)
+                if c.get("reason"):
+                    self.assertIn(c["reason"], reason)
+                if c.get("goalGaps") is not None:
+                    self.assertEqual(sh.goal_gaps(units), c["goalGaps"])
+
+    def test_texts(self):
+        for c in self.CORPUS["texts"]:
+            with self.subTest(c["name"]):
+                status, reason, _ = sh.parse_plan(c["text"])
+                self.assertEqual(status, c["status"], reason)
+                if c.get("reason"):
+                    self.assertIn(c["reason"], reason)
+
+
+class Reserved(unittest.TestCase):
+    """Les mêmes chemins réservés que le runtime, signalés par le relevé."""
+
+    def test_design_md_est_reserve(self):
+        self.assertTrue(sh.is_reserved("DESIGN.md"))
+        self.assertTrue(sh.is_reserved("./DESIGN.md"))
+
+    def test_un_voisin_ne_lest_pas(self):
+        self.assertFalse(sh.is_reserved("docs/DESIGN.md"))
+        self.assertFalse(sh.is_reserved("DESIGN.md.bak"))
+
+    def test_une_declaration_reservee_est_signalee_sans_invalider(self):
+        doc = plan(unit("W01", scope=["src/io.py", "DESIGN.md"]), unit("W02"))
+        status, _, units = sh.validate_plan(doc)
+        self.assertEqual(status, "usable")
+        reserved = [(u["id"], p) for u in units for p in u["scope"] if sh.is_reserved(p)]
+        self.assertEqual(reserved, [("W01", "DESIGN.md")])
+
+
 class DagShape(unittest.TestCase):
     def test_a_chain_has_width_one(self):
         units = sh.validate_plan(

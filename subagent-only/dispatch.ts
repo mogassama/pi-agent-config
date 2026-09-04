@@ -66,7 +66,7 @@ export interface RunResult extends EnvelopeCounts {
    */
   resolvedRisks?: string[];
   /**
-   * What a review demanding work carries so the rework can be written without
+   * What a non-approved review carries so the next action can be chosen without
    * reopening the artefact. Absent on `approved` — see `reviewAction`.
    */
   action?: ReviewAction;
@@ -78,7 +78,19 @@ export interface RunResult extends EnvelopeCounts {
    * without altering the tree, which resets the read-only streak today and lets
    * a review of unchanged code through.
    */
+  /**
+   * Ce que la délégation a réellement écrit, lu dans l'arbre de travail.
+   *
+   * Observation et non déclaration : c'est cette liste qui décide de
+   * l'ownership, du dépassement de scope et de la violation de chemin réservé.
+   */
   changedFiles?: string[];
+  /**
+   * Ce que la délégation a dit avoir écrit, quand elle a rendu une enveloppe.
+   *
+   * Gardé pour pouvoir mesurer l'écart avec l'observation. N'autorise rien.
+   */
+  declaredChangedFiles?: string[];
   /**
    * The advisor's recommendation, and only the advisor's.
    *
@@ -229,14 +241,17 @@ async function runOnce(
   opts: DispatchOptions,
 ): Promise<RunResult> {
   const plan = buildSpawnPlan({ ...agent, model }, task, opts.ctx);
+  // La racine du run, pas celle de la lane : les artefacts d'un run vivent
+  // ensemble même quand les délégations travaillent dans des worktrees séparés.
   const artifactDir = opts.artifactDir ?? join(process.cwd(), ".pi-subagent-runs");
+  const cwd = opts.ctx.cwd ?? process.cwd();
   const seq = String(opts.seq ?? 0).padStart(2, "0");
   const artifact = join(artifactDir, `${opts.ctx.runId}-${seq}-${agent.name}.json`);
 
   // Only for a role that can mutate: a read-only delegation cannot have changed
   // anything, and a git call per scout is a cost for nothing.
   const mutates = agent.tools.includes("edit") || agent.tools.includes("write");
-  const before = mutates ? treeState(process.cwd()) : new Map<string, string>();
+  const before = mutates ? treeState(cwd) : new Map<string, string>();
 
   /*
    * When the delegation started, so the artefact can say how long it took.
@@ -277,7 +292,7 @@ async function runOnce(
   let failure: RunResult["failure"];
 
   const child = spawn(opts.piPath ?? "pi", plan.args, {
-    cwd: opts.ctx.agentDir === "" ? process.cwd() : process.cwd(),
+    cwd,
     env: { ...process.env, ...plan.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -348,8 +363,27 @@ async function runOnce(
     failure = state.providerError ? "provider_error" : code === 0 ? "no_submit" : "spawn_error";
   }
 
-  // No envelope from a role that writes: ask the tree what it did.
-  const salvaged = !envelope && mutates ? changedBetween(before, treeState(process.cwd())) : [];
+  /*
+   * Ce que l'arbre dit, pour toute délégation capable d'écrire — pas seulement
+   * quand l'enveloppe manque.
+   *
+   * L'enveloppe portait `changed_files` et il servait d'autorité dès qu'elle
+   * existait. C'est une déclaration du modèle, pas une observation : un worker
+   * qui écrit `src/io.py` et `DESIGN.md` mais n'annonce que le premier laissait
+   * la violation de chemin réservé invisible, et le dépassement de scope avec.
+   * Tant que rien ne dépendait de ces fichiers, l'écart était théorique ; les
+   * lanes en font l'entrée de l'ownership, du merge et de la frontière de
+   * review, et une autorité déclarative y devient dangereuse.
+   *
+   * `treeState` s'appuie sur `git status --porcelain --untracked-files=all`,
+   * donc il voit ce qui est sur le disque et respecte `.gitignore`.
+   *
+   * La déclaration est conservée à part : comparer ce que le modèle dit avoir
+   * écrit à ce qu'il a écrit est une mesure en soi, et c'est celle qui dira si
+   * un `changed_files` déclaré vaut encore quelque chose.
+   */
+  const actual = mutates ? changedBetween(before, treeState(cwd)) : [];
+  const salvaged = !envelope ? actual : [];
 
   // Before any persistence. The tokens are spent whatever happens next, and a
   // disk error writing the artefact used to erase a consumption that had
@@ -462,7 +496,9 @@ async function runOnce(
       typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,
     action: reviewAction(envelope, typeof envelope.verdict === "string" ? envelope.verdict : undefined),
     ...envelopeCounts(envelope, `${opts.ctx.runId}-${seq}`),
-    changedFiles: Array.isArray(envelope.changed_files)
+    // L'observation fait autorité, la déclaration est gardée à côté.
+    changedFiles: actual.length ? actual : undefined,
+    declaredChangedFiles: Array.isArray(envelope.changed_files)
       ? envelope.changed_files.filter((f: unknown): f is string => typeof f === "string")
       : undefined,
     artifact,

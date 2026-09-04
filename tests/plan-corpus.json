@@ -1,0 +1,217 @@
+{
+  "_": [
+    "Corpus de conformité du contrat de plan, lu par les deux validateurs.",
+    "",
+    "Les règles existent en TypeScript (subagent-only/work-units.ts) et en python",
+    "(bin/subagent-shadow). Deux implémentations d'un même contrat dérivent, et",
+    "celle-ci avait déjà dérivé : le TypeScript rognait les chaînes, le python",
+    "conservait la valeur d'origine après avoir testé `.strip()`. Un id ' W01 '",
+    "était donc un doublon d'un côté et un id distinct de l'autre.",
+    "",
+    "Des tests couvrant les mêmes *catégories* de cas ne prouvent pas la parité.",
+    "Seules les mêmes *entrées* la prouvent. Les deux suites lisent ce fichier et",
+    "asseoir un nouveau cas ici l'impose aux deux à la fois.",
+    "",
+    "Politique de normalisation : on rogne les espaces de bord des ids, des",
+    "dépendances et des chemins de scope, des deux côtés."
+  ],
+
+  "documents": [
+    {
+      "name": "plan bien formé",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["src/a.py"] },
+        { "id": "W02", "goal": "g", "depends_on": ["W01"], "expected_write_scope": ["src/b.py"] }
+      ] },
+      "status": "usable"
+    },
+    {
+      "name": "absent",
+      "doc": null,
+      "status": "absent"
+    },
+    {
+      "name": "version incorrecte",
+      "doc": { "version": 2, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "version"
+    },
+    {
+      "name": "version absente",
+      "doc": { "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "version"
+    },
+    {
+      "name": "work_units vide",
+      "doc": { "version": 1, "work_units": [] },
+      "status": "invalid",
+      "reason": "work_units"
+    },
+    {
+      "name": "work_units absent",
+      "doc": { "version": 1 },
+      "status": "invalid",
+      "reason": "work_units"
+    },
+    {
+      "name": "racine qui n'est pas un objet",
+      "doc": [1, 2],
+      "status": "invalid"
+    },
+    {
+      "name": "id dupliqué",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] },
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "duplicate"
+    },
+    {
+      "name": "id dupliqué seulement après rognage",
+      "doc": { "version": 1, "work_units": [
+        { "id": " W01 ", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] },
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "duplicate"
+    },
+    {
+      "name": "dépendance vers un id rogné, qui doit se résoudre",
+      "doc": { "version": 1, "work_units": [
+        { "id": " W01 ", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] },
+        { "id": "W02", "goal": "g", "depends_on": [" W01 "], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "usable"
+    },
+    {
+      "name": "id vide",
+      "doc": { "version": 1, "work_units": [
+        { "id": "   ", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "invalid"
+    },
+    {
+      "name": "dépendance vers une unité inexistante",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] },
+        { "id": "W02", "goal": "g", "depends_on": ["NOPE"], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "NOPE"
+    },
+    {
+      "name": "auto-dépendance",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": ["W01"], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "invalid"
+    },
+    {
+      "name": "cycle",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": ["W02"], "expected_write_scope": ["a.py"] },
+        { "id": "W02", "goal": "g", "depends_on": ["W01"], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "cycle"
+    },
+    {
+      "name": "depends_on absent",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "depends_on"
+    },
+    {
+      "name": "depends_on qui n'est pas une liste de chaînes",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [3], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "invalid",
+      "reason": "depends_on"
+    },
+    {
+      "name": "scope absent",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [] }
+      ] },
+      "status": "invalid",
+      "reason": "expected_write_scope"
+    },
+    {
+      "name": "scope vide",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": [] }
+      ] },
+      "status": "invalid",
+      "reason": "expected_write_scope"
+    },
+    {
+      "name": "scope contenant une chaîne vide",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py", "  "] }
+      ] },
+      "status": "invalid",
+      "reason": "expected_write_scope"
+    },
+    {
+      "name": "une seule unité malformée invalide tout le plan",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["a.py"] },
+        { "id": "", "depends_on": [], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "invalid"
+    },
+    {
+      "name": "goal absent : signalé, jamais bloquant",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "depends_on": [], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "usable",
+      "goalGaps": ["W01"]
+    },
+    {
+      "name": "goal non textuel : signalé, jamais bloquant",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": 42, "depends_on": [], "expected_write_scope": ["a.py"] }
+      ] },
+      "status": "usable",
+      "goalGaps": ["W01"]
+    },
+    {
+      "name": "une lacune de goal ne rattrape pas une faute structurelle",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "depends_on": [], "expected_write_scope": ["a.py"] },
+        { "id": "W02", "goal": "g", "depends_on": ["NOPE"], "expected_write_scope": ["b.py"] }
+      ] },
+      "status": "invalid"
+    }
+  ],
+
+  "texts": [
+    {
+      "name": "JSON tronqué",
+      "text": "{\"version\": 1, \"work_un",
+      "status": "invalid",
+      "reason": "not JSON"
+    },
+    {
+      "name": "texte qui n'est pas du JSON",
+      "text": "ceci n'est pas un plan",
+      "status": "invalid",
+      "reason": "not JSON"
+    },
+    {
+      "name": "JSON valide et plan valide",
+      "text": "{\"version\":1,\"work_units\":[{\"id\":\"W01\",\"goal\":\"g\",\"depends_on\":[],\"expected_write_scope\":[\"a.py\"]}]}",
+      "status": "usable"
+    }
+  ]
+}

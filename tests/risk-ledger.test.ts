@@ -274,3 +274,15 @@ test("a record holds provenance and status, never a classification", () => {
   const { ledger } = openRisks([], [item("a")], "9a6766-04-reviewer.json");
   assert.deepEqual(Object.keys(ledger[0]).sort(), ["id", "openedBy", "status", "text"]);
 });
+
+// L'unité de la review qui l'a ouvert, pour qu'un scout de continuation
+// retrouve sa lane sans que l'orchestrateur la répète.
+test("un risque retient l'unité de travail de la review qui l'a ouvert", () => {
+  const { ledger } = openRisks([], [item("a")], "9a6766-04-reviewer.json", "W06");
+  assert.equal(ledger[0].workUnitId, "W06");
+});
+
+test("une review sans unité n'en invente pas une", () => {
+  const { ledger } = openRisks([], [item("a")], "9a6766-04-reviewer.json");
+  assert.equal("workUnitId" in ledger[0], false);
+});

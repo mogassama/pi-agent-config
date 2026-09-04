@@ -110,6 +110,12 @@ def validate_plan(doc):
         if not isinstance(uid, str) or not uid.strip():
             problems.append(f"unit {i} has no usable id")
             continue
+        # Politique de normalisation unique, partagée avec le validateur
+        # TypeScript : on rogne. Le python conservait la valeur d'origine après
+        # avoir testé `.strip()`, donc « W01 » et " W01 " étaient deux ids
+        # distincts d'un côté et un doublon de l'autre. Le corpus de conformité
+        # de tests/plan-corpus.json vérifie les deux sur les mêmes entrées.
+        uid = uid.strip()
         if uid in ids:
             problems.append(f"{uid}: duplicate id")
             continue
@@ -120,11 +126,15 @@ def validate_plan(doc):
         if not isinstance(deps, list) or any(not isinstance(d, str) or not d.strip() for d in deps):
             problems.append(f"{uid}: depends_on is not a list of ids")
             deps = []
+        else:
+            deps = [d.strip() for d in deps]
         if not isinstance(scope, list) or not scope or any(
             not isinstance(p, str) or not p.strip() for p in scope
         ):
             problems.append(f"{uid}: expected_write_scope is not a non-empty list of paths")
             scope = []
+        else:
+            scope = [p.strip() for p in scope]
         if uid in deps:
             problems.append(f"{uid}: depends on itself")
         ids.append(uid)
@@ -169,14 +179,19 @@ def goal_gaps(units):
     return [u["id"] for u in units if not isinstance(u.get("goal"), str) or not u["goal"].strip()]
 
 
-def load_plan(path):
-    p = Path(path)
-    if not p.exists():
+def parse_plan(text):
+    """Un JSON illisible est invalide, pas absent. Miroir de `parsePlan` en TypeScript."""
+    if text is None:
         return validate_plan(None)
     try:
-        return validate_plan(json.loads(p.read_text()))
+        return validate_plan(json.loads(text))
     except Exception as exc:
         return "invalid", f"not JSON: {exc}", []
+
+
+def load_plan(path):
+    p = Path(path)
+    return parse_plan(p.read_text() if p.exists() else None)
 
 
 def cycles(units):
@@ -322,7 +337,19 @@ def patterns_overlap(a, b):
 
 
 def scopes_overlap(a_scope, b_scope):
-    return sorted({f"{p} ~ {q}" for p in a_scope for q in b_scope if patterns_overlap(p, q)})
+    """
+    Les chemins réservés ne fondent aucun chevauchement.
+
+    Deux unités qui déclarent toutes deux `DESIGN.md` ne se disputent rien :
+    aucune des deux n'en est propriétaire, l'orchestrateur l'écrit lui-même. Les
+    compter ferait tomber la largeur utilisable sur une ressource sans
+    propriétaire — mesuré sur les plans de la campagne, exactement un point.
+    C'est la même soustraction que l'ownership de lane côté runtime, et les deux
+    doivent dire la même chose du même plan.
+    """
+    a = [p for p in a_scope if not is_reserved(p)]
+    b = [q for q in b_scope if not is_reserved(q)]
+    return sorted({f"{p} ~ {q}" for p in a for q in b if patterns_overlap(p, q)})
 
 
 def in_scope(path, patterns):
@@ -332,6 +359,17 @@ def in_scope(path, patterns):
         if path.startswith(p.rstrip("/") + "/"):
             return True
     return False
+
+
+# Miroir de `RESERVED_WRITE_PATHS` dans subagent-only/work-units.ts. Le relevé
+# lit le même plan avec les mêmes règles, donc il signale les déclarations
+# réservées sans que le runtime ait à les journaliser.
+RESERVED_WRITE_PATHS = ("DESIGN.md",)
+
+
+def is_reserved(path):
+    p = path[2:] if path.startswith("./") else path
+    return any(p == r or p.startswith(r.rstrip("/") + "/") for r in RESERVED_WRITE_PATHS)
 
 
 def wide(pattern):
@@ -539,6 +577,13 @@ def report(run_id, session=None, runs=RUNS):
         note("conservative: two declarations that could name a common file")
         for o in overlaps:
             note(o)
+        reserved = [(u["id"], p) for u in units for p in u["scope"] if is_reserved(p)]
+        if reserved:
+            line("scopes réservés déclarés", len(reserved))
+            for uid, p in reserved:
+                note(f"{uid} → {p}")
+            note("appartient à l'orchestrateur : retiré de l'ownership de lane, et une")
+            note("écriture réelle par une délégation est une violation")
         broad = sorted({p for u in units for p in u["scope"] if wide(p)})
         if broad:
             line("wide scope patterns", ", ".join(broad))

@@ -12,7 +12,7 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
@@ -26,6 +26,12 @@ import {
   type LedgerEvent,
   type RiskRecord,
 } from "../../subagent-only/risk-ledger.js";
+import { deriveLane, targetWorkUnit } from "../../subagent-only/lane-context.js";
+import {
+  parsePlan,
+  reservedTouched,
+  type PlanResult,
+} from "../../subagent-only/work-units.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
@@ -101,6 +107,34 @@ let RISKS: RiskRecord[] = [];
 const RUNS_DIR = ".pi-subagent-runs";
 
 /**
+ * Le plan gelé, relu depuis le disque à la première délégation qui en a besoin.
+ *
+ * Relu et non mémorisé au chargement de l'extension : l'orchestrateur écrit son
+ * plan pendant la session, donc il n'existe pas encore quand l'extension
+ * démarre. Mémorisé après la première lecture réussie, parce que le plan est
+ * gelé — le relire à chaque appel inviterait à le corriger en cours de route,
+ * et une prédiction réécrite après coup ne mesure plus rien.
+ */
+let PLAN: PlanResult | undefined;
+
+function plan(): PlanResult {
+  if (PLAN?.status === "usable") return PLAN;
+  const path = join(process.cwd(), RUNS_DIR, `${RUN_ID}-plan.json`);
+  let text: string | undefined;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch {
+    text = undefined;
+  }
+  PLAN = parsePlan(text);
+  // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
+  // au registre de risques : le relevé lit le même plan avec les mêmes règles et
+  // le rend visible lui-même. Le journaliser ici l'aurait rangé dans un fichier
+  // dont ce n'est pas le sujet, sous un type d'événement qui ne le décrit pas.
+  return PLAN;
+}
+
+/**
  * The ledger's transitions, on disk, one JSON object per line.
  *
  * Append-only at each transition rather than a final snapshot, because the
@@ -139,7 +173,23 @@ interface DelegationRecord {
   seq: number;
   batch: string;
   role: string;
+  /** L'unité visée, déclarée ou dérivée des risques confiés. */
   work_unit: string | null;
+  /**
+   * Ce que l'orchestrateur avait déclaré, quand il l'a fait.
+   *
+   * Gardé à côté de l'unité résolue pour que le relevé distingue une annotation
+   * portée d'une annotation dérivée. Les 38 % non attribués du run 15 étaient
+   * des reviewers et des scouts ; savoir combien le runtime a rattachés seul
+   * est la mesure de ce que ce lot corrige.
+   */
+  work_unit_declared: string | null;
+  lane_id: string | null;
+  cwd: string;
+  /** Chemins réservés réellement écrits. Violation, pas dépassement de scope. */
+  reserved_touched: string[];
+  /** Unité visée mais absente du plan gelé. */
+  unplanned: boolean;
   for_risks: string[];
   produced: boolean;
   read_only: boolean;
@@ -674,11 +724,14 @@ export default function (pi: ExtensionAPI) {
       Type.String({
         description:
           `The id of the work unit this delegation belongs to, from ${RUNS_DIR}/${RUN_ID}-plan.json — ` +
-          "`W03`. Every worker call needs one or the run's measurements are not " +
-          "usable, and a rework carries the same id as the attempt it repeats. If " +
-          "the work matches no unit in the plan, give it a new id rather than the " +
-          "nearest one: the plan is frozen, and work it did not predict is a " +
-          "result, not an error to tidy away.",
+          "`W03`. Name it on every delegation that belongs to one — worker, " +
+          "reviewer, scout alike — and a rework carries the same id as the " +
+          "attempt it repeats; the runtime derives the working directory and the " +
+          "rest from it. A scout carrying `for_risks` may omit it: the risks " +
+          "already say which unit they came from. If the work matches no unit in " +
+          "the plan, give it a new id rather than the nearest one: the plan is " +
+          "frozen, and work it did not predict is a result, not an error to tidy " +
+          "away.",
       }),
     ),
     task: Type.String({
@@ -762,6 +815,49 @@ export default function (pi: ExtensionAPI) {
         const forRisks = params.for_risks ?? [];
         const cont =
           params.agent === "reviewer" ? continuationSection(forRisks, RISKS) : "";
+
+        // L'orchestrateur choisit l'unité ; le runtime dérive tout le reste.
+        // Il ne redonne ni cwd, ni branche, ni identifiant de lane. Un scout de
+        // continuation n'a même pas à nommer l'unité : ses risques savent d'où
+        // ils viennent.
+        const target = targetWorkUnit(params.work_unit, forRisks, RISKS);
+        if (target.kind === "conflict") {
+          return {
+            content: [{ type: "text" as const, text: `Refused: lane provenance conflict — ${target.reason}` }],
+            isError: true,
+          };
+        }
+        const unit = target.kind === "unit" ? target.workUnitId : undefined;
+
+        /*
+         * Le plan est une porte, pas une annotation lue après coup.
+         *
+         * Il était consulté pour calculer `unplanned` au moment d'écrire le
+         * journal, donc après que l'enfant avait tourné : un plan corrompu
+         * laissait s'exécuter tout un run avant qu'on le sache. Une délégation
+         * qui vise une unité exige maintenant un plan exploitable avant le
+         * spawn. Un plan invalide se corrige tant que rien n'a commencé ; une
+         * fois accepté, il est gelé.
+         *
+         * Une délégation qui ne vise aucune unité — un scout global — n'a pas
+         * besoin de plan et n'en demande pas.
+         */
+        if (unit) {
+          const p = plan();
+          if (p.status !== "usable") {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `Refused: plan ${p.status}${p.reason ? ` — ${p.reason}` : ""}. ` +
+                  `Fix ${RUNS_DIR}/${RUN_ID}-plan.json before delegating on a work unit; ` +
+                  `nothing has run.`,
+              }],
+              isError: true,
+            };
+          }
+        }
+        const lane = unit ? deriveLane(unit, { runId: RUN_ID, root: process.cwd() }) : undefined;
 
         const questions = params.agent === "scout" ? scoutQuestions(params.find) : [];
         const scoutHeader = (q: string) =>
@@ -869,7 +965,12 @@ export default function (pi: ExtensionAPI) {
           const settled = await Promise.allSettled(
             tasks.map((t, i) =>
               dispatch(effective, t, {
-                ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID },
+                ctx: {
+                  agentDir: AGENT_DIR,
+                  selfDir: SELF_DIR,
+                  runId: RUN_ID,
+                  cwd: lane?.cwd,
+                },
                 seq: seqs[i],
                 signal,
                 onProgress: publish,
@@ -924,7 +1025,7 @@ export default function (pi: ExtensionAPI) {
 
             // New concerns after old ones, so a follow-up review that closes one
             // and raises another reads in that order in the journal.
-            const fresh = openRisks(RISKS, r.openRiskItems, r.artifact);
+            const fresh = openRisks(RISKS, r.openRiskItems, r.artifact, unit);
             RISKS = fresh.ledger;
             events.push(...fresh.events);
           }
@@ -945,7 +1046,18 @@ export default function (pi: ExtensionAPI) {
             seq: seqs[i],
             batch,
             role: params.agent,
-            work_unit: params.work_unit ?? null,
+            work_unit: unit ?? null,
+            work_unit_declared: params.work_unit ?? null,
+            lane_id: lane?.laneId ?? null,
+            cwd: lane?.cwd ?? process.cwd(),
+            reserved_touched: reservedTouched(r.changedFiles ?? []),
+            // Une unité que le plan gelé ne connaît pas est un résultat, pas une
+            // faute d'instrument : le plan n'avait pas prévu ce travail. Le plan
+            // reste gelé, on ne l'y ajoute pas.
+            unplanned:
+              unit !== undefined &&
+              plan().status === "usable" &&
+              !plan().units.some((u) => u.id === unit),
             for_risks: forRisks,
             produced: !r.failure,
             read_only: isReadOnly(agent.tools),
@@ -982,11 +1094,27 @@ export default function (pi: ExtensionAPI) {
         // faire maintenant.
         const action = actionLines(result.action);
         const risks = riskLines(result.openRiskItems);
-        const under = [action, risks].filter(Boolean).join("\n");
+        // Une écriture sur un chemin réservé n'est pas un dépassement de scope :
+        // la délégation n'en a jamais eu la propriété. Constatée après coup —
+        // le runtime n'intercepte pas les écritures d'un enfant — mais dite là
+        // où l'orchestrateur la verra, et non seulement dans un journal.
+        const reserved = results
+          .flatMap((r) => reservedTouched(r.changedFiles ?? []))
+          .filter((p, i, all) => all.indexOf(p) === i);
+        // Dans la ligne de tête et pas seulement en dessous : une délégation qui
+        // a écrit sur un chemin dont elle n'est pas propriétaire ne doit pas
+        // pouvoir passer pour un `ok` ordinaire. Le travail reste sur le disque
+        // — le jeter pour une écriture annulable coûterait plus qu'il ne
+        // protège — mais la lane cesse d'être intégrable, et la porte de merge
+        // du lot 2 en fera la conséquence.
+        const violation = reserved.length
+          ? `  ${reserved.join(", ")} — la lane n'en est pas propriétaire, non intégrable`
+          : "";
+        const under = [violation, action, risks].filter(Boolean).join("\n");
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`
-          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]${under ? `\n${under}` : ""}`;
+          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}${reserved.length ? ", RESERVED VIOLATION" : ""}]${under ? `\n${under}` : ""}`;
 
         // Say which skills came without a severity table. The review still
         // ran; the operator should know one domain was judged on the generic

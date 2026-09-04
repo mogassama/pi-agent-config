@@ -31,6 +31,17 @@ export interface BuildContext {
   selfDir: string;
   /** Born when the orchestrator opens a task, dies with it. */
   runId: string;
+  /**
+   * Où la délégation travaille.
+   *
+   * Explicite plutôt que `process.cwd()`, parce qu'une lane travaillera dans son
+   * worktree et pas à la racine du dépôt. Tant qu'il n'y a pas de worktree la
+   * valeur est la racine, et rien ne change ; le jour où elle diffère, tous les
+   * appelants suivent déjà. Le `spawn` portait d'ailleurs un ternaire qui
+   * choisissait `process.cwd()` dans les deux branches — l'intention était là,
+   * le fil ne l'était pas.
+   */
+  cwd?: string;
 }
 
 export interface SpawnPlan {
@@ -359,7 +370,8 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // conventions, not the other way round. Silent when absent — a project with
   // no brief is the normal case, not an error.
   if (agent.projectBrief) {
-    for (const p of [join(process.cwd(), ".pi", "BRIEF.md"), join(ctx.agentDir, ".pi", "BRIEF.md")]) {
+    const here = ctx.cwd ?? process.cwd();
+    for (const p of [join(here, ".pi", "BRIEF.md"), join(ctx.agentDir, ".pi", "BRIEF.md")]) {
       if (!existsSync(p)) continue;
       const brief = readFileSync(p, "utf-8").trim();
       if (!brief) break;
@@ -395,7 +407,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // model answers in prose. One run cost 5102 output tokens that way.
   // The note sits between the task and the closing instruction: after the work
   // it qualifies, before the line that must stay last.
-  args.push(`Task: ${task}\n\n${dataNote(process.cwd(), task)}${CLOSING_INSTRUCTION}`);
+  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${CLOSING_INSTRUCTION}`);
 
   // Derived from the tool list, exactly like `isReadOnly` in the subagent
   // extension: a role added later is classified by what it can do, not by

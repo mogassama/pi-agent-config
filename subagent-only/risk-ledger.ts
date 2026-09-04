@@ -34,6 +34,15 @@ export interface RiskRecord {
   text: string;
   /** Artefact of the review that opened it. */
   openedBy: string;
+  /**
+   * L'unité de travail de la review qui l'a ouvert, quand elle en avait une.
+   *
+   * C'est ce champ qui permet à un scout de continuation de retrouver sa lane
+   * sans que l'orchestrateur la répète : le risque sait d'où il vient, donc le
+   * runtime aussi. Absent quand la review n'appartenait à aucune unité — un
+   * scout global reste global, il n'est pas rattaché de force.
+   */
+  workUnitId?: string;
   status: "open" | "routed" | "resolved";
   /**
    * The task call a continuation was engaged on, not the child that answered.
@@ -103,6 +112,7 @@ export function openRisks(
   ledger: readonly RiskRecord[],
   items: readonly ReviewRisk[] | undefined,
   openedBy: string,
+  workUnitId?: string,
 ): Applied {
   const next = ledger.map((r) => ({ ...r }));
   const events: LedgerEvent[] = [];
@@ -114,7 +124,7 @@ export function openRisks(
     // second one. Nothing is compared textually anywhere in this module.
     if (known.has(item.id)) continue;
     known.add(item.id);
-    next.push({ id: item.id, text: item.text, openedBy, status: "open" });
+    next.push({ id: item.id, text: item.text, openedBy, status: "open", ...(workUnitId ? { workUnitId } : {}) });
     events.push({ event: "opened", id: item.id, by: openedBy, chars: item.text.length });
   }
   return { ledger: next, events };
