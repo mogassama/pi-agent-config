@@ -129,12 +129,17 @@ export interface ReviewFinding {
 }
 
 /**
- * What a review that demands work carries, beyond its counts.
+ * What a non-approved review carries so the next action can be decided.
+ *
+ * Not necessarily a worker rework: a `blocked` verdict may call for a decision,
+ * an external dependency, or something the orchestrator does itself. What the
+ * payload has in common across those cases is that a next action has to be
+ * chosen, and choosing it needs the diagnostic.
  *
  * Run 15 measured the boundary and it is a verdict, not a volume. `top_priority`
  * appeared on 3 of 3 `needs_rework` and on 0 of 17 `approved`: it is already an
- * action field in everything but name. Findings travel with it, because a
- * rework formulated from the top priority alone leaves the second defect for a
+ * action field in everything but name. Findings travel with it, because an
+ * action formulated from the top priority alone leaves the second defect for a
  * second round trip — the orchestrator opened artefact 29 three times, and it
  * held two findings.
  *
@@ -154,11 +159,12 @@ export interface ReviewAction {
 }
 
 /**
- * The action payload, or nothing when the verdict asks for none.
+ * The action payload, or nothing when the verdict calls for none.
  *
- * Keyed on `verdict !== "approved"` rather than on `needs_rework` alone: a
- * `blocked` review demands more work, not less, and listing verdicts one by one
- * is how a fourth one gets forgotten later.
+ * Keyed on `verdict !== "approved"` rather than on `needs_rework` alone. The
+ * contract is not "this verdict means rework" but "approved is the one verdict
+ * with no next action to choose" — and enumerating the others is how a fourth
+ * one gets forgotten when the schema grows.
  */
 export function reviewAction(
   envelope: Record<string, unknown>,
@@ -190,18 +196,35 @@ function str(v: unknown): string {
  * The action payload under the head line: the instruction first, then the
  * diagnostic it was drawn from.
  *
- * One line per finding, whitespace collapsed for the same reason as the risks —
- * a newline inside an issue would produce a second line indistinguishable from
- * the next finding's. Nothing is truncated.
+ * Each finding is prefixed `FINDING`, which is a line type and not an identity:
+ * nothing refers to it, and there is no number after it. This block is a small
+ * textual protocol between the runtime and the orchestrator, and without the
+ * marker a finding is recognised only because it happens to start with a
+ * severity — implicit the day a severity is missing, renamed, or rendered
+ * differently. Three prefixes, three natures: `→` for the instruction,
+ * `FINDING` for the diagnostic, an id for an open risk.
+ *
+ * One line per finding, every fragment collapsed — not just the prose. A
+ * newline inside `location` or `severity` would produce a second line
+ * indistinguishable from the next finding's, which is exactly what the marker
+ * exists to prevent. Nothing is truncated: run 15's largest finding set came to
+ * 1206 characters against 4476 already carried by the risks, and a ceiling would
+ * cut exactly the clause that decides what to do.
  */
 export function actionLines(action: ReviewAction | undefined): string {
   if (!action) return "";
   const lines: string[] = [];
   if (action.topPriority) lines.push(`  → ${flat(action.topPriority)}`);
   for (const f of action.findings ?? []) {
-    const head = [f.severity, f.confidence].filter(Boolean).join(" ");
+    // Tous les fragments, pas seulement issue et fix. Le contrat dit une ligne
+    // par finding, et un saut de ligne dans `location` en produirait deux —
+    // indistinguables du finding suivant, ce que le marqueur FINDING vient
+    // justement d'empêcher. Le reviewer remplit ces cinq champs ; aucun n'est
+    // garanti sans blanc de mise en forme.
+    const head = [f.severity, f.confidence].filter(Boolean).map(flat).join(" ");
+    const location = flat(f.location);
     const body = [f.issue, f.fix].filter(Boolean).map(flat).join(" — ");
-    lines.push(`  ${[head, f.location, body].filter(Boolean).join("  ")}`);
+    lines.push(`  ${["FINDING", head, location, body].filter(Boolean).join("  ")}`);
   }
   return lines.join("\n");
 }

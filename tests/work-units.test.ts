@@ -18,6 +18,7 @@ import { join } from "node:path";
 import {
   RESERVED_WRITE_PATHS,
   cycles,
+  inScope,
   isReserved,
   parsePlan,
   reservedTouched,
@@ -234,5 +235,26 @@ for (const c of corpus.texts) {
     const r = parsePlan(c.text);
     assert.equal(r.status, c.status, r.reason);
     if (c.reason) assert.ok(r.reason.includes(c.reason), `${r.reason} ne contient pas ${c.reason}`);
+  });
+}
+
+// ------------------------------------- corpus de correspondance de scope
+
+/*
+ * Les mêmes entrées que `in_scope` en python, et surtout la sémantique voulue
+ * et pas seulement l'accord des deux. Deux divergences trouvées en l'écrivant :
+ * `.` était refusé des deux côtés — d'accord et faux — et `src/*.py` attrapait
+ * `src/x/a.py` en python parce que `fnmatch` laisse `*` franchir les barres.
+ */
+interface ScopeCorpus {
+  cases: Array<{ path: string; scope: string[]; in: boolean; why: string }>;
+}
+const scopeCorpus: ScopeCorpus = JSON.parse(
+  readFileSync(join(import.meta.dirname, "scope-corpus.json"), "utf-8"),
+);
+
+for (const c of scopeCorpus.cases) {
+  test(`scope · ${c.path} dans ${JSON.stringify(c.scope)} — ${c.why}`, () => {
+    assert.equal(inScope(c.path, c.scope), c.in);
   });
 }

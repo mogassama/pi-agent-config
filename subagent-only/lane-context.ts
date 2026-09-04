@@ -32,9 +32,9 @@ import type { RiskRecord } from "./risk-ledger.js";
 export interface LaneContext {
   laneId: string;
   workUnitId: string;
-  /** Là où la délégation travaille. Racine du dépôt tant qu'il n'y a pas de worktree. */
+  /** Le worktree de la lane. Là où la délégation travaille, réellement. */
   cwd: string;
-  /** Branche de la lane. Vide tant qu'il n'y a pas de worktree. */
+  /** La branche de la lane, telle que git la connaît. */
   branch: string;
 }
 
@@ -44,17 +44,52 @@ export interface LaneRoots {
 }
 
 /**
- * La lane d'une WorkUnit. Le laneId porte le run, comme les identifiants de
- * risque : deux runs ne se marchent pas dessus et la provenance se lit sans
- * table de correspondance.
+ * L'identifiant d'une lane. Porte le run, comme les identifiants de risque :
+ * deux runs ne se marchent pas dessus et la provenance se lit sans table de
+ * correspondance.
  */
-export function deriveLane(workUnitId: string, roots: LaneRoots): LaneContext {
-  return {
-    laneId: `${roots.runId}-${workUnitId}`,
-    workUnitId,
-    cwd: roots.root,
-    branch: "",
-  };
+export function laneIdFor(workUnitId: string, runId: string): string {
+  return `${runId}-${workUnitId}`;
+}
+
+/** Ce qu'il faut savoir faire pour ouvrir une lane : créer ou retrouver son worktree. */
+export type EnsureLane = (root: string, laneId: string) => { cwd: string; branch: string };
+
+/**
+ * La lane d'une WorkUnit, worktree compris.
+ *
+ * Rend le `cwd` et la branche que git connaît, et non une reconstruction
+ * parallèle de ce qu'ils devraient être : deux vérités sur le même chemin
+ * finissent toujours par diverger, et celle qui compte est celle où le worker
+ * écrit.
+ *
+ * Le worktree arrive en paramètre plutôt qu'en import. Ce module ne fait rien
+ * d'autre que de la résolution — identifiants, provenance, conflits — et le
+ * garder sans dépendance d'exécution le laisse testable directement, comme
+ * `review-boundary.ts` et `counts.ts`. L'appelant fournit `ensureLane`.
+ *
+ * Idempotente, parce que `ensureLane` l'est : un rework rouvre la lane de
+ * l'unité qu'il reprend, dans le même worktree et sur la même branche, et
+ * retrouve son état.
+ *
+ * Ce que cela donne au reviewer suivant demande d'être dit exactement, parce
+ * que la formulation évidente est fausse. Le worker de reprise retrouve le
+ * changement complet sur son disque ; la review suivante reçoit la frontière
+ * ouverte depuis la review précédente, c'est-à-dire ce qui a bougé depuis. Un
+ * rework qui ne corrige que le premier des deux fichiers d'une tentative donne
+ * donc une review portant sur ce fichier-là. Ce n'est pas un défaut : le second
+ * a déjà été vu, et `review-boundary.ts` est précisément la machine qui décide
+ * de cette frontière. Mais « le reviewer voit le changement complet » aurait été
+ * une affirmation sur une machine d'état qui dit autre chose.
+ */
+export function openLane(
+  workUnitId: string,
+  roots: LaneRoots,
+  ensure: EnsureLane,
+): LaneContext {
+  const laneId = laneIdFor(workUnitId, roots.runId);
+  const { cwd, branch } = ensure(roots.root, laneId);
+  return { laneId, workUnitId, cwd, branch };
 }
 
 /**

@@ -1,0 +1,53 @@
+{
+  "_": [
+    "Corpus de la correspondance de scope, lu par les deux implémentations.",
+    "",
+    "`inScope` en TypeScript (subagent-only/work-units.ts) et `in_scope` en python",
+    "(bin/subagent-shadow) répondent à la même question : ce fichier appartient-il",
+    "à ce scope ? Le premier corpus, celui du plan, avait montré qu'une dette de",
+    "duplication se matérialise sans qu'on la voie. Celle-ci s'était déjà",
+    "matérialisée deux fois avant même d'être testée.",
+    "",
+    "Deux divergences trouvées en écrivant ce fichier :",
+    "  `.` renvoyait faux des deux côtés — d'accord, et faux tous les deux. La",
+    "  parité ne dit rien de la justesse, donc les cas ci-dessous fixent la",
+    "  sémantique attendue et pas seulement l'accord.",
+    "  `src/*.py` attrapait `src/x/a.py` en python et pas en TypeScript, parce que",
+    "  `fnmatch` laisse `*` franchir les `/`. C'est le cas qui décide si un scope",
+    "  est étroit ou large, donc celui qui compte le plus."
+  ],
+
+  "cases": [
+    { "path": "src/a.py", "scope": ["src/a.py"], "in": true, "why": "exact" },
+    { "path": "src/a.py", "scope": ["src/b.py"], "in": false, "why": "un voisin n'est pas dedans" },
+
+    { "path": "src/a.py", "scope": ["src/"], "in": true, "why": "sous un répertoire déclaré" },
+    { "path": "src/a.py", "scope": ["src"], "in": true, "why": "répertoire sans barre finale" },
+    { "path": "src/x/a.py", "scope": ["src/"], "in": true, "why": "sous-répertoire" },
+    { "path": "tests/a.py", "scope": ["src/"], "in": false, "why": "autre répertoire" },
+    { "path": "srcfoo/a.py", "scope": ["src/"], "in": false, "why": "préfixe qui n'est pas un répertoire" },
+
+    { "path": "src/a.py", "scope": ["src/*.py"], "in": true, "why": "glob à un niveau" },
+    { "path": "src/x/a.py", "scope": ["src/*.py"], "in": false, "why": "* ne franchit pas une barre" },
+    { "path": "src/x/a.py", "scope": ["src/**"], "in": true, "why": "** franchit les barres" },
+    { "path": "src/a.py", "scope": ["src/**"], "in": true, "why": "** couvre aussi le niveau direct" },
+    { "path": "README.md", "scope": ["*.md"], "in": true, "why": "glob à la racine" },
+    { "path": "docs/a.md", "scope": ["*.md"], "in": false, "why": "* ne franchit pas une barre" },
+    { "path": "docs/a.md", "scope": ["**/*.md"], "in": true, "why": "** puis glob" },
+    { "path": "src/a.py", "scope": ["src/?.py"], "in": true, "why": "? vaut un caractère" },
+    { "path": "src/ab.py", "scope": ["src/?.py"], "in": false, "why": "? n'en vaut qu'un" },
+
+    { "path": "src/a.py", "scope": ["."], "in": true, "why": ". désigne la racine, donc tout" },
+    { "path": "README.md", "scope": ["."], "in": true, "why": ". couvre aussi la racine elle-même" },
+    { "path": "src/a.py", "scope": ["./"], "in": true, "why": "./ est la même chose" },
+
+    { "path": "./src/a.py", "scope": ["src/a.py"], "in": true, "why": "le chemin est normalisé" },
+    { "path": "src/a.py", "scope": ["./src/a.py"], "in": true, "why": "le motif aussi" },
+    { "path": "./src/a.py", "scope": ["./src/"], "in": true, "why": "les deux à la fois" },
+
+    { "path": "src/a.py", "scope": ["tests/", "src/a.py"], "in": true, "why": "un seul motif suffit" },
+    { "path": "src/a.py", "scope": [], "in": false, "why": "aucun motif ne couvre rien" },
+
+    { "path": "src/a.py", "scope": ["src/[ab].py"], "in": false, "why": "les classes ne sont pas supportées, et ne matchent donc pas" }
+  ]
+}

@@ -26,10 +26,12 @@ import {
   type LedgerEvent,
   type RiskRecord,
 } from "../../subagent-only/risk-ledger.js";
-import { deriveLane, targetWorkUnit } from "../../subagent-only/lane-context.js";
+import { openLane, targetWorkUnit, type LaneContext } from "../../subagent-only/lane-context.js";
+import { ensureLane, laneChanges, mergeLane, removeLane, type MergeBlock } from "../../subagent-only/worktree.js";
 import {
   parsePlan,
   reservedTouched,
+  scopeBreach,
   type PlanResult,
 } from "../../subagent-only/work-units.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
@@ -76,6 +78,14 @@ let SCOUT_CALLS = 0;
 interface Delegation {
   agent: string;
   /**
+   * La lane à laquelle cette délégation appartient, quand elle en a une.
+   *
+   * Absent pour ce qui n'appartient à aucune lane : une écriture inline de
+   * l'orchestrateur, un scout global. La frontière de review filtre dessus, les
+   * gardes globaux l'ignorent.
+   */
+  laneId?: string;
+  /**
    * The `task` call this entry came from. Four scouts of one fan-out share it.
    *
    * The journal counts children, which is honest — four really ran. The streak
@@ -92,6 +102,37 @@ interface Delegation {
   changedFiles: string[];
 }
 const HISTORY: Delegation[] = [];
+
+/**
+ * La vue d'une lane sur l'historique.
+ *
+ * `HISTORY` reste une séquence unique — les gardes globaux, le journal et les
+ * refus en dépendent, et l'écriture inline de l'orchestrateur n'appartient à
+ * aucune lane. Ce qui est local, c'est le raisonnement : la frontière de review
+ * reçoit la vue filtrée plutôt que d'apprendre à ignorer les autres lanes.
+ * `review-boundary.ts` reste une machine d'état sur une séquence, sans rien
+ * savoir des worktrees.
+ */
+function laneView(laneId: string | undefined): Delegation[] {
+  return laneId === undefined ? HISTORY : HISTORY.filter((d) => d.laneId === laneId);
+}
+
+/**
+ * Ce qui empêche une lane d'être intégrée, et que l'orchestrateur ne peut pas
+ * oublier de signaler.
+ *
+ * Accumulé par le runtime au fil des délégations. Une violation ou un
+ * dépassement constaté une fois ne s'efface pas parce qu'une review ultérieure
+ * approuve : ce n'est pas le reviewer qui juge si une hypothèse de concurrence
+ * tient encore.
+ */
+const LANE_BLOCKS = new Map<string, Set<MergeBlock>>();
+
+function blockLane(laneId: string, block: MergeBlock): void {
+  const set = LANE_BLOCKS.get(laneId) ?? new Set<MergeBlock>();
+  set.add(block);
+  LANE_BLOCKS.set(laneId, set);
+}
 
 /**
  * Every risk a review left open in this session, and what became of it.
@@ -434,11 +475,11 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
 const DIFF_MAX_CHARS = 80_000;
 const DIFF_MAX_FILES = 15;
 
-function gitDiffFor(paths: string[]): string {
+function gitDiffFor(paths: string[], cwd: string): string {
   const run = (args: string[]): string => {
     try {
       return execFileSync("git", args, {
-        cwd: process.cwd(),
+        cwd,
         encoding: "utf-8",
         maxBuffer: 8 * 1024 * 1024,
       });
@@ -455,7 +496,7 @@ function gitDiffFor(paths: string[]): string {
     let tracked = true;
     try {
       execFileSync("git", ["ls-files", "--error-unmatch", "--", path], {
-        cwd: process.cwd(),
+        cwd,
         stdio: "ignore",
       });
     } catch {
@@ -501,8 +542,8 @@ function decodeEscapes(text: string): string {
  * the tests call directly. Kept as a wrapper here so the call sites read the
  * same as before and `HISTORY` stays the single source.
  */
-function changedSinceLastReview(): string[] {
-  return openReviewBoundary(HISTORY);
+function changedSinceLastReview(view: Delegation[]): string[] {
+  return openReviewBoundary(view);
 }
 
 /**
@@ -527,7 +568,7 @@ export interface DiffPackage {
   diffChars?: number;
 }
 
-function diffSection(paths: string[]): DiffPackage {
+function diffSection(paths: string[], cwd: string): DiffPackage {
   const all = paths.filter(Boolean);
   if (all.length === 0) return { text: "", degraded: false };
 
@@ -550,7 +591,7 @@ function diffSection(paths: string[]): DiffPackage {
   if (files.length === 0) return { text: alsoChanged, degraded: false };
   if (files.length > DIFF_MAX_FILES) return readingList("too many to inline");
 
-  const diff = gitDiffFor(files);
+  const diff = gitDiffFor(files, cwd);
   if (!diff.trim()) return { text: alsoChanged, degraded: false };
   if (diff.length > DIFF_MAX_CHARS) {
     return readingList(`diff too large to inline at ${Math.round(diff.length / 1000)}kB`);
@@ -799,19 +840,6 @@ export default function (pi: ExtensionAPI) {
         // started being recorded, an orchestrator marking `DESIGN.md` as
         // implemented between a worker and its review would have shadowed the
         // code entirely, handing the reviewer a diff of a status field.
-        const changed = changedSinceLastReview();
-        const pkg =
-          params.agent === "reviewer" && changed.length > 0
-            ? diffSection(changed)
-            : { text: "", degraded: false, diffChars: 0 };
-
-        // For a scout, the contract is also the head of its task text: the child
-        // reads the same one question and the same paths the schema enforced.
-        // One task text per question, so a fan-out spawns children that differ
-        // in exactly one line and nothing else.
-        // Ahead of the diff, so the review reads what it must settle before what
-        // it must judge. Only a reviewer gets it: a scout is given one bounded
-        // question and would treat a pasted concern as a second one.
         const forRisks = params.for_risks ?? [];
         const cont =
           params.agent === "reviewer" ? continuationSection(forRisks, RISKS) : "";
@@ -857,8 +885,38 @@ export default function (pi: ExtensionAPI) {
             };
           }
         }
-        const lane = unit ? deriveLane(unit, { runId: RUN_ID, root: process.cwd() }) : undefined;
+        let lane: LaneContext | undefined;
+        if (unit) {
+          try {
+            lane = openLane(unit, { runId: RUN_ID, root: process.cwd() }, ensureLane);
+          } catch (err) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Refused: cannot open lane for ${unit} — ${err instanceof Error ? err.message : String(err)}`,
+              }],
+              isError: true,
+            };
+          }
+        }
 
+        // Lane-local des deux côtés : la frontière ne voit que l'historique de
+        // cette lane, et le diff est lu dans son worktree. Une lane intégrée
+        // entre-temps ne grossit donc pas cette review, ce qui est la propriété
+        // que `review-boundary.ts` prépare depuis le début.
+        const changed = changedSinceLastReview(laneView(lane?.laneId));
+        const pkg =
+          params.agent === "reviewer" && changed.length > 0
+            ? diffSection(changed, lane?.cwd ?? process.cwd())
+            : { text: "", degraded: false, diffChars: 0 };
+
+        // For a scout, the contract is also the head of its task text: the child
+        // reads the same one question and the same paths the schema enforced.
+        // One task text per question, so a fan-out spawns children that differ
+        // in exactly one line and nothing else.
+        // Ahead of the diff, so the review reads what it must settle before what
+        // it must judge. Only a reviewer gets it: a scout is given one bounded
+        // question and would treat a pasted concern as a second one.
         const questions = params.agent === "scout" ? scoutQuestions(params.find) : [];
         const scoutHeader = (q: string) =>
           `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
@@ -990,6 +1048,7 @@ export default function (pi: ExtensionAPI) {
         const batch = randomBytes(4).toString("hex");
         for (const r of results) {
           HISTORY.push({
+            laneId: lane?.laneId,
             agent: params.agent,
             batch,
             produced: !r.failure,
@@ -1013,6 +1072,26 @@ export default function (pi: ExtensionAPI) {
          * recorded as a continuation engaged and not returned, which is exactly
          * what a `routed` still standing at the end of a run means.
          */
+        /*
+         * Ce qui rend la lane non intégrable, constaté et retenu.
+         *
+         * Le worktree empêche la corruption immédiate ; ces états empêchent
+         * d'intégrer une hypothèse devenue fausse. Un dépassement ne tue pas la
+         * délégation — le run 15 a mesuré 6 écritures hors scope sur 46, donc
+         * tuer sur une prédiction imparfaite confondrait une erreur de planning
+         * avec une erreur de code — mais il ferme la porte du merge jusqu'à ce
+         * qu'il soit traité.
+         */
+        if (lane) {
+          for (const r of results) {
+            // Une violation de chemin réservé est un événement : la lane n'a
+            // jamais eu le droit d'écrire là, et aucune reprise ne l'annule.
+            if (reservedTouched(r.changedFiles ?? []).length > 0) {
+              blockLane(lane.laneId, "reserved-violation");
+            }
+          }
+        }
+
         const events: LedgerEvent[] = [];
         const channel = riskChannel(params.agent);
         if (channel === "continuation") {
@@ -1067,6 +1146,70 @@ export default function (pi: ExtensionAPI) {
           })),
         );
 
+        /*
+         * L'intégration d'une lane approuvée, décidée par le runtime.
+         *
+         * Mécanique et non déclarative : l'orchestrateur ne peut pas oublier de
+         * signaler une violation ni décider qu'un dépassement est acceptable.
+         * Les portes d'intégration sont vérifiées ici et non ailleurs — chemin
+         * réservé, dépassement de scope, verdict, risques encore ouverts, et
+         * git en dernier. Nommées plutôt que comptées : une porte de plus ne
+         * doit pas laisser un commentaire faux derrière elle.
+         *
+         * Le worktree n'est retiré qu'après une intégration réussie. Une lane
+         * revue mais non intégrable garde son arbre : c'est là que le rework
+         * reprendra, et l'effacer sur une review perdrait le travail.
+         */
+        let integration = "";
+        if (lane && params.agent === "reviewer" && !results[0]?.failure) {
+          const blocks = [...(LANE_BLOCKS.get(lane.laneId) ?? [])];
+          if (results[0]?.verdict !== "approved") blocks.push("not-approved");
+
+          /*
+           * Une review approuvée qui laisse un risque ouvert n'est pas terminée.
+           *
+           * C'est le cas que tout le pont reviewer → scout → follow-up review
+           * existe pour traiter. Intégrer là-dessus retirerait le worktree, et
+           * la continuation repartirait d'une base contenant déjà le changement :
+           * son diff serait vide pendant que la frontière de review croit encore
+           * avoir quelque chose à poursuivre.
+           */
+          const pending = RISKS.filter(
+            (r) => r.workUnitId === lane.workUnitId && r.status !== "resolved",
+          );
+          if (pending.length > 0) blocks.push("open-risks");
+
+          /*
+           * Le dépassement de scope est recalculé sur l'état final de la lane,
+           * il n'est pas retenu depuis la délégation qui l'a produit.
+           *
+           * Un rework qui annule le fichier hors périmètre doit rendre la lane
+           * intégrable : le run 15 a mesuré 6 dépassements sur 46 écritures, et
+           * un blocage définitif y aurait produit des lanes irrécupérables
+           * autrement qu'à la main. Ce qui compte pour intégrer est ce que la
+           * lane contient, pas ce qu'elle a traversé.
+           */
+          const unitDef = plan().units.find((u) => u.id === lane.workUnitId);
+          const finalFiles = laneChanges(process.cwd(), lane.laneId);
+          if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push("scope-breach");
+          const merged = mergeLane(process.cwd(), lane.laneId, blocks,
+            `subagent: integrate ${lane.workUnitId}`);
+          if (merged.ok) {
+            removeLane(process.cwd(), lane.laneId);
+            LANE_BLOCKS.delete(lane.laneId);
+            integration = `  intégrée : ${lane.workUnitId}`;
+          } else if (blocks.length > 0) {
+            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}`;
+          } else if (merged.conflicts.length > 0) {
+            integration = `  CONFLIT  ${lane.workUnitId} : ${merged.conflicts.join(", ")}`;
+          } else {
+            // Un échec sans fichier en conflit n'est pas un conflit : un gel
+            // impossible, par exemple. Le rendre comme « CONFLIT : » vide
+            // laissait le travail intact et perdait la cause.
+            integration = `  ÉCHEC INTÉGRATION  ${lane.workUnitId} : ${merged.reason}`;
+          }
+        }
+
         const result = results[0];
 
         // Only the summary crosses back. The envelope stays on disk; the
@@ -1110,7 +1253,7 @@ export default function (pi: ExtensionAPI) {
         const violation = reserved.length
           ? `  ${reserved.join(", ")} — la lane n'en est pas propriétaire, non intégrable`
           : "";
-        const under = [violation, action, risks].filter(Boolean).join("\n");
+        const under = [violation, integration, action, risks].filter(Boolean).join("\n");
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`

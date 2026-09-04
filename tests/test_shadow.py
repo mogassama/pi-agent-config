@@ -220,6 +220,25 @@ class Corpus(unittest.TestCase):
                     self.assertIn(c["reason"], reason)
 
 
+class ScopeCorpus(unittest.TestCase):
+    """
+    La correspondance de scope, sur exactement les mêmes entrées que le
+    validateur TypeScript, et sur la sémantique voulue.
+
+    Deux divergences trouvées en écrivant ce corpus : `.` refusé des deux côtés
+    — d'accord et faux — et `*` qui franchissait les barres ici parce que
+    `fnmatch` le permet. La seconde décide si un scope est étroit ou large,
+    donc si deux lanes peuvent tourner ensemble.
+    """
+
+    CORPUS = json.loads((ROOT / "tests" / "scope-corpus.json").read_text())
+
+    def test_cases(self):
+        for c in self.CORPUS["cases"]:
+            with self.subTest(f"{c['path']} / {c['scope']} — {c['why']}"):
+                self.assertEqual(sh.in_scope(c["path"], c["scope"]), c["in"])
+
+
 class Reserved(unittest.TestCase):
     """Les mêmes chemins réservés que le runtime, signalés par le relevé."""
 

@@ -137,6 +137,12 @@ def validate_plan(doc):
             scope = [p.strip() for p in scope]
         if uid in deps:
             problems.append(f"{uid}: depends on itself")
+        # Le langage de scope reste petit : littéral, répertoire, `.`, `*`, `?`,
+        # `**`. Une classe de caractères qui passerait la validation sans jamais
+        # correspondre serait une fausse déclaration d'ownership.
+        for pat in scope:
+            if "[" in pat or "]" in pat:
+                problems.append(f"{uid}: unsupported scope pattern syntax in {pat}")
         ids.append(uid)
         units.append({"id": uid, "goal": u.get("goal"), "depends_on": deps, "scope": scope})
 
@@ -352,11 +358,56 @@ def scopes_overlap(a_scope, b_scope):
     return sorted({f"{p} ~ {q}" for p in a for q in b if patterns_overlap(p, q)})
 
 
+def _norm(path):
+    return path[2:] if path.startswith("./") else path
+
+
+def _glob_match(path, pattern):
+    """
+    Un glob qui respecte les frontières de chemin.
+
+    `fnmatch` traduit `*` en `.*`, donc `src/*.py` y attrapait `src/x/a.py` alors
+    que le validateur TypeScript le refusait. Deux implémentations d'accord sur
+    tout sauf ce cas — et c'est le cas qui décide si un scope est étroit.
+    `*` ne franchit pas un `/`, `**` le franchit, `?` vaut un caractère.
+    """
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "*":
+            if pattern[i:i + 2] == "**":
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+        elif c == "?":
+            out.append(".")
+        else:
+            out.append(re.escape(c))
+        i += 1
+    try:
+        return re.fullmatch("".join(out), path) is not None
+    except re.error:
+        return False
+
+
 def in_scope(path, patterns):
-    for p in patterns:
-        if path == p or fnmatch.fnmatch(path, p):
+    """
+    Ce fichier tombe-t-il dans ce scope ? Miroir de `inScope` en TypeScript.
+
+    `.` désigne la racine, donc tout. Les deux implémentations le refusaient,
+    d'un commun accord et à tort : deux validateurs peuvent être d'accord et
+    faux, ce que le corpus de tests/scope-corpus.json est là pour attraper —
+    il fixe la sémantique attendue, pas seulement la parité.
+    """
+    f = _norm(path)
+    for raw in patterns:
+        p = _norm(raw).rstrip("/")
+        if p in ("", "."):
             return True
-        if path.startswith(p.rstrip("/") + "/"):
+        if f == p or _glob_match(f, _norm(raw)):
+            return True
+        if f.startswith(p + "/"):
             return True
     return False
 

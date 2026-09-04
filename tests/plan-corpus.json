@@ -170,6 +170,14 @@
       "status": "invalid"
     },
     {
+      "name": "classe de caractères dans un scope : refusée",
+      "doc": { "version": 1, "work_units": [
+        { "id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["src/[ab].py"] }
+      ] },
+      "status": "invalid",
+      "reason": "unsupported scope pattern syntax"
+    },
+    {
       "name": "goal absent : signalé, jamais bloquant",
       "doc": { "version": 1, "work_units": [
         { "id": "W01", "depends_on": [], "expected_write_scope": ["a.py"] }

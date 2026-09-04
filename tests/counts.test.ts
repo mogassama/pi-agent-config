@@ -225,22 +225,64 @@ test("l'instruction vient avant le diagnostic qui la fonde", () => {
     { top_priority: "restaurer le switch", findings: [FINDING] }, "needs_rework"));
   const lines = out.split("\n");
   assert.ok(lines[0].startsWith("  → restaurer le switch"));
+  assert.ok(lines[1].startsWith("  FINDING  "));
   assert.ok(lines[1].includes("HIGH certain"));
   assert.ok(lines[1].includes("checkpoint_io.py:112"));
   assert.ok(lines[1].includes(" — restore the coalesce/repartition branch"));
+});
+
+// `FINDING` est un type de ligne, pas une identité : pas de numéro derrière, et
+// rien ne le référence. Sans lui, un finding ne se reconnaît qu'à sa severity —
+// implicite le jour où elle manque ou change de nom.
+test("chaque finding est préfixé, et le préfixe ne porte aucun numéro", () => {
+  const out = actionLines(reviewAction(
+    { findings: [FINDING, { ...FINDING, severity: "LOW" }] }, "needs_rework"));
+  const lines = out.split("\n");
+  assert.equal(lines.length, 2);
+  for (const line of lines) assert.ok(line.startsWith("  FINDING  "));
+  assert.ok(!/FINDING[-\s]*\d/.test(out));
+});
+
+test("les trois natures se distinguent par leur préfixe", () => {
+  const env = { top_priority: "restaurer le switch", findings: [FINDING] };
+  const out = actionLines(reviewAction(env, "needs_rework")).split("\n");
+  assert.ok(out[0].startsWith("  → "));
+  assert.ok(out[1].startsWith("  FINDING  "));
+  // Le troisième préfixe, l'identifiant de risque, est rendu par riskLines.
+  assert.ok(riskLines([{ id: "9a6766-29-1", text: "x" }]).startsWith("  9a6766-29-1  "));
 });
 
 test("rien à porter rend une chaîne vide", () => {
   assert.equal(actionLines(undefined), "");
 });
 
-// Même raison que pour les risques : un saut de ligne dans une issue produirait
-// une seconde ligne indistinguable du finding suivant.
-test("un finding reste sur une ligne quoi qu'il contienne", () => {
-  const out = actionLines(reviewAction(
-    { findings: [{ ...FINDING, issue: "a\n  b\tc" }] }, "needs_rework"));
-  assert.equal(out.split("\n").length, 1);
-  assert.ok(out.includes("a b c"));
+/*
+ * Le test précédent annonçait « quoi qu'il contienne » et n'injectait un saut de
+ * ligne que dans `issue` : il protégeait une propriété plus faible que celle
+ * qu'il déclarait, et `location`, `severity` et `confidence` passaient bruts.
+ * Chaque champ est donc testé séparément, puis tous ensemble.
+ */
+for (const champ of ["severity", "confidence", "location", "issue", "fix"] as const) {
+  test(`un saut de ligne dans ${champ} ne casse pas la ligne du finding`, () => {
+    const out = actionLines(reviewAction(
+      { findings: [{ ...FINDING, [champ]: "a\n  b\tc" }] }, "needs_rework"));
+    assert.equal(out.split("\n").length, 1, out);
+    assert.ok(out.includes("a b c"), out);
+  });
+}
+
+test("un finding entièrement pollué de blancs reste une seule ligne", () => {
+  const sale = {
+    severity: "HIGH\n", confidence: "\tcertain", location: "io.py:\n112",
+    issue: "défaut\n\nconstaté", fix: "remède\tattendu",
+  };
+  const out = actionLines(reviewAction({ top_priority: "prio\nrité", findings: [sale, sale] },
+    "needs_rework"));
+  assert.equal(out.split("\n").length, 3);
+  assert.ok(out.split("\n")[0].startsWith("  → prio rité"));
+  for (const line of out.split("\n").slice(1)) {
+    assert.ok(line.startsWith("  FINDING  HIGH certain  io.py: 112  "), line);
+  }
 });
 
 // Les findings ne sont référencés par rien — ni `for_findings`, ni un second

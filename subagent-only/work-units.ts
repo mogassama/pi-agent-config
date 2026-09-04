@@ -143,6 +143,20 @@ export function validatePlan(doc: unknown): PlanResult {
       problems.push(`${id}: expected_write_scope is not a non-empty list of paths`);
     }
     if ((deps ?? []).includes(id)) problems.push(`${id}: depends on itself`);
+    /*
+     * Le langage de scope est petit et le reste : littéral, répertoire, `.`,
+     * `*`, `?`, `**`. Une classe de caractères n'apporte presque rien aux plans
+     * que pi produit et doublerait la surface des deux matchers.
+     *
+     * Le pire comportement serait de la laisser passer la validation puis de ne
+     * jamais correspondre : un scope qui a l'air de couvrir un fichier et ne le
+     * couvre pas est une fausse déclaration d'ownership.
+     */
+    for (const pat of scope ?? []) {
+      if (/[[\]]/.test(pat)) {
+        problems.push(`${id}: unsupported scope pattern syntax in ${pat}`);
+      }
+    }
     ids.push(id);
     units.push({
       id,
@@ -224,6 +238,74 @@ export function isReserved(path: string): boolean {
  * figer maintenant une API dont le seul cas testé est le cas littéral aurait
  * fabriqué une fausse sécurité.
  */
+
+/**
+ * Un fichier tombe-t-il dans un scope déclaré ?
+ *
+ * Exact, glob, ou sous un répertoire déclaré. Miroir de `in_scope` dans
+ * `bin/subagent-shadow` — la même dette de duplication que le contrat de plan,
+ * et le même remède : les deux côtés sont éprouvés sur les mêmes entrées.
+ *
+ * C'est volontairement la question étroite « ce fichier était-il prévu », et
+ * non la soustraction `scope − réservé` que l'ownership demandera au lot 3.
+ * Celle-là a besoin d'une sémantique de motifs que le seul cas littéral ne
+ * couvre pas, et la figer maintenant fabriquerait une fausse sécurité.
+ */
+export function inScope(path: string, patterns: readonly string[]): boolean {
+  const file = norm(path);
+  return patterns.some((raw) => {
+    const p = norm(raw).replace(/\/$/, "");
+    // `.` désigne la racine du dépôt, donc tout. Les deux implémentations le
+    // refusaient, d'un commun accord et à tort : la parité ne dit rien de la
+    // justesse, et un scope `.` est un scope large — inutile pour paralléliser,
+    // mais parfaitement satisfait par n'importe quel fichier.
+    if (p === "" || p === ".") return true;
+    if (file === p) return true;
+    if (file.startsWith(`${p}/`)) return true;
+    return globMatch(file, norm(raw));
+  });
+}
+
+/** `./src/a.py` et `src/a.py` sont le même fichier. */
+function norm(path: string): string {
+  return path.replace(/^\.\//, "");
+}
+
+/** fnmatch, réduit à ce que les scopes utilisent : `*`, `?`, `**`. */
+function globMatch(path: string, pattern: string): boolean {
+  const rx = pattern
+    .split("")
+    .map((c) => {
+      if (c === "*") return "\u0000";
+      if (c === "?") return ".";
+      return /[.+^${}()|[\]\\]/.test(c) ? `\\${c}` : c;
+    })
+    .join("")
+    .replace(/\u0000\u0000/g, ".*")
+    .replace(/\u0000/g, "[^/]*");
+  try {
+    return new RegExp(`^${rx}$`).test(path);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Les fichiers qu'une délégation a écrits hors de ce que son unité déclarait.
+ *
+ * Constaté, jamais empêché. Le run 15 a mesuré 6 dépassements sur 46 écritures,
+ * donc tuer une délégation sur une prédiction imparfaite confondrait une erreur
+ * de planning avec une erreur de code. Mais le dépassement rend la lane non
+ * intégrable : le worktree empêche la corruption immédiate, la porte de merge
+ * empêche d'intégrer une hypothèse devenue fausse.
+ */
+export function scopeBreach(
+  unit: WorkUnit | undefined,
+  changedFiles: readonly string[],
+): string[] {
+  if (!unit) return [];
+  return changedFiles.filter((f) => !isReserved(f) && !inScope(f, unit.expectedWriteScope));
+}
 
 /**
  * Les chemins réservés qu'une délégation a réellement écrits.

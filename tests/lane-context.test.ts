@@ -11,7 +11,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { deriveLane, laneOfRisks, targetWorkUnit } from "../subagent-only/lane-context.ts";
+import { laneIdFor, laneOfRisks, openLane, targetWorkUnit } from "../subagent-only/lane-context.ts";
+import { ensureLane } from "../subagent-only/worktree.ts";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openRisks } from "../subagent-only/risk-ledger.ts";
 import type { RiskRecord } from "../subagent-only/risk-ledger.ts";
 
@@ -27,24 +32,39 @@ const ledgerWith = (...pairs: Array<[string, string | undefined]>): RiskRecord[]
 // ------------------------------------------------------------ dérivation
 
 test("la lane porte le run et l'unité", () => {
-  const lane = deriveLane("W06", ROOTS);
-  assert.equal(lane.laneId, "9a6766-W06");
-  assert.equal(lane.workUnitId, "W06");
+  assert.equal(laneIdFor("W06", "9a6766"), "9a6766-W06");
 });
 
 // Deux runs ne se marchent pas dessus, comme pour les identifiants de risque.
 test("deux runs ne produisent pas la même lane pour la même unité", () => {
-  assert.notEqual(
-    deriveLane("W06", ROOTS).laneId,
-    deriveLane("W06", { runId: "3f10bd", root: "/repo" }).laneId,
-  );
+  assert.notEqual(laneIdFor("W06", "9a6766"), laneIdFor("W06", "3f10bd"));
 });
 
-// Au lot 1 il n'y a pas de worktree : la forme est complète, le lot 2 substitue.
-test("sans worktree, la lane travaille à la racine et sur aucune branche", () => {
-  const lane = deriveLane("W06", ROOTS);
-  assert.equal(lane.cwd, "/repo");
-  assert.equal(lane.branch, "");
+// Le cwd et la branche sont ceux que git connaît, pas une reconstruction
+// parallèle : deux vérités sur le même chemin finissent par diverger, et celle
+// qui compte est celle où le worker écrit.
+test("la lane rend le worktree que git connaît", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-lc-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: root });
+    writeFileSync(join(root, "a.py"), "a = 1\n");
+    execFileSync("git", ["add", "-A"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+
+    const lane = openLane("W06", { runId: "9a6766", root }, ensureLane);
+    assert.equal(lane.laneId, "9a6766-W06");
+    assert.equal(lane.branch, "pi-lane/9a6766-W06");
+    assert.notEqual(lane.cwd, root);
+    const listed = execFileSync("git", ["worktree", "list"], { cwd: root, encoding: "utf-8" });
+    assert.ok(listed.includes(lane.cwd));
+
+    // Idempotente : un rework rouvre la même lane et retrouve son état.
+    assert.equal(openLane("W06", { runId: "9a6766", root }, ensureLane).cwd, lane.cwd);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // ------------------------------------------------- résolution par les risques
