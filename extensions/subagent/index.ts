@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
-import { countsLine, riskLines } from "../../subagent-only/counts.js";
+import { actionLines, countsLine, riskLines } from "../../subagent-only/counts.js";
 import {
   continuationReturned,
   openRisks,
@@ -975,11 +975,18 @@ export default function (pi: ExtensionAPI) {
         // alone sent the orchestrator back to the artefact fourteen times on run
         // 14, five of those through a python heredoc, to read strings this
         // process had already parsed to produce the count.
+        // L'instruction d'abord, le diagnostic qui la fonde ensuite, les
+        // questions ouvertes en dernier. Sur `approved`, `action` est absent et
+        // seul le compte reste : run 15 montre l'orchestrateur payer un accès
+        // sur deux reviews approuvées pour décider, les deux fois, de ne rien
+        // faire maintenant.
+        const action = actionLines(result.action);
         const risks = riskLines(result.openRiskItems);
+        const under = [action, risks].filter(Boolean).join("\n");
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`
-          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]${risks ? `\n${risks}` : ""}`;
+          : `[${result.role}: ${outcome}${counts ? `, ${counts}` : ""}${via}]${under ? `\n${under}` : ""}`;
 
         // Say which skills came without a severity table. The review still
         // ran; the operator should know one domain was judged on the generic

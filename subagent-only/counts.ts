@@ -119,6 +119,97 @@ export function countsLine(counts: EnvelopeCounts): string {
     .join(", ");
 }
 
+/** One finding, as the envelope schema shapes it. No id: nothing refers to it. */
+export interface ReviewFinding {
+  severity: string;
+  confidence: string;
+  location: string;
+  issue: string;
+  fix: string;
+}
+
+/**
+ * What a review that demands work carries, beyond its counts.
+ *
+ * Run 15 measured the boundary and it is a verdict, not a volume. `top_priority`
+ * appeared on 3 of 3 `needs_rework` and on 0 of 17 `approved`: it is already an
+ * action field in everything but name. Findings travel with it, because a
+ * rework formulated from the top priority alone leaves the second defect for a
+ * second round trip — the orchestrator opened artefact 29 three times, and it
+ * held two findings.
+ *
+ * An approved review carries neither. Its count stays on the head line and its
+ * detail stays in the artefact: run 15 shows the orchestrator paying an access
+ * on two approved reviews to decide, both times, to do nothing now. A finding
+ * worth surviving as debt belongs in a backlog, not in a context the
+ * orchestrator is not meant to act on.
+ *
+ * Findings get no identity. Nothing references them the way `for_risks` and
+ * `resolved_risks` reference a risk, so an id would be a contract with no
+ * consumer — and a second small ledger to keep honest.
+ */
+export interface ReviewAction {
+  topPriority?: string;
+  findings?: ReviewFinding[];
+}
+
+/**
+ * The action payload, or nothing when the verdict asks for none.
+ *
+ * Keyed on `verdict !== "approved"` rather than on `needs_rework` alone: a
+ * `blocked` review demands more work, not less, and listing verdicts one by one
+ * is how a fourth one gets forgotten later.
+ */
+export function reviewAction(
+  envelope: Record<string, unknown>,
+  verdict: string | undefined,
+): ReviewAction | undefined {
+  if (verdict === undefined || verdict === "approved") return undefined;
+  const top = typeof envelope.top_priority === "string" ? envelope.top_priority.trim() : "";
+  const findings = Array.isArray(envelope.findings)
+    ? envelope.findings
+        .filter((f): f is Record<string, unknown> => typeof f === "object" && f !== null)
+        .map((f): ReviewFinding => ({
+          severity: str(f.severity),
+          confidence: str(f.confidence),
+          location: str(f.location),
+          issue: str(f.issue),
+          fix: str(f.fix),
+        }))
+        .filter((f) => f.issue || f.fix)
+    : [];
+  if (!top && findings.length === 0) return undefined;
+  return { topPriority: top || undefined, findings: findings.length ? findings : undefined };
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/**
+ * The action payload under the head line: the instruction first, then the
+ * diagnostic it was drawn from.
+ *
+ * One line per finding, whitespace collapsed for the same reason as the risks —
+ * a newline inside an issue would produce a second line indistinguishable from
+ * the next finding's. Nothing is truncated.
+ */
+export function actionLines(action: ReviewAction | undefined): string {
+  if (!action) return "";
+  const lines: string[] = [];
+  if (action.topPriority) lines.push(`  → ${flat(action.topPriority)}`);
+  for (const f of action.findings ?? []) {
+    const head = [f.severity, f.confidence].filter(Boolean).join(" ");
+    const body = [f.issue, f.fix].filter(Boolean).map(flat).join(" — ");
+    lines.push(`  ${[head, f.location, body].filter(Boolean).join("  ")}`);
+  }
+  return lines.join("\n");
+}
+
+function flat(text: string): string {
+  return text.replace(/\s+/g, " ");
+}
+
 /**
  * The risks as they appear under the head line, one per line, indented so the
  * block reads as belonging to the line above rather than as a second result.

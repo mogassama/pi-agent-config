@@ -14,7 +14,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { countsLine, envelopeCounts, riskLines } from "../subagent-only/counts.ts";
+import {
+  actionLines,
+  countsLine,
+  envelopeCounts,
+  reviewAction,
+  riskLines,
+} from "../subagent-only/counts.ts";
 
 const P = "9a6766-04";
 
@@ -156,4 +162,97 @@ test("a newline inside a risk is collapsed so one risk stays one line", () => {
   const out = riskLines([{ id: "9a6766-04-1", text: "a\n  b\tc" }]);
   assert.equal(out, "  9a6766-04-1  a b c");
   assert.equal(out.split("\n").length, 1);
+});
+
+// ------------------------------------------------- l'action d'une review
+
+/*
+ * La frontière est un verdict, pas un volume.
+ *
+ * Run 15 : `top_priority` sur 3 des 3 `needs_rework` et sur 0 des 17
+ * `approved`. Le champ est déjà une instruction de reprise en tout sauf le nom.
+ * Les findings voyagent avec lui parce qu'une reprise écrite depuis la seule
+ * priorité laisse le second défaut pour un second aller-retour — l'artefact 29
+ * a été rouvert trois fois et il portait deux findings.
+ */
+const FINDING = {
+  severity: "HIGH",
+  confidence: "certain",
+  location: "checkpoint_io.py:112",
+  issue: "write_parquet_guarded drops the partition_strategy switch",
+  fix: "restore the coalesce/repartition branch",
+};
+
+test("une review approuvée ne porte aucune action", () => {
+  assert.equal(
+    reviewAction({ top_priority: "corriger la docstring", findings: [FINDING] }, "approved"),
+    undefined,
+  );
+});
+
+test("needs_rework porte la priorité et les findings", () => {
+  const a = reviewAction({ top_priority: "restaurer le switch", findings: [FINDING] }, "needs_rework");
+  assert.equal(a?.topPriority, "restaurer le switch");
+  assert.equal(a?.findings?.length, 1);
+  assert.equal(a?.findings?.[0].location, "checkpoint_io.py:112");
+});
+
+// Keyée sur `!== approved` et non sur la liste des verdicts qui demandent du
+// travail : c'est ainsi qu'un quatrième verdict se ferait oublier plus tard.
+test("blocked porte l'action comme needs_rework", () => {
+  assert.ok(reviewAction({ top_priority: "arrêter", findings: [FINDING] }, "blocked"));
+});
+
+test("un verdict absent ne porte rien", () => {
+  assert.equal(reviewAction({ top_priority: "x", findings: [FINDING] }, undefined), undefined);
+});
+
+test("une review sans priorité ni finding ne porte rien", () => {
+  assert.equal(reviewAction({ findings: [] }, "needs_rework"), undefined);
+  assert.equal(reviewAction({ top_priority: "   " }, "needs_rework"), undefined);
+});
+
+test("un finding sans texte exploitable est écarté", () => {
+  const a = reviewAction(
+    { findings: [{ severity: "LOW", confidence: "possible", location: "a.py:1" }] },
+    "needs_rework",
+  );
+  assert.equal(a, undefined);
+});
+
+test("l'instruction vient avant le diagnostic qui la fonde", () => {
+  const out = actionLines(reviewAction(
+    { top_priority: "restaurer le switch", findings: [FINDING] }, "needs_rework"));
+  const lines = out.split("\n");
+  assert.ok(lines[0].startsWith("  → restaurer le switch"));
+  assert.ok(lines[1].includes("HIGH certain"));
+  assert.ok(lines[1].includes("checkpoint_io.py:112"));
+  assert.ok(lines[1].includes(" — restore the coalesce/repartition branch"));
+});
+
+test("rien à porter rend une chaîne vide", () => {
+  assert.equal(actionLines(undefined), "");
+});
+
+// Même raison que pour les risques : un saut de ligne dans une issue produirait
+// une seconde ligne indistinguable du finding suivant.
+test("un finding reste sur une ligne quoi qu'il contienne", () => {
+  const out = actionLines(reviewAction(
+    { findings: [{ ...FINDING, issue: "a\n  b\tc" }] }, "needs_rework"));
+  assert.equal(out.split("\n").length, 1);
+  assert.ok(out.includes("a b c"));
+});
+
+// Les findings ne sont référencés par rien — ni `for_findings`, ni un second
+// registre. Une identité serait un contrat sans consommateur.
+test("un finding ne porte aucun identifiant", () => {
+  const a = reviewAction({ findings: [FINDING] }, "needs_rework");
+  assert.deepEqual(Object.keys(a!.findings![0]).sort(),
+    ["confidence", "fix", "issue", "location", "severity"]);
+});
+
+test("rien n'est tronqué, quelle que soit la longueur", () => {
+  const long = "z".repeat(1200);
+  const out = actionLines(reviewAction({ findings: [{ ...FINDING, issue: long }] }, "needs_rework"));
+  assert.ok(out.includes(long));
 });

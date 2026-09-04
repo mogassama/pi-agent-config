@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { runAttempts } from "./attempts.js";
-import { envelopeCounts, type EnvelopeCounts } from "./counts.js";
+import { envelopeCounts, reviewAction, type EnvelopeCounts, type ReviewAction } from "./counts.js";
 import { changedBetween, treeState } from "./tree.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
 import {
@@ -65,6 +65,11 @@ export interface RunResult extends EnvelopeCounts {
    * against what this delegation was actually handed before closing anything.
    */
   resolvedRisks?: string[];
+  /**
+   * What a review demanding work carries so the rework can be written without
+   * reopening the artefact. Absent on `approved` — see `reviewAction`.
+   */
+  action?: ReviewAction;
   /**
    * Paths the delegation says it wrote.
    *
@@ -455,6 +460,7 @@ async function runOnce(
       : undefined,
     recommendation:
       typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,
+    action: reviewAction(envelope, typeof envelope.verdict === "string" ? envelope.verdict : undefined),
     ...envelopeCounts(envelope, `${opts.ctx.runId}-${seq}`),
     changedFiles: Array.isArray(envelope.changed_files)
       ? envelope.changed_files.filter((f: unknown): f is string => typeof f === "string")
