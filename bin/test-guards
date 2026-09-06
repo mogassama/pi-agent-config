@@ -45,11 +45,25 @@ flags=(--test)
 if [ $# -gt 0 ]; then
   files=()
   for name in "$@"; do files+=("tests/${name%.test.ts}.test.ts"); done
+  for f in "${files[@]}"; do
+    if [ "$f" = "tests/execute-harness.test.ts" ]; then
+      exec node --import ./tests/stubs/loader.mjs "${flags[@]}" "${files[@]}"
+    fi
+  done
   exec node "${flags[@]}" "${files[@]}"
 fi
 
 status=0
-node "${flags[@]}" tests/*.test.ts || status=$?
+# Le harnais d'`execute` charge l'extension, qui importe l'API de pi et typebox.
+# Il tourne donc sous un chargeur de substitution, à part — et il tourne
+# vraiment : un test de câblage qui se sauterait faute de dépendance serait un
+# test vert qui ne vérifie rien.
+harness=tests/execute-harness.test.ts
+others=()
+for f in tests/*.test.ts; do [ "$f" = "$harness" ] || others+=("$f"); done
+
+node "${flags[@]}" "${others[@]}" || status=$?
+node --import ./tests/stubs/loader.mjs "${flags[@]}" "$harness" || status=$?
 
 echo
 if command -v python3 >/dev/null 2>&1; then

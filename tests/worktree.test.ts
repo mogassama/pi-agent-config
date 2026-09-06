@@ -20,12 +20,16 @@ import { changedBetween, treeState } from "../subagent-only/tree.ts";
 import {
   commitLane,
   ensureLane,
+  isMerged,
   laneBranch,
   laneChanges,
+  laneUnmergedCommitCount,
   lanesDir,
   mergeLane,
   openLanes,
   removeLane,
+  removeLaneBranch,
+  runBranches,
 } from "../subagent-only/worktree.ts";
 
 function git(cwd: string, ...args: string[]): string {
@@ -406,6 +410,120 @@ test("une lane reprise après conflit peut être intégrée", () => {
   }
 });
 
+// Ce que git sait de l'intégration, indépendamment du registre : c'est ce qui
+// permet de nommer l'écart quand un crash suit un merge réussi.
+/*
+ * « Ancêtre de HEAD » ne suffit pas.
+ *
+ * Une lane fraîche pointe sur HEAD, donc elle en est trivialement l'ancêtre.
+ * La première version la disait intégrée, ce qui faisait produire une fausse
+ * contradiction « intégration non enregistrée » à chaque lane ouverte lors de
+ * la reprise suivante — trouvé par le harnais.
+ */
+test("une lane qui n'a rien produit n'est pas intégrée", () => {
+  const { root, done } = repo();
+  try {
+    const base = git(root, "rev-parse", "HEAD").trim();
+    ensureLane(root, "9a6766-W01");
+    assert.equal(isMerged(root, "9a6766-W01", base), false);
+  } finally {
+    done();
+  }
+});
+
+test("une lane intégrée est reconnue", () => {
+  const { root, done } = repo();
+  try {
+    const base = git(root, "rev-parse", "HEAD").trim();
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    assert.equal(mergeLane(root, "9a6766-W01", []).ok, true);
+    assert.equal(isMerged(root, "9a6766-W01", base), true);
+  } finally {
+    done();
+  }
+});
+
+test("une lane qui a travaillé sans être intégrée ne l'est pas", () => {
+  const { root, done } = repo();
+  try {
+    const base = git(root, "rev-parse", "HEAD").trim();
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    commitLane(root, "9a6766-W01", "W01");
+    assert.equal(isMerged(root, "9a6766-W01", base), false);
+  } finally {
+    done();
+  }
+});
+
+/*
+ * Le défaut d'origine, simplement retardé jusqu'au premier merge.
+ *
+ * Corriger « ancêtre de HEAD » par « a produit quelque chose depuis la base du
+ * run » ne suffit pas : une lane ouverte après l'intégration d'une autre unité
+ * part d'un HEAD déjà avancé. Compter ses commits depuis la base du run y
+ * trouve ceux de l'unité précédente, et une lane qui n'a rien fait passe pour
+ * intégrée. La base appartient à la lane.
+ */
+test("une lane ouverte après un merge, et vide, n'est pas intégrée", () => {
+  const { root, done } = repo();
+  try {
+    const baseDuRun = git(root, "rev-parse", "HEAD").trim();
+
+    // W01 travaille et s'intègre : HEAD avance.
+    const w01 = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(w01.cwd, "src", "a.py"), "a = 2\n");
+    assert.equal(mergeLane(root, "9a6766-W01", []).ok, true);
+    assert.notEqual(git(root, "rev-parse", "HEAD").trim(), baseDuRun);
+
+    // W03 s'ouvre maintenant, et ne fait rien.
+    const w03 = ensureLane(root, "9a6766-W03");
+    assert.ok(w03.base, "l'ouverture doit rendre sa base");
+
+    assert.equal(isMerged(root, "9a6766-W03", w03.base!), false,
+      "une lane vide n'est pas intégrée, même ouverte après un merge");
+    assert.equal(isMerged(root, "9a6766-W03", baseDuRun), true,
+      "et la base du run donnerait la mauvaise réponse — c'est le défaut");
+
+    // Elle travaille, sans être intégrée.
+    writeFileSync(join(w03.cwd, "src", "b.py"), "b = 2\n");
+    commitLane(root, "9a6766-W03", "W03");
+    assert.equal(isMerged(root, "9a6766-W03", w03.base!), false);
+
+    // Puis elle l'est.
+    assert.equal(mergeLane(root, "9a6766-W03", []).ok, true);
+    assert.equal(isMerged(root, "9a6766-W03", w03.base!), true);
+  } finally {
+    done();
+  }
+});
+
+// La troisième source d'observation : une branche dont le worktree a été retiré
+// et que le registre ignore n'apparaît nulle part ailleurs.
+test("les branches du run se découvrent, worktree ou non", () => {
+  const { root, done } = repo();
+  try {
+    ensureLane(root, "9a6766-W01");
+    ensureLane(root, "9a6766-W03");
+    removeLane(root, "9a6766-W03");
+    assert.deepEqual(runBranches(root, "9a6766"), ["W01", "W03"]);
+    // Une branche d'un autre run n'y figure pas.
+    assert.deepEqual(runBranches(root, "3f10bd"), []);
+  } finally {
+    done();
+  }
+});
+
+test("une lane inconnue n'est pas intégrée", () => {
+  const { root, done } = repo();
+  try {
+    assert.equal(isMerged(root, "9a6766-W99", "HEAD"), false);
+  } finally {
+    done();
+  }
+});
+
 // ------------------------------------------- l'observation dans un worktree
 
 /*
@@ -454,6 +572,29 @@ test("un fichier supprimé dans une lane est observé", () => {
     const before = treeState(lane.cwd);
     rmSync(join(lane.cwd, "src", "b.py"));
     assert.deepEqual(changedBetween(before, treeState(lane.cwd)), ["src/b.py"]);
+  } finally {
+    done();
+  }
+});
+
+
+// ---------------------------------------- suppression destructive de branche
+
+test("une branche avec commits non intégrés exige une suppression forcée", () => {
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W77");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 77\n");
+    git(lane.cwd, "add", "-A");
+    git(lane.cwd, "commit", "-qm", "W77");
+    assert.equal(laneUnmergedCommitCount(root, "9a6766-W77"), 1);
+    assert.equal(removeLane(root, "9a6766-W77"), true);
+
+    assert.equal(removeLaneBranch(root, "9a6766-W77"), false,
+      "-d doit refuser de perdre un commit non intégré");
+    assert.doesNotThrow(() => git(root, "rev-parse", "--verify", "pi-lane/9a6766-W77"));
+
+    assert.equal(removeLaneBranch(root, "9a6766-W77", true), true);
   } finally {
     done();
   }

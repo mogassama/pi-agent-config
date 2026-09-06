@@ -115,6 +115,59 @@ export type SubagentSnapshot = Partial<Record<RoleName, RoleState>>;
 
 export const STATUS_KEY = "subagent";
 
+/**
+ * L'état du run, publié séparément des rôles.
+ *
+ * Une clé distincte plutôt qu'un champ dans le snapshot des rôles : celui-ci
+ * est une carte de `RoleName`, et y glisser un run en ferait une union que
+ * chaque lecteur devrait démêler.
+ *
+ * Ce module ne décide rien de la propriété. Il rend ce que le manifeste dit, et
+ * `publishRun` relit `inspectRun` à chaque publication — le footer n'affiche
+ * jamais « possédé » parce qu'on vient d'acquérir.
+ */
+export const RUN_STATUS_KEY = "subagent-run";
+
+export type RunAccessKind = "free" | "owned" | "owned-by-other" | "recovery-required";
+
+export interface RunSnapshot {
+  runId: string;
+  access: RunAccessKind;
+}
+
+const ACCESS_LABEL: Record<RunAccessKind, string> = {
+  free: "libre",
+  owned: "",
+  "owned-by-other": "LECTURE SEULE",
+  "recovery-required": "REPRISE REQUISE",
+};
+
+export function parseRun(raw: string | undefined): RunSnapshot | undefined {
+  if (!raw) return undefined;
+  try {
+    const doc = JSON.parse(raw) as Partial<RunSnapshot>;
+    if (typeof doc?.runId !== "string" || !doc.runId) return undefined;
+    if (!(doc.access as string) || !(doc.access! in ACCESS_LABEL)) return undefined;
+    return { runId: doc.runId, access: doc.access as RunAccessKind };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Le segment du footer, ou rien quand il n'y a rien à dire.
+ *
+ * `owned` ne s'affiche pas : c'est le cas normal, et le signaler occuperait une
+ * ligne pour ne rien apprendre. Les trois autres états valent d'être vus tout
+ * de suite — surtout `LECTURE SEULE`, qui explique d'avance pourquoi une
+ * délégation sera refusée.
+ */
+export function renderRun(run: RunSnapshot | undefined): string {
+  if (!run) return "";
+  const label = ACCESS_LABEL[run.access];
+  return label ? `run ${run.runId} · ${label}` : "";
+}
+
 const state: SubagentSnapshot = {};
 
 function get(role: RoleName): RoleState {

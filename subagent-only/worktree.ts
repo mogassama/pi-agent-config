@@ -13,10 +13,9 @@
  * `.git/` il est invisible au statut, sur le même système de fichiers, et il
  * disparaît avec le dépôt de test.
  *
- * **Ce qui n'est pas ici.** Aucune file de merge, aucun ordonnancement, aucune
- * concurrence. Une lane est créée, travaillée, revue, puis intégrée ou non. Le
- * lot 3 décidera qui tourne en même temps ; ce module décide seulement qu'une
- * lane est isolée et sous quelles conditions elle rejoint l'intégration.
+ * **Ce qui n'est pas ici.** Aucune file de merge ni décision d'ordonnancement.
+ * Le scheduler décide qui tourne en même temps ; ce module décide seulement
+ * qu'une lane est isolée et sous quelles conditions elle rejoint l'intégration.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -92,7 +91,7 @@ export function ensureLane(
   root: string,
   laneId: string,
   base = "HEAD",
-): { cwd: string; branch: string; created: boolean } {
+): { cwd: string; branch: string; created: boolean; base?: string } {
   const cwd = join(lanesDir(root), laneId);
   const branch = laneBranch(laneId);
   if (existsSync(cwd)) return { cwd, branch, created: false };
@@ -101,9 +100,39 @@ export function ensureLane(
   const args = known
     ? ["worktree", "add", cwd, branch]
     : ["worktree", "add", "-b", branch, cwd, base];
+  /*
+   * Le commit d'où **cette lane** part, résolu avant de la créer.
+   *
+   * La base du run ne suffit pas. Une lane ouverte après l'intégration d'une
+   * autre unité part d'un HEAD déjà avancé : compter ses commits depuis la base
+   * du run y trouve ceux de l'unité précédente, et une lane qui n'a rien fait
+   * passe pour intégrée. Le défaut d'origine, simplement retardé jusqu'au
+   * premier merge.
+   */
+  const resolu = tryGit(root, ["rev-parse", "--verify", base]);
   const added = tryGit(root, args);
   if (!added.ok) throw new Error(`worktree ${laneId}: ${added.out.trim()}`);
-  return { cwd, branch, created: true };
+  return { cwd, branch, created: true, base: resolu.ok ? resolu.out.trim() : undefined };
+}
+
+/**
+ * Les unités qui ont une branche de lane dans ce run.
+ *
+ * Troisième source d'observation, à côté du registre et des worktrees. Sans
+ * elle, une branche mergée dont le worktree a été retiré et que le registre
+ * ignore reste invisible : ni événement, ni worktree, donc aucun candidat à
+ * examiner. C'est pourtant le cas même d'une intégration sans provenance.
+ */
+export function runBranches(root: string, runId: string): string[] {
+  const prefixe = laneBranch(`${runId}-`);
+  const { ok, out } = tryGit(root, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${prefixe}*`]);
+  if (!ok) return [];
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((b) => b.slice(prefixe.length))
+    .filter(Boolean)
+    .sort();
 }
 
 /** Les lanes ouvertes sur ce dépôt, par identifiant. */
@@ -260,6 +289,82 @@ export function mergeLane(
     tryGit(join(lanesDir(root), laneId), ["reset", "--mixed", frozen.previousHead]);
   }
   return { ok: false, conflicts: files, reason: `conflit git sur ${files.length} fichier(s)` };
+}
+
+/**
+ * Le travail de cette lane est-il déjà dans l'intégration ?
+ *
+ * Ce que git sait, indépendamment de ce que le registre a eu le temps
+ * d'enregistrer. Un merge réussi suivi d'un crash laisse précisément cet écart,
+ * et c'est cette question qui permet de le nommer plutôt que de le deviner.
+ */
+export function isMerged(root: string, laneId: string, base: string): boolean {
+  const branch = laneBranch(laneId);
+  if (!tryGit(root, ["rev-parse", "--verify", branch]).ok) return false;
+
+  /*
+   * Deux conditions, et la première est celle qui manquait.
+   *
+   * « Ancêtre de HEAD » ne suffit pas : une lane fraîche pointe sur HEAD, donc
+   * elle en est trivialement l'ancêtre et passait pour intégrée. Toute lane
+   * ouverte produisait alors une fausse contradiction « intégration non
+   * enregistrée » à la reprise suivante.
+   *
+   * Une lane est intégrée si elle a produit quelque chose depuis sa base propre
+   * **et** que ce quelque chose est dans l'intégration. Sans commit propre il
+   * n'y a rien à intégrer, et « pas intégrée » est la réponse juste.
+   */
+  const propres = tryGit(root, ["rev-list", "--count", `${base}..${branch}`]);
+  if (!propres.ok || Number(propres.out.trim()) === 0) return false;
+  return tryGit(root, ["merge-base", "--is-ancestor", branch, "HEAD"]).ok;
+}
+
+/**
+ * Le sommet de la branche d'une lane, ou rien si elle n'existe pas.
+ *
+ * Sert à décider si une branche orpheline peut être adoptée sans mentir : si
+ * elle n'apporte rien à l'intégration, son sommet est une base honnête ; si
+ * elle a divergé, on ne sait pas d'où elle est partie.
+ */
+export function laneTip(root: string, laneId: string): string | undefined {
+  const r = tryGit(root, ["rev-parse", "--verify", laneBranch(laneId)]);
+  return r.ok ? r.out.trim() : undefined;
+}
+
+/**
+ * La branche apporte-t-elle quelque chose que l'intégration n'a pas ?
+ *
+ * Une branche qui n'a pas divergé n'a pas de commit propre : son sommet est
+ * alors un point de départ défendable. Une branche divergée a une histoire
+ * qu'on ne sait pas situer.
+ */
+export function laneHasDiverged(root: string, laneId: string): boolean {
+  const branch = laneBranch(laneId);
+  if (!tryGit(root, ["rev-parse", "--verify", branch]).ok) return false;
+  return !tryGit(root, ["merge-base", "--is-ancestor", branch, "HEAD"]).ok;
+}
+
+/** Nombre de commits de lane qui ne sont pas dans l'intégration courante. */
+export function laneUnmergedCommitCount(root: string, laneId: string): number | undefined {
+  const branch = laneBranch(laneId);
+  if (!tryGit(root, ["rev-parse", "--verify", branch]).ok) return undefined;
+  const r = tryGit(root, ["rev-list", "--count", `HEAD..${branch}`]);
+  if (!r.ok) return undefined;
+  const n = Number(r.out.trim());
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Supprime la branche d'une lane.
+ *
+ * Séparé du retrait du worktree, parce que ce n'est pas la même décision : la
+ * branche porte le travail et la preuve d'intégration. On ne la supprime que
+ * pour une branche parasite, dont on a établi qu'elle n'a aucune provenance.
+ */
+export function removeLaneBranch(root: string, laneId: string, force = false): boolean {
+  // `-d` par défaut : `-D` n'est utilisé qu'après confirmation explicite quand
+  // des commits non intégrés seraient détruits.
+  return tryGit(root, ["branch", force ? "-D" : "-d", laneBranch(laneId)]).ok;
 }
 
 /** Retire le worktree d'une lane. La branche survit : elle porte le travail. */

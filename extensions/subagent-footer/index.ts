@@ -18,7 +18,8 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadAgents, type AgentDefinition } from "../../subagent-only/agents.js";
 import {
-  formatModels, parse, STATUS_KEY, type RoleName, type RoleState } from "../../subagent-only/run-state.js";
+  formatModels, parse, parseRun, renderRun, RUN_STATUS_KEY, STATUS_KEY,
+  type RoleName, type RoleState } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const AGENTS_DIR = join(AGENT_DIR, "subagent-only", "agents");
@@ -366,6 +367,13 @@ export default function (pi: ExtensionAPI) {
             // ---- lines 2 and 3: the subagents, hidden until one has run
             // A ReadonlyMap, not a plain record — indexing it silently yields
             // undefined, and lines 2 and 3 never appear.
+            // ---- l'état du run, quand il n'est pas celui qu'on attend
+            // Affiché avant les rôles et indépendamment d'eux : une session en
+            // lecture seule doit le savoir dès le chargement, sans avoir à
+            // provoquer un refus pour l'apprendre.
+            const run = renderRun(parseRun(footerData.getExtensionStatuses?.().get(RUN_STATUS_KEY)));
+            if (run) lines.push(truncateToWidth(muted(run), width));
+
             const state = parse(footerData.getExtensionStatuses?.().get(STATUS_KEY));
             const anything = Object.values(state).some((r) => r && (r.runs > 0 || r.running));
             if (!anything) return lines;

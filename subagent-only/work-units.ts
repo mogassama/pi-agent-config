@@ -227,16 +227,10 @@ export function isReserved(path: string): boolean {
 }
 
 /*
- * `scopeOwned()` vivait ici et est reporté au lot 3, où l'admission sera son
- * premier consommateur.
- *
- * Deux raisons. Aucune fonction ne doit vivre sans appelant — c'est la règle qui
- * avait écarté `summarize()` du registre. Et surtout sa sémantique était trop
- * simple : retirer les chemins réservés par égalité littérale traite `DESIGN.md`
- * mais pas `*.md`, `**` ou `.`, qui le couvrent tout autant. La soustraction
- * `scope − réservé` demande la même sémantique de motifs que l'admission, et
- * figer maintenant une API dont le seul cas testé est le cas littéral aurait
- * fabriqué une fausse sécurité.
+ * L'ownership est défini plus bas, à côté de la sémantique de motifs qu'il
+ * utilise réellement. Il exclut les chemins réservés avant que le scheduler ne
+ * compare deux unités, plutôt que d'entretenir une seconde définition littérale
+ * de ce qu'une lane possède.
  */
 
 /**
@@ -246,10 +240,9 @@ export function isReserved(path: string): boolean {
  * `bin/subagent-shadow` — la même dette de duplication que le contrat de plan,
  * et le même remède : les deux côtés sont éprouvés sur les mêmes entrées.
  *
- * C'est volontairement la question étroite « ce fichier était-il prévu », et
- * non la soustraction `scope − réservé` que l'ownership demandera au lot 3.
- * Celle-là a besoin d'une sémantique de motifs que le seul cas littéral ne
- * couvre pas, et la figer maintenant fabriquerait une fausse sécurité.
+ * C'est volontairement la question étroite « ce fichier était-il prévu ».
+ * L'ownership ci-dessous s'appuie sur cette même sémantique de motifs et retire
+ * séparément les chemins réservés.
  */
 export function inScope(path: string, patterns: readonly string[]): boolean {
   const file = norm(path);

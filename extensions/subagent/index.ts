@@ -27,13 +27,40 @@ import {
   type RiskRecord,
 } from "../../subagent-only/risk-ledger.js";
 import { openLane, targetWorkUnit, type LaneContext } from "../../subagent-only/lane-context.js";
+import { anySignal } from "../../subagent-only/signals.js";
+import { RUN_STATUS_KEY, type RunSnapshot } from "../../subagent-only/run-state.js";
+import {
+  RecoveryError,
+  RunBusyError,
+  LANE_LEDGER_VERSION,
+  acquireRunOwnership,
+  appendLaneEvent,
+  readManifest,
+  readLaneEvents,
+  allocateSeq,
+  attachPlan,
+  describeAccess,
+  inspectRun,
+  openRun,
+  ownsRun,
+  releaseRunOwnership,
+  startHeartbeat,
+  type Heartbeat,
+  type Lease,
+} from "../../subagent-only/run-manifest.js";
 import {
   SchedulerInputError,
   runLanes,
   type Candidate,
 } from "../../subagent-only/scheduler.js";
 import { validateTaskCall } from "../../subagent-only/task-policy.js";
-import { ensureLane, laneChanges, mergeLane, removeLane, type MergeBlock } from "../../subagent-only/worktree.js";
+import {
+  ensureLane, isMerged, laneChanges, mergeLane, openLanes, removeLane, runBranches,
+  type MergeBlock,
+} from "../../subagent-only/worktree.js";
+import {
+  describeConflicts, reconcile, type Conflict,
+} from "../../subagent-only/lane-ledger.js";
 import {
   parsePlan,
   reservedTouched,
@@ -49,18 +76,132 @@ const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const SELF_DIR = join(AGENT_DIR, "subagent-only");
 
 /**
- * One runId per orchestrator session, not per call.
+ * One session id per orchestrator session, not per call.
  *
- * It scopes the child session ids, so a worker called twice in one task keeps
- * its provider cache affinity across both calls. It dies with the session.
+ * It identifies this process as the current lease owner when the run is acquired.
+ * Unlike `RUN_ID`, it is intentionally ephemeral and dies with the session.
  */
-const RUN_ID = randomBytes(3).toString("hex");
+const SESSION_ID = `s-${randomBytes(4).toString("hex")}`;
+
+/**
+ * Le run durable de cette session, découvert et non créé au hasard.
+ *
+ * `RUN_ID` valait `randomBytes(3)` avec le commentaire « it dies with the
+ * session ». C'était vrai, et faux dès que les worktrees ont survécu : le plan
+ * gelé s'appelle `<runId>-plan.json`, les lanes `<runId>-<workUnitId>`, et une
+ * session redémarrée ne retrouvait ni l'un ni les autres.
+ *
+ * Connaître l'identité ne donne aucun droit. Le chargement découvre le run et
+ * l'affiche ; la propriété se prend à la première mutation, pas ici.
+ */
+const RUN_DIR = join(process.cwd(), ".pi-subagent-runs");
+const RUN = openRun(RUN_DIR, baseCommit());
+const RUN_ID = RUN.manifest.runId;
+
+/*
+ * L'état durable est reconstruit au chargement, pas à l'ouverture d'une session.
+ *
+ * Une session reprise doit repartir de ce que le run a réellement fait, et elle
+ * doit le savoir avant toute décision d'admission — pas au premier événement de
+ * cycle de vie. Purement en lecture : la propriété ne se prend qu'à la première
+ * mutation, et `reconcile` ne répare rien.
+ */
+
+/** Le bail courant : il autorise, là où `RUN_ID` se contente d'identifier. */
+let LEASE: Lease | undefined;
+let HEARTBEAT: Heartbeat | undefined;
+
+/**
+ * Annulation propre à la perte de propriété, distincte du signal de l'appelant.
+ *
+ * Un Ctrl-C et une perte de bail arrêtent tous deux les enfants, mais pour des
+ * raisons opposées : l'un est une décision, l'autre un incident. Les confondre
+ * rendrait un run interrompu illisible — on ne saurait pas si l'opérateur a
+ * arrêté ou si une autre session a repris le run.
+ */
+let LEASE_ABORT = new AbortController();
+
+function baseCommit(): string | undefined {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * La propriété du run, prise à la première mutation et pas avant.
+ *
+ * Rend `undefined` quand cette session ne peut pas l'obtenir : le run est tenu
+ * par une autre, ou son bail est périmé et demande une réconciliation. Dans les
+ * deux cas rien n'a été réservé, écrit ni ouvert.
+ */
+function ensureOwnership(): { lease: Lease } | { refus: string } {
+  if (LEASE && ownsRun(RUN_DIR, LEASE)) return { lease: LEASE };
+  const pris = acquireRunOwnership(RUN_DIR, RUN_ID, SESSION_ID);
+  if (!pris.ok) {
+    LEASE = undefined;
+    publishRun();
+    return { refus: describeAccess(inspectRun(RUN_DIR, RUN_ID, SESSION_ID), RUN_ID) };
+  }
+  LEASE = pris.lease;
+  LEASE_ABORT = new AbortController();
+  HEARTBEAT?.stop();
+  HEARTBEAT = startHeartbeat(RUN_DIR, LEASE, () => {
+    // La propriété est perdue : arrêter ce qui tourne, ne rien muter de plus.
+    // Les gardes de capacité refuseront les nouvelles mutations de toute façon ;
+    // ceci arrête celles qui sont déjà en vol.
+    LEASE = undefined;
+    HEARTBEAT?.stop();
+    HEARTBEAT = undefined;
+    LEASE_ABORT.abort(new Error(`propriété du run ${RUN_ID} perdue`));
+    publishRun();
+  });
+  publishRun();
+  return { lease: LEASE };
+}
+
+let RUN_UI: { setStatus?: (k: string, v: string) => void } | undefined;
+
+/** Le footer lit l'état du manifeste ; il n'en tient aucune copie décisionnelle. */
+function publishRun(): void {
+  const snapshot: RunSnapshot = {
+    runId: RUN_ID,
+    access: inspectRun(RUN_DIR, RUN_ID, SESSION_ID).kind,
+  };
+  RUN_UI?.setStatus?.(RUN_STATUS_KEY, JSON.stringify(snapshot));
+}
+
+/**
+ * Cette session possède-t-elle encore le run ?
+ *
+ * Posée après le retour d'un enfant, avant toute mutation qui en découle.
+ * L'annulation est au mieux rapide : un worker peut revenir normalement juste
+ * après la perte du bail, et intégrer son travail à ce moment-là écrirait dans
+ * un dépôt qu'une autre session a repris.
+ */
+/**
+ * Cette capacité possède-t-elle encore le run ?
+ *
+ * Le bail **capturé avant le spawn**, pas le bail courant de la session. Sans
+ * ça, un enfant lancé sous L1 passerait la barrière parce que la session a
+ * depuis acquis L2 — et toute la protection de capacité tomberait au moment
+ * précis où elle doit tenir.
+ */
+function stillOwns(lease: Lease): boolean {
+  return ownsRun(RUN_DIR, lease);
+}
 
 /**
  * Call counter, so successive artefacts of the same role do not overwrite each
- * other. Session-scoped like RUN_ID; only the artefact filename uses it.
+ * other. Durable now: see `allocateSeq` in run-manifest.ts — a counter that
+ * restarted at zero after a crash would make two risks share an id.
  */
-let CALL_SEQ = 0;
+
 
 /**
  * Scout calls so far in this session.
@@ -132,6 +273,18 @@ function invalidCall(reason: string) {
     content: [{ type: "text" as const, text: `[task: invalid] ${reason}` }],
     isError: true,
   };
+}
+
+/**
+ * Le signal de l'appelant et celui du bail, réunis.
+ *
+ * Un enfant s'arrête pour deux raisons sans rapport : l'opérateur annule, ou la
+ * session perd la propriété du run. Les joindre évite que la seconde ait à
+ * détourner l'annulation globale, et `signal.reason` garde la trace de celle
+ * qui a tranché.
+ */
+function bothSignals(externe: AbortSignal | undefined): AbortSignal {
+  return externe ? anySignal([externe, LEASE_ABORT.signal]) : LEASE_ABORT.signal;
 }
 
 function laneView(laneId: string | undefined): Delegation[] {
@@ -214,6 +367,146 @@ const INTEGRATED = new Set<string>();
 const OPEN_UNITS = new Set<string>();
 
 /**
+ * Ce que la réconciliation a trouvé au démarrage, gardé pour être dit une fois.
+ *
+ * Une session reprise doit savoir sur quoi elle repart. Les contradictions ne
+ * sont pas réparées : la porte globale du run les bloque avant toute admission
+ * jusqu'à ce qu'elles soient tranchées.
+ */
+let RECOVERY_NOTE = "";
+
+/**
+ * Les contradictions non tranchées, par unité.
+ *
+ * Tant qu'il en reste une, le run n'accepte aucune délégation. Ce n'est pas un
+ * état faible d'une WorkUnit : c'est une porte de reprise du run entier. Laisser
+ * W09 travailler parce qu'elle semble indépendante ajouterait des faits à un run
+ * dont l'état précédent n'est pas compris, et rendrait la récupération plus
+ * difficile qu'elle ne l'est déjà.
+ */
+let RECOVERY_CONFLICTS = new Map<string, Conflict>();
+
+/**
+ * Les lignes du registre qu'on n'a pas su lire.
+ *
+ * Elles ferment le run au même titre qu'une contradiction. Les compter sans
+ * bloquer revenait à les sauter : la réconciliation qui « ne trouve aucun
+ * conflit » sur un registre amputé n'a rien vérifié, elle a seulement regardé
+ * ce qui restait lisible.
+ */
+let RECOVERY_MALFORMED: number[] = [];
+
+/**
+ * Le registre déclare-t-il une version qu'on sait lire ?
+ *
+ * Distinct de l'illisibilité : un registre d'une autre version n'est pas abîmé,
+ * il est écrit dans un protocole qu'on ne connaît pas. Confondre les deux ferait
+ * proposer de « corriger des lignes » là où il faut migrer, et l'opérateur
+ * réécrirait de la provenance qu'il ne comprend pas.
+ */
+let RECOVERY_LEDGER_VERSION: number | undefined = LANE_LEDGER_VERSION;
+
+/**
+ * Reconstruit l'état durable du run à partir du registre et du disque.
+ *
+ * Ni l'un ni l'autre seul ne suffit. Le registre dit ce que le run a fait, git
+ * dit où en sont les choses, et `INTEGRATED = plan − openLanes()` serait faux
+ * dans le sens dangereux : une unité sans worktree est soit intégrée, soit
+ * jamais commencée, et rien dans le disque ne les distingue.
+ *
+ * Purement en lecture. Une réparation reste une opération opérateur explicite.
+ */
+/**
+ * Enregistre l'ouverture d'une lane, une fois qu'elle existe.
+ *
+ * Après `openLane`, jamais avant : le registre enregistre des faits accomplis.
+ * Un `OPENED` écrit d'abord pourrait décrire une ouverture qui n'a jamais eu
+ * lieu, et un registre qui affirme faux falsifie la provenance de tout le run.
+ * L'ordre retenu laisse au pire un worktree sans provenance — visible, nommé
+ * « orphelin », et adoptable explicitement.
+ *
+ * Seulement à la création : un rework rouvre la même lane, et le registre décrit
+ * sa vie, pas chacune de ses utilisations.
+ */
+function noterOuverture(unit: string, lease: Lease, base: string | undefined): void {
+  const nouvelle = !OPEN_UNITS.has(unit);
+  OPEN_UNITS.add(unit);
+  if (!nouvelle) return;
+  if (!base) {
+    // Sans base, l'ouverture ne serait pas prouvable et le registre la
+    // refuserait comme malformée. Mieux vaut ne pas ouvrir du tout : un
+    // worktree sans provenance se voit et se tranche, une ouverture bancale se
+    // découvre après le merge.
+    throw new RecoveryError(
+      `impossible de déterminer la base de ${unit} : la lane n'est pas ouvrable`,
+    );
+  }
+  appendLaneEvent(
+    RUN_DIR,
+    { event: "OPENED", work_unit: unit, at: new Date().toISOString(), base },
+    lease,
+  );
+}
+
+function reconstruire(): void {
+  const { events, malformed, malformedLines, version } = readLaneEvents(RUN_DIR, RUN_ID);
+  const worktrees = openLanes(process.cwd())
+    .filter((id) => id.startsWith(`${RUN_ID}-`))
+    .map((id) => id.slice(RUN_ID.length + 1));
+
+  /*
+   * La base de chaque lane, telle que son ouverture l'a enregistrée.
+   *
+   * Sans elle, git ne distingue pas « intégrée » de « n'a rien produit » : une
+   * lane ouverte après un premier merge part d'un HEAD déjà avancé, et compter
+   * ses commits depuis la base du run y trouve ceux de l'unité précédente. Une
+   * unité sans base enregistrée n'est donc jamais déclarée intégrée — on ne
+   * peut pas le prouver, et affirmer serait pire que se taire.
+   */
+  const bases = new Map<string, string>();
+  for (const e of events) {
+    if (e.event === "OPENED" && e.base && !bases.has(e.work_unit)) bases.set(e.work_unit, e.base);
+  }
+  const bilan = reconcile(events, {
+    openWorktrees: worktrees,
+    // Un worktree qui porte encore des changements n'est pas un résidu : c'est
+    // du travail que le fait enregistré ne couvre pas.
+    dirtyWorktrees: worktrees.filter(
+      (u) => laneChanges(process.cwd(), `${RUN_ID}-${u}`).length > 0,
+    ),
+    // La base propre à chaque lane situe ce qu'elle a produit : sans elle, une
+    // lane fraîche passerait pour intégrée puisqu'elle pointe sur HEAD.
+    // Troisième source : une branche mergée dont le worktree a été retiré et que
+    // le registre ignore n'apparaît ni dans les événements ni dans les
+    // worktrees. C'est pourtant le cas même d'une intégration sans provenance.
+    runBranches: runBranches(process.cwd(), RUN_ID),
+    mergedUnits: [...bases.entries()]
+      .filter(([u, b]) => isMerged(process.cwd(), `${RUN_ID}-${u}`, b))
+      .map(([u]) => u),
+  });
+
+  OPEN_UNITS.clear();
+  for (const u of bilan.openUnits) OPEN_UNITS.add(u);
+  INTEGRATED.clear();
+  for (const u of bilan.integrated) INTEGRATED.add(u);
+  RECOVERY_CONFLICTS = bilan.conflicts;
+  RECOVERY_MALFORMED = malformedLines;
+  RECOVERY_LEDGER_VERSION = version;
+
+  const lignes = [describeConflicts(bilan.conflicts)];
+  // Le ménage se dit sans fermer le run : le signaler évite qu'il s'accumule
+  // sans que personne ne sache qu'il est là.
+  for (const w of bilan.warnings) lignes.push(`à ranger : ${w.detail}`);
+  if (malformed > 0) {
+    lignes.push(
+      `${malformed} ligne(s) illisible(s) dans le registre : il est incomplet, ` +
+        `et ce bilan avec lui.`,
+    );
+  }
+  RECOVERY_NOTE = lignes.filter(Boolean).join("\n");
+}
+
+/**
  * Le plan gelé, relu depuis le disque à la première délégation qui en a besoin.
  *
  * Relu et non mémorisé au chargement de l'extension : l'orchestrateur écrit son
@@ -223,6 +516,8 @@ const OPEN_UNITS = new Set<string>();
  * et une prédiction réécrite après coup ne mesure plus rien.
  */
 let PLAN: PlanResult | undefined;
+/** Le texte du plan, gardé pour l'attacher au run une fois la propriété prise. */
+let PLAN_TEXT: string | undefined;
 
 function plan(): PlanResult {
   if (PLAN?.status === "usable") return PLAN;
@@ -234,6 +529,7 @@ function plan(): PlanResult {
     text = undefined;
   }
   PLAN = parsePlan(text);
+  PLAN_TEXT = text;
   // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
   // au registre de risques : le relevé lit le même plan avec les mêmes règles et
   // le rend visible lui-même. Le journaliser ici l'aurait rangé dans un fichier
@@ -701,6 +997,8 @@ function logRefusal(runId: string, agentName: string, reason: string): void {
   }
 }
 
+reconstruire();
+
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
 
@@ -709,6 +1007,10 @@ export default function (pi: ExtensionAPI) {
   let ui: { setStatus?: (k: string, v: string) => void } | undefined;
   pi.on("session_start", async (_event, ctx) => {
     ui = ctx.ui;
+    RUN_UI = ctx.ui;
+    // L'état du run est visible dès le chargement : une session qui découvre un
+    // dépôt occupé doit le savoir sans avoir à provoquer un refus.
+    publishRun();
   });
 
   /**
@@ -727,6 +1029,33 @@ export default function (pi: ExtensionAPI) {
    * — a material change to the tree — so the material-change rule stays true,
    * the next review gets its diff, and the refusal log shows who wrote what.
    */
+  /*
+   * La sortie propre : le bail disparaît, le run reste ce qu'il est.
+   *
+   * `session_shutdown` et non `agent_end` : le second se produit à la fin de
+   * chaque prompt, et relâcher le bail entre deux interactions laisserait le run
+   * ouvert à une autre session alors que celle-ci travaille encore. Il couvre
+   * aussi `/new`, `/resume` et `/fork`, où la session change sans que le
+   * processus s'arrête.
+   *
+   * Aucun écouteur `process` ajouté ici : ils interféreraient avec le cycle de
+   * vie de pi. Une sortie qui ne passerait pas par cet événement laisse un bail
+   * qui deviendra périmé, ce qui est le comportement prévu pour les sorties non
+   * propres.
+   */
+  pi.on("session_shutdown", async () => {
+    // Abandonner d'abord, libérer ensuite. Pi appelle normalement ce hook dans
+    // un état au repos, mais l'invariant ne doit pas dépendre de cette
+    // hypothèse : on ne relâche jamais volontairement la capacité en laissant
+    // un enfant qui s'en sert continuer.
+    LEASE_ABORT.abort(new Error("session_shutdown"));
+    HEARTBEAT?.stop();
+    HEARTBEAT = undefined;
+    if (LEASE) releaseRunOwnership(RUN_DIR, LEASE);
+    LEASE = undefined;
+    publishRun();
+  });
+
   pi.on("tool_call", async (event) => {
     const path =
       isToolCallEventType("write", event) || isToolCallEventType("edit", event)
@@ -1030,16 +1359,204 @@ export default function (pi: ExtensionAPI) {
             };
           }
         }
+        /*
+         * La propriété, après les validations pures et avant la première mutation.
+         *
+         * Tout ce qui précède — forme de l'appel, provenance, politique,
+         * lecture du plan — ne touche à rien de durable. Acquérir avant aurait
+         * fait prendre le bail et démarrer le battement à un appel mal formé,
+         * puis l'aurait refusé sans qu'il ait jamais demandé de travail valide.
+         *
+         * Tout ce qui suit mute : ouvrir une lane, réserver une séquence,
+         * écrire un artefact, journaliser. Un scout ne fait pas exception.
+         */
+        /*
+         * La porte de reprise, avant même de prendre le bail.
+         *
+         * Une contradiction entre le registre et le dépôt veut dire que la
+         * vérité durable n'est pas établie. Continuer sur une unité qui semble
+         * indépendante ajouterait des faits à un run qu'on ne comprend pas
+         * encore, et la porte est donc celle du run entier — pas un état faible
+         * d'une WorkUnit.
+         *
+         * Ici, rien n'a été réservé ni ouvert, et le bail n'est même pas pris :
+         * une session peut inspecter un run contradictoire sans en devenir
+         * propriétaire.
+         */
+        /*
+         * Recalculé à chaque délégation, pas une fois au chargement.
+         *
+         * `bin/subagent-recover` est un processus externe : une résolution faite
+         * au terminal pendant que pi tourne serait restée invisible jusqu'au
+         * redémarrage, et le run aurait continué de refuser sans raison. Un
+         * worktree supprimé à la main pose le problème inverse.
+         *
+         * Le coût est de quelques commandes git par appel, devant des
+         * délégations qui durent des secondes ou des minutes. Un recalcul
+         * périodique aurait rouvert une fenêtre temporelle pour rien.
+         */
+        reconstruire();
+
+        if (RECOVERY_LEDGER_VERSION !== LANE_LEDGER_VERSION) {
+          const trouve = RECOVERY_LEDGER_VERSION === undefined
+            ? "aucune version déclarée"
+            : `version ${RECOVERY_LEDGER_VERSION}`;
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[run: registre d'une autre version] ${RUN_ID}-lanes.jsonl : ${trouve}, ` +
+                `ce runtime lit la version ${LANE_LEDGER_VERSION}.\n` +
+                `Ce n'est pas une corruption : le registre a été écrit sous un autre ` +
+                `protocole, et ses lignes ne doivent pas être « corrigées » à la main.\n` +
+                `Examiner avec bin/subagent-recover, migrer avec ` +
+                `bin/subagent-recover --migrate-ledger.\n` +
+                `Aucune délégation n'a été lancée.`,
+            }],
+            isError: true,
+          };
+        }
+
+        if (RECOVERY_MALFORMED.length > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[run: registre illisible] ligne(s) ${RECOVERY_MALFORMED.join(", ")} de ` +
+                `${RUN_ID}-lanes.jsonl n'ont pas pu être lues.\n` +
+                `Le bilan de reprise porte donc sur un registre amputé, et ne prouve rien : ` +
+                `corriger ces lignes avant de continuer. Aucune n'est supprimée automatiquement.\n` +
+                `Aucune délégation n'a été lancée.`,
+            }],
+            isError: true,
+          };
+        }
+
+        if (RECOVERY_CONFLICTS.size > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[run: reprise à trancher]\n${describeConflicts(RECOVERY_CONFLICTS)}\n` +
+                `Aucune délégation n'a été lancée, aucune séquence réservée, ` +
+                `aucun worktree ouvert.`,
+            }],
+            isError: true,
+          };
+        }
+
+        const propriete = ensureOwnership();
+        if ("refus" in propriete) {
+          return { content: [{ type: "text" as const, text: propriete.refus }], isError: true };
+        }
+        const lease = propriete.lease;
+
+        /*
+         * Le bilan de reprise, dit une seule fois.
+         *
+         * Une session qui reprend un run interrompu doit savoir sur quoi elle
+         * repart avant de déléguer. Les contradictions ne sont pas réparées :
+         * elles ont déjà fermé la porte globale plus haut ; ce bilan ne traverse
+         * jusqu'ici que lorsque l'état est cohérent (ou porte de simples warnings).
+         */
+        const bilan = RECOVERY_NOTE;
+        RECOVERY_NOTE = "";
+
+        /*
+         * Les séquences avant le worktree, comme dans le lot.
+         *
+         * Le chemin simple ouvrait la lane d'abord, et ce n'était pas qu'une
+         * asymétrie : `allocateSeq` est gardée par la capacité et par la clôture
+         * des transitions, `openLane` ne l'est pas. Un verrou périmé apparu
+         * entre les deux laissait donc un worktree derrière lui sans qu'aucune
+         * séquence n'ait été réservée ni aucun enfant lancé — exactement ce que
+         * cet ordre existe pour empêcher.
+         *
+         * Le nombre de tâches ne dépend que des paramètres : un scout en a une
+         * par question, tout le reste en a une. Il est donc connu avant qu'on
+         * ait besoin de la lane.
+         */
+        const questions = params.agent === "scout" ? scoutQuestions(params.find) : [];
+
+        /*
+         * Geler le plan et réserver les séquences, ou dire pourquoi c'est
+         * impossible.
+         *
+         * Ces deux mutations traversent la clôture des transitions, qui refuse
+         * sur deux motifs opposés : un vestige de crash demande une
+         * réconciliation, une transition en cours demande seulement de
+         * réessayer. Sans ce filet, la première remontait brute hors de
+         * l'outil — le harnais l'a trouvée ainsi, et une exception nue ne dit
+         * pas quoi faire.
+         */
+        let seqs: number[];
+        try {
+          if (PLAN?.status === "usable" && PLAN_TEXT !== undefined) {
+            attachPlan(RUN_DIR, PLAN_TEXT, lease);
+          }
+          seqs = Array.from({ length: Math.max(1, questions.length) }, () =>
+            allocateSeq(RUN_DIR, lease).seq,
+          );
+        } catch (err) {
+          if (err instanceof RunBusyError) {
+            return {
+              content: [{ type: "text" as const, text: `[run: occupé] ${err.message}` }],
+              isError: true,
+            };
+          }
+          if (err instanceof RecoveryError) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `[run: reprise requise] ${err.message}\n` +
+                  `Rien n'a été réservé, ouvert ni lancé.`,
+              }],
+              isError: true,
+            };
+          }
+          throw err;
+        }
+
         let lane: LaneContext | undefined;
         if (unit) {
+          let baseLane: string | undefined;
           try {
-            lane = openLane(unit, { runId: RUN_ID, root: process.cwd() }, ensureLane);
-            OPEN_UNITS.add(unit);
+            lane = openLane(unit, { runId: RUN_ID, root: process.cwd() }, (r, id) => {
+              const l = ensureLane(r, id);
+              baseLane = l.base;
+              return l;
+            });
           } catch (err) {
             return {
               content: [{
                 type: "text" as const,
                 text: `Refused: cannot open lane for ${unit} — ${err instanceof Error ? err.message : String(err)}`,
+              }],
+              isError: true,
+            };
+          }
+
+          /*
+           * L'ouverture a eu lieu ; c'est son enregistrement qui peut refuser.
+           *
+           * Les deux échecs étaient sous le même `catch`, avec le même message
+           * « cannot open lane » — alors que le worktree existe déjà et que le
+           * problème est ailleurs. Dire lequel des deux a échoué décide de ce que
+           * l'opérateur doit faire : rien, ou trancher un orphelin.
+           */
+          try {
+            noterOuverture(unit, lease, baseLane);
+          } catch (err) {
+            const quoi = err instanceof Error ? err.message : String(err);
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `[run: ouverture non enregistrée] le worktree de ${unit} existe, ` +
+                  `son ouverture n'a pas pu être écrite au registre — ${quoi}\n` +
+                  `Il apparaîtra comme « worktree-orphelin » à la prochaine lecture : ` +
+                  `l'adopter ou le retirer avec bin/subagent-recover.`,
               }],
               isError: true,
             };
@@ -1063,7 +1580,6 @@ export default function (pi: ExtensionAPI) {
         // Ahead of the diff, so the review reads what it must settle before what
         // it must judge. Only a reviewer gets it: a scout is given one bounded
         // question and would treat a pasted concern as a second one.
-        const questions = params.agent === "scout" ? scoutQuestions(params.find) : [];
         const scoutHeader = (q: string) =>
           `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
         const tasks = questions.length
@@ -1141,15 +1657,39 @@ export default function (pi: ExtensionAPI) {
               },
               MAX_PARALLEL_LANES,
               async (candidate, workUnit) => {
-                const lane = openLane(workUnit.id, { runId: RUN_ID, root: process.cwd() }, ensureLane);
-                OPEN_UNITS.add(workUnit.id);
-                const seq = ++CALL_SEQ;
+                /*
+                 * La séquence avant le worktree, et pas l'inverse.
+                 *
+                 * Réservée au moment où la tentative démarre réellement : une
+                 * candidate refusée ou mise en file n'en consomme aucune. Mais
+                 * elle passe d'abord, parce qu'elle est gardée par la capacité :
+                 * un numéro perdu si l'ouverture échoue ne coûte rien, un
+                 * worktree créé après la perte de propriété coûte cher.
+                 */
+                const seq = allocateSeq(RUN_DIR, lease).seq;
+                let baseLane: string | undefined;
+                const lane = openLane(workUnit.id, { runId: RUN_ID, root: process.cwd() }, (r, id) => {
+                  const l = ensureLane(r, id);
+                  baseLane = l.base;
+                  return l;
+                });
+                noterOuverture(workUnit.id, lease, baseLane);
                 const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
                   ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd },
                   seq,
-                  signal,
+                  signal: bothSignals(signal),
                   onProgress: publish,
                 });
+                /*
+                 * La barrière, ici et non après le retour du lot.
+                 *
+                 * `HISTORY`, le journal et l'état de lane sont écrits par ce
+                 * rappel, donc une barrière posée après `runLanes` arriverait
+                 * trop tard : les mutations auraient déjà eu lieu. Elle porte
+                 * sur la capacité capturée avant le spawn.
+                 */
+                if (!stillOwns(lease)) return result;
+
                 HISTORY.push({
                   laneId: lane.laneId,
                   agent: params.agent,
@@ -1198,6 +1738,17 @@ export default function (pi: ExtensionAPI) {
           // démarrages. Laisser le journal physique contredire son propre ordre
           // logique serait une ambiguïté gratuite, et cette branche en a déjà
           // coûté assez.
+          if (!stillOwns(lease)) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `[run: propriété perdue] le lot est revenu, mais ${RUN_ID} ne nous appartient ` +
+                  `plus. Les worktrees et ce qu'ils contiennent restent ; rien n'a été journalisé.`,
+              }],
+              isError: true,
+            };
+          }
           rows.sort((a, b) => a.seq - b.seq);
           logDelegations(RUN_ID, rows);
 
@@ -1289,7 +1840,6 @@ export default function (pi: ExtensionAPI) {
         // and the delegation journal has to record the same one this child was
         // given. Reading it back off the artefact path would work and would tie
         // the journal to a filename format.
-        const seqs = tasks.map(() => ++CALL_SEQ);
 
         let results: RunResult[];
         try {
@@ -1303,7 +1853,7 @@ export default function (pi: ExtensionAPI) {
                   cwd: lane?.cwd,
                 },
                 seq: seqs[i],
-                signal,
+                signal: bothSignals(signal),
                 onProgress: publish,
               }),
             ),
@@ -1314,6 +1864,33 @@ export default function (pi: ExtensionAPI) {
           results = settled.map((r) => (r as PromiseFulfilledResult<RunResult>).value);
         } finally {
           publish();
+        }
+
+        /*
+         * La barrière de propriété, avant la première mutation issue des enfants.
+         *
+         * Elle était plus bas, juste avant l'intégration — donc après `HISTORY`,
+         * après le journal des délégations et après le registre de risques. Le
+         * commentaire promettait que rien n'avancerait après la perte du bail
+         * alors que trois choses avaient déjà avancé. Trouvé par le harnais, et
+         * invisible aux tests de module : c'est un ordre d'instructions, pas un
+         * contrat.
+         *
+         * Elle porte sur la capacité capturée avant le spawn, pas sur le bail
+         * courant de la session.
+         */
+        if (!stillOwns(lease)) {
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[run: propriété perdue] la délégation est revenue, mais ${RUN_ID} ne nous ` +
+                `appartient plus. Ce que l'enfant a écrit reste sur le disque ; rien n'a été ` +
+                `journalisé, intégré ni fermé.\n` +
+                describeAccess(inspectRun(RUN_DIR, RUN_ID, SESSION_ID), RUN_ID),
+            }],
+            isError: true,
+          };
         }
 
         // One HISTORY entry per child, which is what ran. The guard counts the
@@ -1472,6 +2049,13 @@ export default function (pi: ExtensionAPI) {
             LANE_BLOCKS.delete(lane.laneId);
             // C'est ici, et seulement ici, qu'une unité devient une dépendance
             // satisfaite : intégrée, pas terminée.
+            // Après le merge, jamais avant : l'ordre inverse produirait un
+            // `INTEGRATED` sur une intégration qui n'a pas eu lieu.
+            appendLaneEvent(
+              RUN_DIR,
+              { event: "INTEGRATED", work_unit: lane.workUnitId, at: new Date().toISOString() },
+              lease,
+            );
             INTEGRATED.add(lane.workUnitId);
             OPEN_UNITS.delete(lane.workUnitId);
             integration = `  intégrée : ${lane.workUnitId}`;
@@ -1526,11 +2110,11 @@ export default function (pi: ExtensionAPI) {
         // pouvoir passer pour un `ok` ordinaire. Le travail reste sur le disque
         // — le jeter pour une écriture annulable coûterait plus qu'il ne
         // protège — mais la lane cesse d'être intégrable, et la porte de merge
-        // du lot 2 en fera la conséquence.
+        // ci-dessus en fait la conséquence.
         const violation = reserved.length
           ? `  ${reserved.join(", ")} — la lane n'en est pas propriétaire, non intégrable`
           : "";
-        const under = [violation, integration, action, risks].filter(Boolean).join("\n");
+        const under = [bilan, violation, integration, action, risks].filter(Boolean).join("\n");
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`

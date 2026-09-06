@@ -1,0 +1,582 @@
+#!/usr/bin/env -S node --experimental-strip-types
+/**
+ * Trancher une contradiction de reprise, explicitement.
+ *
+ * Une contradiction entre le registre et le dépôt ferme le run : aucune
+ * délégation ne passe tant qu'elle subsiste. Elle ne peut donc pas se résoudre
+ * par une délégation ordinaire — ce serait réparer par effet de bord ce qu'on
+ * refuse de réparer par heuristique. C'est une action d'opérateur, faite en
+ * connaissance de cause.
+ *
+ *     bin/subagent-recover                      voir les contradictions
+ *     bin/subagent-recover <unité> adopt        le worktree est légitime, l'adopter
+ *     bin/subagent-recover <unité> integrated   le merge a eu lieu, l'enregistrer
+ *     bin/subagent-recover <unité> abandoned    ce travail est abandonné
+ *     bin/subagent-recover <unité> discard      retirer le worktree, puis abandonner
+ *
+ * Chaque résolution prend le bail, agit, puis enregistre le fait accompli —
+ * dans cet ordre, comme partout ailleurs. Aucune ne devine : elle applique la
+ * décision de celui qui l'a tapée.
+ */
+import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+
+import {
+  acquireRunOwnership,
+  appendLaneEvent,
+  LANE_LEDGER_VERSION,
+  migrateLaneLedger,
+  readLaneEvents,
+  readManifest,
+  releaseRunOwnership,
+  takeOverRun,
+} from "../subagent-only/run-manifest.ts";
+import { describeConflicts, reconcile } from "../subagent-only/lane-ledger.ts";
+import { validatePlan } from "../subagent-only/work-units.ts";
+import {
+  isMerged, laneChanges, laneHasDiverged, laneTip, laneUnmergedCommitCount,
+  openLanes, removeLane, removeLaneBranch, runBranches,
+} from "../subagent-only/worktree.ts";
+
+const RUNS = ".pi-subagent-runs";
+const root = process.cwd();
+const dir = join(root, RUNS);
+
+/** Une commande git qui répond oui ou non, sans jeter. */
+function tryGitRecover(args) {
+  try {
+    execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const manifest = readManifest(dir);
+if (!manifest) {
+  console.error(`aucun run actif dans ${RUNS}/`);
+  process.exit(1);
+}
+const runId = manifest.runId;
+
+function etat() {
+  const { events, malformed, malformedLines, version } = readLaneEvents(dir, runId);
+  const worktrees = openLanes(root)
+    .filter((id) => id.startsWith(`${runId}-`))
+    .map((id) => id.slice(runId.length + 1));
+  /*
+   * L'outil observe exactement comme le runtime.
+   *
+   * La première version reprenait la base du run pour toutes les lanes et ne
+   * regardait ni les branches, ni les bases enregistrées. Deux vues
+   * différentes du même dépôt auraient produit deux diagnostics — et l'outil
+   * censé trancher aurait tranché sur autre chose que ce que pi refuse.
+   */
+  const bases = new Map();
+  for (const e of events) {
+    if (e.event === "OPENED" && e.base && !bases.has(e.work_unit)) bases.set(e.work_unit, e.base);
+  }
+  const bilan = reconcile(events, {
+    openWorktrees: worktrees,
+    dirtyWorktrees: worktrees.filter((u) => laneChanges(root, `${runId}-${u}`).length > 0),
+    runBranches: runBranches(root, runId),
+    mergedUnits: [...bases.entries()]
+      .filter(([u, b]) => isMerged(root, `${runId}-${u}`, b))
+      .map(([u]) => u),
+  });
+  return { bilan, malformed, malformedLines, ledgerVersion: version };
+}
+
+const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const [unite, action] = args;
+
+/** La valeur d'une option `--nom valeur`, si elle est là. */
+function valeurOption(nom) {
+  const i = process.argv.indexOf(nom);
+  return i !== -1 ? process.argv[i + 1] : undefined;
+}
+
+/**
+ * Ce qui a un sens, selon la nature de la contradiction.
+ *
+ * Afficher les quatre verbes indistinctement invitait des parcours absurdes en
+ * plusieurs étapes — un `discard` qui écrit un abandon, puis une réconciliation
+ * qui le contredit. Les postconditions refusent déjà les faits faux ; ceci
+ * évite d'y arriver.
+ */
+const SUGGESTIONS = {
+  "lane-disparue": ["abandoned"],
+  "worktree-orphelin": ["adopt", "discard"],
+  // Sans événement, il n'y a pas de base — donc `integrated` serait refusé par
+  // sa propre postcondition. La seule résolution exécutable est de retirer la
+  // branche parasite, et `--base` permet de reconstruire une provenance quand
+  // l'opérateur sait d'où elle part.
+  "branche-sans-provenance": ["discard"],
+  "integration-non-enregistree": ["integrated"],
+  "integration-non-confirmee": ["abandoned"],
+  "residu-sale": ["discard"],
+  "residu-d-abandon": ["discard"],
+  "abandon-contredit-par-git": ["integrated"],
+};
+
+/**
+ * Un registre amputé ferme l'outil comme il ferme le run.
+ *
+ * L'outil lisait le compte de lignes illisibles puis continuait : il pouvait
+ * annoncer « aucune contradiction » sur une histoire dont il manque des
+ * morceaux, et surtout prendre le bail pour ajouter des faits par-dessus. Une
+ * porte qui ne vaut que d'un côté n'est pas une porte.
+ */
+/**
+ * Migrer un registre écrit avant que le protocole soit versionné.
+ *
+ * Ne fait qu'une chose : poser l'en-tête. Elle refuse si une seule ligne n'est
+ * pas lisible sous la version courante, parce que la migration ne doit pas
+ * décider à la place de l'opérateur ce que devient une ligne qu'elle ne
+ * comprend pas — c'est de la provenance, et la deviner reviendrait à réécrire
+ * l'histoire du run.
+ */
+function migrerRegistre() {
+  const sessionId = `recover-migrate-${process.pid}`;
+  const pris = acquireRunOwnership(dir, runId, sessionId);
+  let lease;
+  if (pris.ok) {
+    lease = pris.lease;
+  } else if (pris.kind === "recovery-required") {
+    console.log("bail périmé : reprise explicite pour migration");
+    lease = takeOverRun(dir, runId, sessionId);
+  } else {
+    console.error("le run est tenu par une autre session ; migration refusée.");
+    process.exit(1);
+  }
+
+  try {
+    const r = migrateLaneLedger(dir, runId, lease);
+    switch (r.status) {
+      case "missing":
+        console.log("aucun registre : rien à migrer.");
+        return;
+      case "current":
+        console.log(`registre déjà en version ${LANE_LEDGER_VERSION} : rien à faire.`);
+        return;
+      case "unsupported":
+        console.error(`registre en version ${r.version} : cette version n'est pas migrable ici.`);
+        console.error(`  ce runtime écrit la version ${LANE_LEDGER_VERSION}.`);
+        process.exitCode = 1;
+        return;
+      case "malformed":
+        console.error(`migration impossible : ligne(s) ${r.lines.join(", ")} ne sont pas`);
+        console.error(`  lisibles en version ${LANE_LEDGER_VERSION}.`);
+        console.error("  la migration pose l'en-tête, elle ne réécrit aucune ligne.");
+        process.exitCode = 1;
+        return;
+      case "migrated":
+        console.log(`registre migré en version ${LANE_LEDGER_VERSION} : ${r.events} fait(s) conservé(s).`);
+        return;
+    }
+  } finally {
+    releaseRunOwnership(dir, lease);
+  }
+}
+
+if (process.argv.includes("--migrate-ledger")) {
+  migrerRegistre();
+  process.exit(process.exitCode ?? 0);
+}
+
+/**
+ * Un registre d'une autre version n'est pas un registre abîmé.
+ *
+ * Le confondre ferait proposer de corriger des lignes là où il faut migrer.
+ */
+function refuserSiAutreVersion(version) {
+  if (version === LANE_LEDGER_VERSION) return;
+  const trouve = version === undefined ? "aucune version déclarée" : `version ${version}`;
+  console.error(`registre d'une autre version : ${trouve}, ce runtime lit ${LANE_LEDGER_VERSION}.`);
+  console.error("  ce n'est pas une corruption ; ne pas corriger ses lignes à la main.");
+  console.error("  migrer avec : bin/subagent-recover --migrate-ledger");
+  process.exit(1);
+}
+
+function refuserSiAmpute(lignes) {
+  if (lignes.length === 0) return;
+  console.error(`registre illisible : ligne(s) ${lignes.join(", ")} de ${runId}-lanes.jsonl`);
+  console.error("  aucune action n'est possible tant que ces lignes n'ont pas été corrigées.");
+  console.error("  elles ne sont jamais supprimées automatiquement : leur contenu est de");
+  console.error("  la provenance, et la deviner reviendrait à réécrire l'histoire du run.");
+  process.exit(1);
+}
+
+if (!unite) {
+  const { bilan, malformedLines, ledgerVersion } = etat();
+  if (ledgerVersion !== LANE_LEDGER_VERSION) {
+    const trouve = ledgerVersion === undefined ? "aucune version" : `version ${ledgerVersion}`;
+    console.log(`run ${runId} · ${manifest.status}`);
+    console.log(`registre d'une autre version : ${trouve} (ce runtime lit ${LANE_LEDGER_VERSION})`);
+    console.log("  migrer avec : bin/subagent-recover --migrate-ledger");
+    process.exit(0);
+  }
+  console.log(`run ${runId} · ${manifest.status}`);
+  if (malformedLines.length > 0) {
+    console.log(`registre illisible : ligne(s) ${malformedLines.join(", ")}`);
+    console.log("  le bilan ci-dessous porte sur un registre amputé et ne prouve rien.");
+  }
+  console.log(bilan.conflicts.size === 0 && malformedLines.length === 0
+    ? "aucune contradiction : le run accepte les délégations."
+    : describeConflicts(bilan.conflicts));
+  for (const c of bilan.conflicts.values()) {
+    const quoi = SUGGESTIONS[c.kind] ?? [];
+    if (quoi.length) console.log(`  ${c.workUnitId} → ${quoi.join(" ou ")}`);
+  }
+  for (const w of bilan.warnings) console.log(`à ranger : ${w.detail}`);
+  process.exit(0);
+}
+
+const ACTIONS = new Set(["adopt", "integrated", "abandoned", "discard"]);
+if (!action || !ACTIONS.has(action)) {
+  console.error(`action attendue : ${[...ACTIONS].join(" | ")}`);
+  process.exit(1);
+}
+
+
+/**
+ * L'unité appartient-elle au plan gelé ?
+ *
+ * Ajouter de la provenance à une unité que le plan ne connaît pas la ferait
+ * entrer définitivement dans l'histoire du run : un worktree nommé à la main
+ * suffirait à inventer une WorkUnit. `discard` reste ouvert aux inconnues,
+ * précisément parce que c'est le chemin de nettoyage d'un worktree parasite.
+ */
+function dansLePlan(u) {
+  const chemin = join(dir, `${runId}-plan.json`);
+  if (!existsSync(chemin)) return { ok: false, pourquoi: "aucun plan gelé" };
+  const [statut, raison, unites] = (() => {
+    const r = validatePlan(JSON.parse(readFileSync(chemin, "utf-8")));
+    return [r.status, r.reason, r.units];
+  })();
+  if (statut !== "usable") return { ok: false, pourquoi: `plan ${statut} : ${raison}` };
+  return unites.some((x) => x.id === u)
+    ? { ok: true }
+    : { ok: false, pourquoi: `${u} ne figure pas dans le plan gelé` };
+}
+
+const { bilan, malformedLines, ledgerVersion } = etat();
+refuserSiAutreVersion(ledgerVersion);
+refuserSiAmpute(malformedLines);
+const conflit = bilan.conflicts.get(unite);
+if (!conflit) {
+  console.error(`${unite} n'est pas en contradiction ; rien à trancher.`);
+  process.exit(1);
+}
+
+console.log(`${unite} · ${conflit.kind}`);
+console.log(`  ${conflit.detail}`);
+
+const suggeres = SUGGESTIONS[conflit.kind] ?? [...ACTIONS];
+if (!suggeres.includes(action)) {
+  console.error(`  refus : « ${action} » n'a pas de sens pour ${conflit.kind}.`);
+  console.error(`  actions possibles ici : ${suggeres.join(", ")}`);
+  process.exit(1);
+}
+
+const appartenance = dansLePlan(unite);
+const horsPlan = !appartenance.ok;
+if (action !== "discard" && horsPlan) {
+  console.error(`  refus : ${appartenance.pourquoi}.`);
+  console.error(`  seul « discard » peut nettoyer une unité hors plan.`);
+  process.exit(1);
+}
+
+// Prendre le bail, ou le reprendre s'il est périmé — un run à trancher est
+// souvent un run dont la session est morte.
+const sessionId = `recover-${process.pid}`;
+const pris = acquireRunOwnership(dir, runId, sessionId);
+let lease;
+if (pris.ok) {
+  lease = pris.lease;
+} else if (pris.kind === "recovery-required") {
+  console.log("  bail périmé : reprise explicite");
+  lease = takeOverRun(dir, runId, sessionId);
+} else {
+  console.error("  le run est tenu par une autre session ; réessayer plus tard.");
+  process.exit(1);
+}
+
+/*
+ * Relire après avoir pris le bail.
+ *
+ * Le conflit a été observé avant l'acquisition : deux processus de résolution
+ * pouvaient donc décider sur le même instantané, et le second agir après que le
+ * premier a déjà tranché. C'est la discipline de 3b.2 appliquée à son propre
+ * outil — observer, acquérir, relire, vérifier, agir, enregistrer.
+ */
+const {
+  bilan: apresBail,
+  malformedLines: amputeApres,
+  ledgerVersion: versionApres,
+} = etat();
+if (versionApres !== LANE_LEDGER_VERSION) {
+  releaseRunOwnership(dir, lease);
+  refuserSiAutreVersion(versionApres);
+}
+// Le registre a pu devenir illisible entre l'observation et l'acquisition :
+// « observer, acquérir, relire » ne vaut que si la relecture porte sur tout.
+if (amputeApres.length > 0) {
+  releaseRunOwnership(dir, lease);
+  refuserSiAmpute(amputeApres);
+}
+const encore = apresBail.conflicts.get(unite);
+if (!encore) {
+  console.log("  la contradiction a disparu entre-temps : rien à faire.");
+  releaseRunOwnership(dir, lease);
+  process.exit(0);
+}
+if (encore.kind !== conflit.kind) {
+  console.error(`  la contradiction a changé (${conflit.kind} → ${encore.kind}) : relancer.`);
+  releaseRunOwnership(dir, lease);
+  process.exit(1);
+}
+
+/*
+ * Vérifier la postcondition avant d'écrire le fait.
+ *
+ * L'outil prétend enregistrer ce qui s'est passé ; sans cette vérification il
+ * le fabriquerait. Écrire `INTEGRATED` sur une unité que git ne montre pas
+ * intégrée satisferait ses dépendantes sur un merge qui n'a jamais eu lieu.
+ */
+// La base de la lane, pas celle du run : la seconde donne la mauvaise réponse
+// dès qu'une autre unité a été intégrée entre-temps.
+const evenements = readLaneEvents(dir, runId).events;
+const ouverture = evenements.find((e) => e.event === "OPENED" && e.work_unit === unite);
+const base = ouverture?.base;
+if (action === "integrated" && !(base && isMerged(root, `${runId}-${unite}`, base))) {
+  console.error("  refus : git ne montre aucune intégration pour cette unité.");
+  console.error("  « integrated » enregistre un merge, il ne le fabrique pas.");
+  releaseRunOwnership(dir, lease);
+  process.exit(1);
+}
+if (action === "abandoned" && base && isMerged(root, `${runId}-${unite}`, base)) {
+  console.error("  refus : git montre cette unité comme intégrée.");
+  releaseRunOwnership(dir, lease);
+  process.exit(1);
+}
+
+/*
+ * `adopt` veut dire « ce worktree existe et je lui donne sa provenance ».
+ * L'écrire sans worktree fabriquerait une ouverture qui n'a jamais eu lieu.
+ */
+if (action === "adopt" && !openLanes(root).includes(`${runId}-${unite}`)) {
+  console.error("  refus : aucun worktree à adopter pour cette unité.");
+  releaseRunOwnership(dir, lease);
+  process.exit(1);
+}
+
+/*
+ * Un `discard` ordinaire écrit un abandon. Si git montre l'intégration, ce
+ * serait un fait faux — que la réconciliation suivante signalerait, après
+ * l'avoir inscrit.
+ */
+if (
+  action === "discard" && conflit.kind !== "residu-sale" &&
+  base && isMerged(root, `${runId}-${unite}`, base)
+) {
+  console.error("  refus : git montre cette unité comme intégrée ; « integrated » convient.");
+  releaseRunOwnership(dir, lease);
+  process.exit(1);
+}
+
+/*
+ * Un worktree sale porte du travail qu'on s'apprête à détruire. La commande le
+ * montre et demande une intention plus forte que le choix d'un verbe : une
+ * perte irréversible ne doit pas tenir à une faute de frappe.
+ */
+if (action === "discard") {
+  const perdus = laneChanges(root, `${runId}-${unite}`);
+  if (perdus.length > 0) {
+    console.log(`  ${perdus.length} fichier(s) seront perdus :`);
+    for (const f of perdus) console.log(`    ${f}`);
+    if (!process.argv.includes("--force")) {
+      console.error("  ajouter --force pour confirmer cette suppression.");
+      releaseRunOwnership(dir, lease);
+      process.exit(1);
+    }
+  }
+
+  /*
+   * Une branche peut être la seule copie durable de commits que laneChanges()
+   * ne voit plus quand le worktree a disparu. Toute suppression de branche hors
+   * provenance / hors plan a donc sa propre confirmation.
+   */
+  const supprimeBranche = conflit.kind === "branche-sans-provenance" || horsPlan;
+  if (supprimeBranche) {
+    const n = laneUnmergedCommitCount(root, `${runId}-${unite}`);
+    const tip = laneTip(root, `${runId}-${unite}`);
+    if (n === undefined || !tip) {
+      console.error("  refus : impossible d'établir l'état de la branche à supprimer.");
+      releaseRunOwnership(dir, lease);
+      process.exit(1);
+    }
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf-8" }).trim();
+    /*
+     * Même quand tous les commits de la branche sont déjà dans HEAD, un tip
+     * différent de HEAD reste une pièce de provenance : le supprimer ferait
+     * disparaître la seule ref qui permet encore d'expliquer cette histoire.
+     */
+    if (n > 0 || tip !== head) {
+      if (n > 0) {
+        console.log(`  branche ${tip.slice(0, 12)} : ${n} commit(s) non intégré(s) seront perdus.`);
+      } else {
+        console.log(
+          `  branche ${tip.slice(0, 12)} déjà contenue dans HEAD : sa suppression ` +
+          "effacera la dernière ref de cette provenance.",
+        );
+      }
+      if (!process.argv.includes("--force")) {
+        console.error("  ajouter --force pour confirmer cette suppression de provenance.");
+        releaseRunOwnership(dir, lease);
+        process.exit(1);
+      }
+    }
+  }
+}
+
+let erreurAction;
+try {
+  const at = new Date().toISOString();
+  switch (action) {
+    case "adopt": {
+      /*
+       * Une ouverture porte sa base, sinon elle prépare le conflit de demain :
+       * sans base, l'unité travaillera, sera mergée, et la réconciliation
+       * suivante refusera de confirmer son intégration.
+       *
+       * Pour l'orphelin ordinaire — la fenêtre entre `git worktree add` et
+       * l'écriture de l'ouverture — le worker n'a rien commité, donc le sommet
+       * de la branche est un point de départ défendable. Une branche divergée a
+       * une histoire qu'on ne sait pas situer : l'opérateur donne la base ou
+       * l'outil refuse de prétendre qu'il sait.
+       */
+      /*
+       * Une base fournie doit être vraie.
+       *
+       * Elle est écrite dans le registre et sert ensuite à décider si l'unité
+       * est intégrée. Une valeur inexistante ou étrangère à la lane produirait
+       * une réponse arbitraire d'`isMerged`, et ce serait pire que le conflit
+       * qu'on tranche — l'outil aurait inscrit une provenance fausse au lieu de
+       * refuser d'en inventer une.
+       */
+      const donnee = valeurOption("--base");
+      if (donnee) {
+        const existe = tryGitRecover(["rev-parse", "--verify", `${donnee}^{commit}`]);
+        if (!existe) {
+          console.error(`  refus : ${donnee} n'est pas un commit de ce dépôt.`);
+          releaseRunOwnership(dir, lease);
+          process.exit(1);
+        }
+        const dansLaLane = tryGitRecover(
+          ["merge-base", "--is-ancestor", donnee, `pi-lane/${runId}-${unite}`],
+        );
+        if (!dansLaLane) {
+          console.error(`  refus : ${donnee} n'est pas un ancêtre de la branche de ${unite}.`);
+          console.error("  une base doit être un point de départ de cette lane, pas un commit quelconque.");
+          releaseRunOwnership(dir, lease);
+          process.exit(1);
+        }
+      }
+      let baseAdoptee = donnee;
+      if (!baseAdoptee) {
+        if (laneHasDiverged(root, `${runId}-${unite}`)) {
+          console.error("  refus : cette lane a une histoire propre, sa base est inconnue.");
+          console.error("  fournir « --base <sha> » pour l'adopter en connaissance de cause.");
+          releaseRunOwnership(dir, lease);
+          process.exit(1);
+        }
+        baseAdoptee = laneTip(root, `${runId}-${unite}`);
+      }
+      if (!baseAdoptee) {
+        console.error("  refus : aucune base déterminable pour cette lane.");
+        releaseRunOwnership(dir, lease);
+        process.exit(1);
+      }
+      appendLaneEvent(dir, { event: "OPENED", work_unit: unite, at, base: baseAdoptee }, lease);
+      console.log(`  adoptée : ouverte au registre, base ${baseAdoptee.slice(0, 12)}`);
+      break;
+    }
+    case "integrated":
+      appendLaneEvent(dir, { event: "INTEGRATED", work_unit: unite, at }, lease);
+      console.log("  enregistrée comme intégrée");
+      break;
+    case "abandoned":
+      appendLaneEvent(dir, { event: "ABANDONED", work_unit: unite, at, reason: conflit.kind }, lease);
+      console.log("  enregistrée comme abandonnée");
+      break;
+    case "discard": {
+      /*
+       * Une branche parasite se supprime, elle ne s'abandonne pas.
+       *
+       * `removeLane` ne retire que le worktree — la branche survit par contrat,
+       * puisqu'elle porte le travail. Pour une branche sans provenance et sans
+       * worktree, il ne supprimait donc pas l'objet qui provoque le conflit, et
+       * l'`ABANDONED` écrit ensuite masquait la branche en donnant au registre
+       * une unité qu'il ne connaissait pas. Un fait inventé pour faire taire un
+       * symptôme.
+       */
+      if (conflit.kind === "branche-sans-provenance") {
+        const tip = laneTip(root, `${runId}-${unite}`);
+        console.log(`  branche parasite ${tip ? tip.slice(0, 12) : "?"} : suppression`);
+        if (!removeLaneBranch(root, `${runId}-${unite}`, process.argv.includes("--force"))) {
+          throw new Error("git a refusé de supprimer la branche parasite");
+        }
+        console.log("  aucun événement écrit : le registre n'a jamais connu cette unité");
+        break;
+      }
+      // L'effet d'abord, le fait ensuite — comme partout.
+      const retire = removeLane(root, `${runId}-${unite}`);
+      if (!retire) throw new Error("le worktree attendu n'a pas pu être retiré");
+      console.log("  worktree retiré");
+
+      /*
+       * Une unité hors plan n'entre jamais dans la provenance. `discard` est
+       * seulement son chemin de nettoyage : worktree + branche, puis zéro fait.
+       */
+      if (horsPlan) {
+        if (!removeLaneBranch(root, `${runId}-${unite}`, process.argv.includes("--force"))) {
+          throw new Error("le worktree a été retiré mais la branche parasite subsiste");
+        }
+        console.log("  aucun événement écrit : l'unité ne figure pas dans le plan gelé");
+        break;
+      }
+      /*
+       * Un résidu sale porte du travail non intégré **en plus** d'un fait
+       * INTEGRATED déjà enregistré et confirmé par git. Retirer le worktree
+       * supprime ce surplus ; écrire ABANDONED par-dessus dirait que l'unité a
+       * été abandonnée alors que son travail est bel et bien dans le dépôt.
+       */
+      if (conflit.kind === "residu-sale") {
+        console.log("  le fait INTEGRATED est conservé : seul le surplus est retiré");
+        break;
+      }
+      if (conflit.kind === "residu-d-abandon") {
+        console.log("  le fait ABANDONED existe déjà : seul le résidu est retiré");
+        break;
+      }
+      appendLaneEvent(dir, { event: "ABANDONED", work_unit: unite, at, reason: "discard" }, lease);
+      console.log("  enregistrée comme abandonnée");
+      break;
+    }
+  }
+} catch (e) {
+  erreurAction = e instanceof Error ? e.message : String(e);
+  console.error(`  échec : ${erreurAction}`);
+} finally {
+  releaseRunOwnership(dir, lease);
+}
+
+if (erreurAction) process.exit(1);
+
+const apres = etat().bilan;
+console.log();
+console.log(apres.conflicts.size === 0
+  ? "aucune contradiction restante : le run accepte les délégations."
+  : describeConflicts(apres.conflicts));

@@ -23,9 +23,9 @@
  * l'unité : le risque qu'il porte sait déjà d'où il vient. Aucune heuristique,
  * aucune déduction par l'ordre — la provenance est déjà dans le registre.
  *
- * Au lot 1 il n'y a pas encore de worktree : `cwd` est la racine du dépôt et
- * `branch` est vide. La forme est complète pour que le lot 2 substitue le
- * worktree sans changer un seul appelant.
+ * Le contexte porte maintenant le worktree réel. Cette forme avait été introduite
+ * avant son arrivée précisément pour que le passage de la racine du dépôt à un
+ * `cwd` de lane ne change pas les appelants.
  */
 import type { RiskRecord } from "./risk-ledger.js";
 
