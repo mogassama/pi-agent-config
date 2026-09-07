@@ -17,6 +17,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadAgents, type AgentDefinition } from "../../subagent-only/agents.js";
+import { recordGitInvocation } from "../../subagent-only/git-probe-counter.js";
 import {
   formatModels, parse, parseRun, renderRun, RUN_STATUS_KEY, STATUS_KEY,
   type RoleName, type RoleState } from "../../subagent-only/run-state.js";
@@ -142,6 +143,7 @@ function makeGitCache() {
     try {
       // --untracked-files=all, or git collapses an untracked directory into a
       // single entry and the count disagrees with every other tool on screen.
+      recordGitInvocation();
       const out = execFileSync("git", ["status", "--porcelain=v1", "--branch", "--untracked-files=all"], {
         encoding: "utf-8",
         timeout: 1500,

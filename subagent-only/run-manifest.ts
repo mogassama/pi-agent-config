@@ -33,6 +33,7 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import type { LaneEvent } from "./lane-ledger.js";
+import type { IntegrationEvent } from "./integration-ledger.js";
 import { join } from "node:path";
 
 /** Le manifeste ne se répare pas : ce qu'il dit et ce que le disque montre doivent s'accorder. */
@@ -339,6 +340,172 @@ export function setStatus(dir: string, status: RunStatus, lease: Lease): RunMani
   });
 }
 
+/**
+ * Décider sous la propriété, sur un état relu sous elle.
+ *
+ * Acquérir un bail sérialise les écritures **futures** ; cela ne rend pas
+ * rétroactivement valide une décision prise avant. Un outil qui lit l'état, le
+ * juge, puis prend le bail et écrit, écrit sur un monde qu'il a observé quand
+ * une autre session pouvait encore le changer — et une autre session a
+ * précisément le droit de clore la tentative ou d'abandonner la lane entre les
+ * deux.
+ *
+ * Le premier relevé garde sa place : il sert à refuser vite et à savoir de quel
+ * objet on parle. C'est le second, fait sous la capacité, qui autorise.
+ *
+ * `release` passe toujours, y compris sur un refus ou une exception : un bail
+ * pris pour une décision qui n'a pas lieu doit être rendu, sans quoi la session
+ * suivante attendrait son expiration pour rien.
+ */
+export function decideUnderLease<T>(steps: {
+  acquire: () => void;
+  reread: () => T;
+  validate: (state: T) => string | null;
+  act: (state: T) => void;
+  release: () => void;
+}): { ok: true } | { ok: false; reason: string } {
+  steps.acquire();
+  try {
+    const state = steps.reread();
+    const refus = steps.validate(state);
+    if (refus) return { ok: false, reason: refus };
+    steps.act(state);
+    return { ok: true };
+  } finally {
+    steps.release();
+  }
+}
+
+// ------------------------------------ le registre des tentatives d'intégration
+
+/**
+ * Un second registre, avec la même discipline et un vocabulaire à part.
+ *
+ * Distinct de celui des lanes parce qu'une tentative d'intégration n'est ni une
+ * lane ni une WorkUnit : elle naît d'une rencontre entre deux commits, en meurt,
+ * et plusieurs peuvent se succéder pour une même unité. Sous le même en-tête,
+ * deux vocabulaires et deux durées de vie se seraient mêlés.
+ */
+export const INTEGRATION_LEDGER_VERSION = 1;
+
+export function integrationLedgerPath(dir: string, runId: string): string {
+  return join(dir, `${runId}-integrations.jsonl`);
+}
+
+export interface IntegrationLedgerRead {
+  events: IntegrationEvent[];
+  malformed: number;
+  malformedLines: number[];
+  version: number | undefined;
+}
+
+/** Lecture libre, comme pour les lanes : observer n'exige pas la propriété. */
+export function readIntegrationEvents(dir: string, runId: string): IntegrationLedgerRead {
+  const path = integrationLedgerPath(dir, runId);
+  if (!existsSync(path)) {
+    return { events: [], malformed: 0, malformedLines: [], version: INTEGRATION_LEDGER_VERSION };
+  }
+  const events: IntegrationEvent[] = [];
+  let version: number | undefined;
+  const malformedLines: number[] = [];
+  let malformed = 0;
+  let numero = 0;
+  for (const ligne of readFileSync(path, "utf-8").split("\n")) {
+    numero += 1;
+    if (!ligne.trim()) continue;
+    try {
+      const doc = JSON.parse(ligne) as Record<string, unknown>;
+      if (typeof doc.integration_ledger === "number" && numero === 1) {
+        version = doc.integration_ledger;
+        continue;
+      }
+      if (integrationEventIsWellFormed(doc)) {
+        events.push(doc as unknown as IntegrationEvent);
+      } else {
+        malformed += 1;
+        malformedLines.push(numero);
+      }
+    } catch {
+      malformed += 1;
+      malformedLines.push(numero);
+    }
+  }
+  return { events, malformed, malformedLines, version };
+}
+
+/**
+ * La forme d'un événement, vérifiée à la lecture.
+ *
+ * Chaque nature a ses champs obligatoires, et l'`id` l'est pour toutes : c'est
+ * lui qui rattache un fait à sa tentative. Une ligne incomplète est abîmée, pas
+ * partiellement utilisable — accepter un `COMMITTED` sans `tree` reviendrait à
+ * enregistrer une preuve qui ne prouve rien.
+ */
+function integrationEventIsWellFormed(doc: Record<string, unknown>): boolean {
+  const texte = (k: string) => typeof doc[k] === "string" && (doc[k] as string).length > 0;
+  if (!texte("id")) return false;
+  switch (doc.event) {
+    case "ATTEMPT_OPENED":
+      return (
+        texte("work_unit") &&
+        typeof doc.seq === "number" &&
+        texte("p1") &&
+        texte("p2") &&
+        Array.isArray(doc.conflicts) &&
+        (doc.conflicts as unknown[]).every((c) => typeof c === "string")
+      );
+    case "COMMITTED":
+      return texte("commit") && texte("tree");
+    case "RECOVERY_REQUIRED":
+      return (
+        texte("reason") &&
+        (doc.observed_commit === undefined || texte("observed_commit"))
+      );
+    case "SUPERSEDED":
+      return texte("by");
+    case "CLOSED":
+      return texte("outcome");
+    default:
+      return false;
+  }
+}
+
+/**
+ * Ajout gardé, exactement comme pour les lanes.
+ *
+ * Une session qui a perdu son bail ne doit pas pouvoir écrire l'histoire des
+ * tentatives : c'est une vérité durable sur le run, et la laisser hors de la
+ * capacité ouvrirait une seconde vérité sans règles — celle-là même que le
+ * registre des lanes a été gardé pour éviter.
+ */
+export function appendIntegrationEvent(
+  dir: string,
+  event: IntegrationEvent,
+  lease: Lease,
+): void {
+  withRunGuard(dir, lease.runId, () => {
+    assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.id}`);
+    const path = integrationLedgerPath(dir, lease.runId);
+    if (!existsSync(path)) {
+      appendFileSync(path, `${JSON.stringify({ integration_ledger: INTEGRATION_LEDGER_VERSION })}\n`);
+    } else {
+      const lu = readIntegrationEvents(dir, lease.runId);
+      if (lu.version !== INTEGRATION_LEDGER_VERSION) {
+        const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
+        throw new RecoveryError(
+          `registre d'intégrations ${lease.runId} ${trouve} : migration requise avant toute écriture`,
+        );
+      }
+      if (lu.malformedLines.length > 0) {
+        throw new RecoveryError(
+          `registre d'intégrations ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
+        );
+      }
+    }
+    appendFileSync(path, `${JSON.stringify(event)}\n`);
+  });
+}
+
 // ------------------------------------------------ le registre des lanes
 
 /**
@@ -454,7 +621,21 @@ export function readLaneEvents(dir: string, runId: string): LedgerRead {
       // il se rebloquerait sans qu'on sache pourquoi.
       const complete =
         nature !== "OPENED" || (typeof doc.base === "string" && doc.base.length > 0);
-      if (connu && unite && complete) {
+      /*
+       * Le commit d'intégration est facultatif, sa forme ne l'est pas.
+       *
+       * Absent, l'intégration se prouve par la branche — c'est le cas legacy,
+       * légitime. Présent mais vide ou d'un autre type, c'est une ligne écrite
+       * par quelque chose qui a cru enregistrer une preuve : l'accepter en
+       * silence rendrait `integration_commit: ""` indistinguable de l'absence,
+       * et la lane retomberait sur la preuve par branche en croyant en avoir
+       * une durable. La ligne est abîmée, et se dit telle.
+       */
+      const preuve =
+        nature !== "INTEGRATED" ||
+        doc.integration_commit === undefined ||
+        (typeof doc.integration_commit === "string" && doc.integration_commit.length > 0);
+      if (connu && unite && complete && preuve) {
         events.push(doc as unknown as LaneEvent);
       } else {
         malformed += 1;

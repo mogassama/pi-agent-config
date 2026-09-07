@@ -46,24 +46,34 @@ if [ $# -gt 0 ]; then
   files=()
   for name in "$@"; do files+=("tests/${name%.test.ts}.test.ts"); done
   for f in "${files[@]}"; do
-    if [ "$f" = "tests/execute-harness.test.ts" ]; then
-      exec node --import ./tests/stubs/loader.mjs "${flags[@]}" "${files[@]}"
-    fi
+    case "$f" in
+      *-harness.test.ts) exec node --import ./tests/stubs/loader.mjs "${flags[@]}" "${files[@]}" ;;
+    esac
   done
   exec node "${flags[@]}" "${files[@]}"
 fi
 
 status=0
-# Le harnais d'`execute` charge l'extension, qui importe l'API de pi et typebox.
-# Il tourne donc sous un chargeur de substitution, à part — et il tourne
-# vraiment : un test de câblage qui se sauterait faute de dépendance serait un
-# test vert qui ne vérifie rien.
-harness=tests/execute-harness.test.ts
+# Les harnais chargent du code qui importe l'API de pi et typebox. Ils tournent
+# donc sous un chargeur de substitution, à part — et ils tournent vraiment : un
+# test de câblage qui se sauterait faute de dépendance serait un test vert qui
+# ne vérifie rien.
+#
+# La convention est le nom : `*-harness.test.ts`. Elle a remplacé un unique
+# fichier nommé en dur, qui rendait tout second harnais silencieusement inerte —
+# lancé sans chargeur, il aurait échoué au chargement, ce qui est le bon
+# comportement mais pour la mauvaise raison.
+harnesses=()
 others=()
-for f in tests/*.test.ts; do [ "$f" = "$harness" ] || others+=("$f"); done
+for f in tests/*.test.ts; do
+  case "$f" in
+    *-harness.test.ts) harnesses+=("$f") ;;
+    *) others+=("$f") ;;
+  esac
+done
 
 node "${flags[@]}" "${others[@]}" || status=$?
-node --import ./tests/stubs/loader.mjs "${flags[@]}" "$harness" || status=$?
+node --import ./tests/stubs/loader.mjs "${flags[@]}" "${harnesses[@]}" || status=$?
 
 echo
 if command -v python3 >/dev/null 2>&1; then

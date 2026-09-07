@@ -103,6 +103,36 @@ const payloads = {
     }),
   }),
 
+  /*
+   * L'intégration : même forme que le worker, sans `validation`.
+   *
+   * Ce que cet agent produit n'est pas une implémentation qu'on valide, c'est
+   * une combinaison de deux états déjà validés séparément. Lui demander « ce qui
+   * a tourné » inviterait à relancer une suite pour une décision qui n'est pas
+   * la sienne — le runtime lui reprendra son tree et le fera revoir.
+   *
+   * `deviations` porte le cas qui compte : un fichier hors conflits que la
+   * résolution semble exiger. Le rapporter termine la tentative et renvoie
+   * l'unité dans sa lane, ce qui est le bon chemin pour un changement qui doit
+   * être revu pour ce qu'il est.
+   */
+  "integration-worker": Type.Object({
+    changed_files: Type.Array(Type.String()),
+    resolutions: Type.Array(
+      Type.Object({
+        path: Type.String(),
+        base_intent: Type.String({ description: "What the integration base was doing there." }),
+        lane_intent: Type.String({ description: "What the lane's work was doing there." }),
+        combined: Type.String({ description: "How both survive in the result." }),
+      }),
+      { description: "One entry per conflicted file. A reviewer sees the result, not the choice." },
+    ),
+    deviations: Type.Array(Type.String(), {
+      description:
+        "Anything left unresolved, and any file outside the conflicted list that the resolution appears to require. Empty array is legal.",
+    }),
+  }),
+
   reviewer: Type.Object({
     findings: Type.Array(
       Type.Object({

@@ -42,7 +42,29 @@ export type LaneEvent =
       /** Le commit d'où cette lane est partie. Obligatoire. */
       base: string;
     }
-  | { event: "INTEGRATED"; work_unit: string; at: string }
+  | {
+      event: "INTEGRATED";
+      work_unit: string;
+      at: string;
+      /**
+       * Le commit qui porte l'intégration. Optionnel, et c'est délibéré.
+       *
+       * Symétrique de `base` sur l'ouverture : sans lui, l'intégration cesse
+       * d'être prouvable dès que la branche de lane disparaît. La preuve
+       * utilisée jusqu'ici était `isMerged(branche, base)`, qui interroge une
+       * ref — donc supprimer la branche d'une lane correctement intégrée
+       * transformait, à la reprise suivante, un fait juste en
+       * `integration-non-confirmee`, c'est-à-dire en contradiction bloquante.
+       * Le nettoyage devenait impossible sans casser la réconciliation.
+       *
+       * Optionnel parce que les registres déjà écrits sous `ledger: 1` n'en
+       * portent pas et restent lisibles : leur intégration continue de se
+       * prouver par la branche, et leur branche n'est donc pas supprimable.
+       * Dégradation honnête plutôt que migration — une unité sans preuve
+       * durable est nommée comme telle, pas traitée comme si elle en avait une.
+       */
+      integration_commit?: string;
+    }
   | { event: "ABANDONED"; work_unit: string; at: string; reason?: string };
 
 /**
@@ -75,6 +97,22 @@ export function foldLedger(events: readonly LaneEvent[]): Map<string, LaneStatus
   return etats;
 }
 
+/**
+ * Le commit d'intégration retenu pour chaque unité, quand le registre en porte un.
+ *
+ * Le dernier gagne, comme pour le statut : le registre est append-only et se lit
+ * dans l'ordre. Une unité intégrée deux fois — un rework réintégré — est prouvée
+ * par la dernière intégration, pas par la première, et une seconde ligne sans
+ * commit efface la preuve durable au lieu de conserver une valeur périmée.
+ */
+export function integrationCommits(events: readonly LaneEvent[]): Map<string, string | undefined> {
+  const commits = new Map<string, string | undefined>();
+  for (const e of events) {
+    if (e.event === "INTEGRATED") commits.set(e.work_unit, e.integration_commit);
+  }
+  return commits;
+}
+
 /** Ce que le disque montre, rassemblé par l'appelant. */
 export interface Observations {
   /** Unités dont le worktree existe encore. */
@@ -88,6 +126,20 @@ export interface Observations {
   mergedUnits: readonly string[];
   /** Unités ayant une branche de lane dans ce run, prouvée intégrée ou non. */
   runBranches?: readonly string[];
+  /**
+   * Les commits d'intégration que le dépôt confirme, par SHA.
+   *
+   * Confirmer veut dire deux choses, et les deux sont nécessaires : l'objet
+   * existe, et il est dans l'histoire de l'intégration courante. Un SHA inconnu
+   * du dépôt ne prouve rien ; un SHA connu mais hors de HEAD dit qu'on a intégré
+   * ailleurs, ou qu'on est revenu en arrière — dans les deux cas la lane n'est
+   * pas dans l'intégration, et l'y compter serait la réparation silencieuse
+   * qu'on refuse.
+   *
+   * Par SHA et non par unité : c'est le commit nommé au registre qui doit être
+   * confirmé, pas « une intégration quelconque de cette unité ».
+   */
+  confirmedCommits?: readonly string[];
   /**
    * Unités dont le worktree porte encore des changements non intégrés.
    *
@@ -151,6 +203,30 @@ export interface Reconciliation {
   openUnits: Set<string>;
   /** Les unités intégrées, donc dont les dépendantes sont admissibles. */
   integrated: Set<string>;
+  /**
+   * Les unités dont l'intégration est prouvée sans leur branche.
+   *
+   * C'est-à-dire : intégrées, confirmées par leur commit d'intégration, sans
+   * résidu. Leur branche de lane ne porte plus aucune preuve, donc la supprimer
+   * ne peut pas fabriquer de contradiction à la reprise suivante.
+   *
+   * Rendu ici et consommé ailleurs : ce module observe, il ne nettoie pas. Une
+   * unité prouvée par sa seule branche n'y figure jamais — pas parce qu'elle est
+   * douteuse, mais parce que sa branche est ce qui la prouve.
+   */
+  cleanableBranches: Set<string>;
+  /**
+   * Les worktrees qu'on peut retirer sans rien perdre.
+   *
+   * Une unité terminale — intégrée ou abandonnée — dont le worktree est présent
+   * et propre. Le contenu est ailleurs : dans l'intégration pour l'une, sur la
+   * branche pour l'autre. Un worktree sale n'y figure jamais, quel que soit le
+   * fait enregistré : il porte du travail que ce fait ne couvre pas.
+   *
+   * Rendu ici pour que le nettoyage n'ait aucune règle à réimplémenter. Il ne
+   * décide de rien ; il matérialise ce que la réconciliation a déjà établi.
+   */
+  cleanableWorktrees: Set<string>;
   /** Ce qui ne s'accorde pas, par unité. Nommé, jamais réparé. */
   conflicts: Map<string, Conflict>;
   /** Ce qui est à ranger, sans rien remettre en cause. */
@@ -183,13 +259,17 @@ export function reconcile(
   obs: Observations,
 ): Reconciliation {
   const states = foldLedger(events);
+  const commits = integrationCommits(events);
   const worktrees = new Set(obs.openWorktrees);
   const merged = new Set(obs.mergedUnits);
+  const confirmed = new Set(obs.confirmedCommits ?? []);
   const sales = new Set(obs.dirtyWorktrees ?? []);
   const warnings: Warning[] = [];
   const conflicts = new Map<string, Conflict>();
   const openUnits = new Set<string>();
   const integrated = new Set<string>();
+  const cleanableBranches = new Set<string>();
+  const cleanableWorktrees = new Set<string>();
   const ajouter = (c: Conflict) => {
     // Le premier constaté fait foi : le nommer deux fois n'ajoute rien, et
     // l'ordre des cas est déterministe.
@@ -229,11 +309,27 @@ export function reconcile(
          * qu'il rend ne doit contenir que ce sur quoi les deux sources
          * s'accordent.
          */
-        if (!merged.has(unit)) {
+        /*
+         * Deux preuves possibles, et une seule s'applique.
+         *
+         * Le registre porte un commit d'intégration : c'est lui qui prouve, et
+         * la branche ne compte pas. Il n'en porte pas — registre écrit avant ce
+         * champ : on retombe sur la branche, comme avant. Jamais les deux en
+         * disjonction : accepter « le commit ou la branche » laisserait une
+         * unité dont le commit nommé est introuvable passer pour intégrée parce
+         * qu'une branche traîne, ce qui est précisément le mensonge que nommer
+         * le commit devait supprimer.
+         */
+        const integrationCommit = commits.get(unit);
+        const prouvee = integrationCommit ? confirmed.has(integrationCommit) : merged.has(unit);
+        if (!prouvee) {
           ajouter({
             kind: "integration-non-confirmee",
             workUnitId: unit,
-            detail: `${unit} est intégrée au registre, git ne montre aucune intégration`,
+            detail: integrationCommit
+              ? `${unit} est intégrée au registre par ${integrationCommit.slice(0, 12)}, ` +
+                `que le dépôt ne confirme pas`
+              : `${unit} est intégrée au registre, git ne montre aucune intégration`,
           });
           break;
         }
@@ -255,7 +351,11 @@ export function reconcile(
           break;
         }
         integrated.add(unit);
+        // La branche ne prouve plus rien pour cette unité. Le worktree propre
+        // qui traîne encore ne change pas ça : il est du ménage, pas une preuve.
+        if (integrationCommit) cleanableBranches.add(unit);
         if (worktrees.has(unit)) {
+          cleanableWorktrees.add(unit);
           warnings.push({
             workUnitId: unit,
             detail: `${unit} est intégrée, son worktree propre est à retirer`,
@@ -275,6 +375,14 @@ export function reconcile(
           break;
         }
         if (worktrees.has(unit)) {
+          /*
+           * Le résidu reste une contradiction — une lane abandonnée ne devrait
+           * plus avoir de worktree — mais un résidu **propre** est rangeable
+           * mécaniquement : son contenu est sur la branche, qu'on ne touche
+           * jamais. Sale, il porte du travail que l'abandon ne couvre pas, et
+           * rien ne le retire.
+           */
+          if (!sales.has(unit)) cleanableWorktrees.add(unit);
           ajouter({
             kind: "residu-d-abandon",
             workUnitId: unit,
@@ -338,7 +446,10 @@ export function reconcile(
     void c;
     reserved.add(unit);
   }
-  return { states, openUnits, integrated, conflicts, reserved, warnings };
+  return {
+    states, openUnits, integrated, cleanableBranches, cleanableWorktrees,
+    conflicts, reserved, warnings,
+  };
 }
 
 /** Le relevé des conflits, pour qu'une session reprise sache quoi regarder. */

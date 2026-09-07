@@ -134,6 +134,73 @@ export const NEVER = new Set([
   "rm", "mv", "cp", "install", "tee", "truncate", "chmod", "chown", "ln", "mkdir", "touch",
 ]);
 
+/**
+ * `git` options that take a separate value, so the value is not mistaken for
+ * the subcommand.
+ *
+ * `git -C /srv/repo log` was read as a `git /srv/repo`: not a read subcommand,
+ * so refused. Fail-closed, and therefore invisible — the child lost a turn to a
+ * legal command and the message named the wrong thing.
+ */
+export const GIT_VALUE_OPTIONS = new Set([
+  "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
+]);
+
+/**
+ * `git … <sub> <args…>` split into the subcommand and what follows it.
+ *
+ * The arguments matter as much as the name. A first version returned only the
+ * subcommand, and the `git config` rule went on counting words across the whole
+ * invocation — so `git -C /srv/repo config user.email` counted three and was
+ * refused as a write, when it reads. The same fail-closed-and-invisible defect
+ * this parser exists to remove, one argument further along.
+ *
+ * Unknown options that take a separate value make their value look like the
+ * subcommand, which lands on an unknown name and is refused. That direction is
+ * the safe one and it stays: a refusal costs a turn, the opposite costs a
+ * mutated tree.
+ */
+export function parseGit(rest: readonly string[]): { sub?: string; args: string[] } {
+  for (let i = 0; i < rest.length; i++) {
+    const word = rest[i];
+    if (!word.startsWith("-")) return { sub: word, args: [...rest.slice(i + 1)] };
+    if (GIT_VALUE_OPTIONS.has(word)) i += 1;
+  }
+  return { args: [] };
+}
+
+/** The subcommand alone, for callers that do not need its arguments. */
+export function gitSubcommand(rest: readonly string[]): string | undefined {
+  return parseGit(rest).sub;
+}
+
+/**
+ * Null when this `git` invocation only reads; a reason when it can write.
+ *
+ * Allowlist, like everything else here. A denylist of the subcommands that
+ * create commits or move refs would have to name `commit`, `commit-tree`,
+ * `merge`, `rebase`, `cherry-pick`, `revert`, `am`, `stash`, `tag`,
+ * `update-ref`, `branch`, `checkout`, `switch`, `reset`, `push`, `worktree`,
+ * `notes`, `replace`, `filter-branch` — and be wrong about the next one.
+ */
+export function refuseGitWrite(rest: readonly string[]): string | null {
+  const { sub, args } = parseGit(rest);
+  if (!sub || !GIT_READ_SUBCOMMANDS.has(sub)) {
+    return sub ? `\`git ${sub}\` is not a read-only git subcommand` : "`git` with no subcommand";
+  }
+  // `git config` reads with one argument and writes with two — or with any of
+  // the flags that mutate, which take none. Counted over what follows `config`,
+  // never over the whole invocation: `git -C <path> config <key>` is a read.
+  if (sub === "config") {
+    const mutating = args.some((w) =>
+      /^--(unset|unset-all|add|replace-all|rename-section|remove-section|edit)$/.test(w));
+    if (mutating || args.filter((w) => !w.startsWith("-")).length > 1) {
+      return "`git config` in a form that writes configuration";
+    }
+  }
+  return null;
+}
+
 /** Null when the command may run; a reason when it may not. */
 export function refuseMutation(command: string): string | null {
   for (const { pattern, why } of INDIRECTION) {
@@ -155,18 +222,8 @@ export function refuseMutation(command: string): string | null {
     if (NEVER.has(cmd)) return `\`${cmd}\` is never read-only`;
 
     if (cmd === "git") {
-      const sub = rest.find((w) => !w.startsWith("-"));
-      if (!sub || !GIT_READ_SUBCOMMANDS.has(sub)) {
-        return sub ? `\`git ${sub}\` is not a read-only git subcommand` : "`git` with no subcommand";
-      }
-      // `git config` reads with one argument and writes with two — or with any
-      // of the flags that mutate, which take none.
-      if (sub === "config") {
-        const mutating = rest.some((w) => /^--(unset|unset-all|add|replace-all|rename-section|remove-section|edit)$/.test(w));
-        if (mutating || rest.filter((w) => !w.startsWith("-")).length > 2) {
-          return "`git config` in a form that writes configuration";
-        }
-      }
+      const reason = refuseGitWrite(rest);
+      if (reason) return reason;
       continue;
     }
 
@@ -180,5 +237,149 @@ export function refuseMutation(command: string): string | null {
       return `\`${cmd}\` is not on the read-only allowlist`;
     }
   }
+  return null;
+}
+
+/**
+ * Command substitutions, unwrapped, so a `git` hidden inside one is still seen.
+ *
+ * `segments` splits on pipes and sequencing, which leaves `echo $(git commit)`
+ * looking like an `echo`. That is fine for `refuseMutation`, whose caller has
+ * already refused every substitution outright — a read-only role has no reason
+ * to run one. It is not fine for a role that legitimately runs `$(…)` all day.
+ *
+ * One level, no nesting, no quoting analysis. This closes the obvious hole, not
+ * every hole: see `refuseGitMutation` on what this rule is and is not.
+ */
+export function unwrapSubstitutions(command: string): string[] {
+  const inner: string[] = [];
+  for (const m of command.matchAll(/\$\(([^()]*)\)/g)) inner.push(m[1]);
+  for (const m of command.matchAll(/`([^`]*)`/g)) inner.push(m[1]);
+  return inner.flatMap((s) => segments(s));
+}
+
+/**
+ * Null when this command leaves git alone; a reason when it would write to it.
+ *
+ * **Applies to every child, including the ones that may write files.** The
+ * invariant is not "no agent commits" — that one is too narrow. A worker that
+ * runs `git reset --hard`, `git checkout` or `git worktree remove` in its lane
+ * destroys work without ever creating a commit, and leaves `previousHead`
+ * exactly as ambiguous: `mergeLane` undoes its own freeze with
+ * `reset --mixed <previousHead>`, which only unmakes the freeze if nothing else
+ * moved the branch. Commits are the runtime's, and so is every other write.
+ *
+ * **What this rule is.** A guard against the ordinary failure: a model that was
+ * told not to commit and commits anyway — measured at one refusal in three when
+ * the rule lived in prose. It reads a string, consults nothing, and cannot be
+ * opened by `~/.pi/.allow-commit` or by anything else on disk, because it never
+ * looks.
+ *
+ * **What it is not.** A guarantee against a child that is trying to get around
+ * it. This inspects a shell command, and a shell has more ways to produce one
+ * than this can enumerate — a variable holding the word, a here-doc, a script
+ * written and then run. `unwrapSubstitutions` closes the first level and no
+ * more. Calling that "mechanical" would be the overstatement this project keeps
+ * learning not to make: mechanical here means "does not depend on prose", not
+ * "impossible to bypass". The second layer is the `pre-commit` and
+ * `reference-transaction` hooks in `git-hooks/`, which run inside git rather
+ * than in front of it — and which cover commits and ref updates, not every
+ * mutation: `git clean -fd` reaches neither of them. This function is the
+ * general guard; the hooks are depth on two operations. They are also optional,
+ * installed by the operator, so nothing downstream may assume they are there.
+ */
+export function refuseGitMutation(command: string): string | null {
+  for (const segment of [...segments(command), ...unwrapSubstitutions(command)]) {
+    const { cmd, rest } = headWord(segment);
+    if (cmd !== "git") continue;
+    const reason = refuseGitWrite(rest);
+    if (reason) return reason;
+  }
+  return null;
+}
+
+/** What role-guard knows about the child it is guarding. */
+export interface RoleContext {
+  /** The bundle root, or null in the free regime. */
+  root: string | null;
+  readOnly: boolean;
+  role: string;
+}
+
+/**
+ * The whole of role-guard's decision, with no pi import.
+ *
+ * Extracted for the reason every other unit here was: the rules were testable
+ * and the wiring was not. `refuseGitMutation` had a hundred cases against it and
+ * nothing checked that role-guard ever called it — the harness found five
+ * defects in `execute` that were all instruction order, and this file had the
+ * same shape of blind spot. What remains in `role-guard.ts` is the translation
+ * from a pi event to a tool kind, which is the only part that needs pi.
+ *
+ * The order matters and is asserted: the bundle first, then the read-only rule
+ * whose message is specific to a role that holds no `edit`, then git. A
+ * read-only role hits the second and never reaches the third, so its refusals
+ * keep saying what they always said.
+ */
+export function decideRoleGuard(
+  kind: "read" | "write" | "edit" | "bash" | "other",
+  input: { path?: string; command?: string },
+  ctx: RoleContext,
+): string | null {
+  if (ctx.root && (kind === "read" || kind === "write" || kind === "edit")) {
+    const path = input.path;
+    if (path && isBundleFile(path, ctx.root)) {
+      return kind !== "read"
+        ? `blocked by role-guard: ${basename(path)} is a frozen bundle file. Only the ` +
+            "operator changes it, and the one field pi may write — the `Statut` line of a " +
+            "DESIGN.md decision — belongs to the orchestrator, not to a delegation. If the " +
+            "task cannot be done without changing it, say so in `deviations` and implement " +
+            "what can be."
+        : `blocked by role-guard: ${basename(path)} is a frozen bundle file, and whatever ` +
+            "you need from it has been quoted into your task verbatim. Reading it returns " +
+            "what you were already given and costs turns you will need for the work. If " +
+            "something decisive is genuinely missing from the task text, name it in your " +
+            "envelope rather than going to look for it.";
+    }
+  }
+
+  if (kind === "bash") {
+    const command = input.command ?? "";
+
+    if (ctx.readOnly) {
+      const reason = refuseMutation(command);
+      if (reason) {
+        return (
+          `blocked by role-guard: ${reason}. \`${ctx.role || "this role"}\` is read-only — it ` +
+          "has no `edit` and no `write` by design, and `bash` is not a way around that. " +
+          "Use it to search and to read. If the answer requires changing something, that " +
+          "is a different role and the orchestrator's call, not yours."
+        );
+      }
+    }
+
+    /*
+     * Git belongs to the runtime, for every role.
+     *
+     * Not conditioned on the lane regime, and not on `readOnly`. A rule that
+     * only holds when some other feature is on is the shape this project keeps
+     * having to undo: pi behaves the same whether or not a bundle is present,
+     * and a guard behaves the same whether or not lanes are planned. No child
+     * needs to write to git — `commitLane` and `mergeLane` run in the
+     * orchestrator process, which is not a child and carries no
+     * `PI_SUBAGENT_ROLE`.
+     */
+    const reason = refuseGitMutation(command);
+    if (reason) {
+      return (
+        `blocked by role-guard: ${reason}. Git belongs to the runtime — commits, merges, ` +
+        "resets, checkouts and worktrees are made for you once your work is approved, and " +
+        "a child that makes its own destroys the one thing review depends on: a diff whose " +
+        "provenance is known. Edit files and run tests. Leave the history alone; if the " +
+        "task cannot be done without touching it, say so in `deviations` rather than doing it."
+      );
+    }
+  }
+
   return null;
 }

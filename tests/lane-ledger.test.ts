@@ -17,6 +17,7 @@ import { test } from "node:test";
 import {
   describeConflicts,
   foldLedger,
+  integrationCommits,
   reconcile,
   type LaneEvent,
 } from "../subagent-only/lane-ledger.ts";
@@ -317,4 +318,138 @@ test("les ensembles ne contiennent que ce sur quoi les deux sources s'accordent"
   );
   assert.deepEqual([...r.integrated], ["W01"]);
   assert.equal([...r.conflicts.keys()].join(","), "W03");
+});
+
+/*
+ * La preuve durable d'intégration.
+ *
+ * `isMerged` interroge la branche de lane. Tant qu'elle est la seule preuve,
+ * la supprimer transforme un fait juste en contradiction bloquante, et le
+ * nettoyage des lanes intégrées est impossible sans casser la réconciliation.
+ * Nommer le commit d'intégration détache la preuve de la branche.
+ */
+
+const integre = (unit: string, commit?: string): LaneEvent => ({
+  event: "INTEGRATED",
+  work_unit: unit,
+  at: new Date().toISOString(),
+  ...(commit ? { integration_commit: commit } : {}),
+});
+
+test("une intégration prouvée par son commit tient sans sa branche", () => {
+  const bilan = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: [],
+    // La branche a été retirée : `isMerged` ne peut plus rien confirmer.
+    mergedUnits: [],
+    confirmedCommits: ["m1"],
+  });
+  assert.equal(bilan.conflicts.size, 0);
+  assert.ok(bilan.integrated.has("W01"));
+  assert.ok(bilan.cleanableBranches.has("W01"));
+});
+
+test("un commit d'intégration que le dépôt ne confirme pas est une contradiction", () => {
+  const bilan = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: [],
+    mergedUnits: [],
+    confirmedCommits: [],
+  });
+  assert.equal(bilan.conflicts.get("W01")?.kind, "integration-non-confirmee");
+  assert.ok(!bilan.integrated.has("W01"));
+});
+
+test("une branche qui traîne ne rattrape pas un commit d'intégration introuvable", () => {
+  /*
+   * La contre-épreuve de la disjonction. Si la preuve était « le commit **ou**
+   * la branche », cette unité passerait pour intégrée alors que le commit
+   * qu'elle nomme est introuvable — exactement le mensonge que nommer le commit
+   * devait supprimer.
+   */
+  const bilan = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: [],
+    mergedUnits: ["W01"],
+    confirmedCommits: [],
+  });
+  assert.equal(bilan.conflicts.get("W01")?.kind, "integration-non-confirmee");
+  assert.ok(!bilan.integrated.has("W01"));
+});
+
+test("un registre sans commit d'intégration se prouve encore par sa branche", () => {
+  const bilan = reconcile([ev("OPENED", "W01"), integre("W01")], {
+    openWorktrees: [],
+    mergedUnits: ["W01"],
+  });
+  assert.equal(bilan.conflicts.size, 0);
+  assert.ok(bilan.integrated.has("W01"));
+  // Prouvée, mais par sa branche : la supprimer la ferait disparaître.
+  assert.ok(!bilan.cleanableBranches.has("W01"));
+});
+
+test("un résidu sale n'ouvre pas le nettoyage de la branche", () => {
+  const bilan = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: ["W01"],
+    mergedUnits: [],
+    confirmedCommits: ["m1"],
+    dirtyWorktrees: ["W01"],
+  });
+  assert.equal(bilan.conflicts.get("W01")?.kind, "residu-sale");
+  assert.ok(!bilan.cleanableBranches.has("W01"));
+});
+
+test("un worktree propre survivant laisse la branche supprimable", () => {
+  const bilan = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: ["W01"],
+    mergedUnits: [],
+    confirmedCommits: ["m1"],
+  });
+  assert.equal(bilan.conflicts.size, 0);
+  assert.equal(bilan.warnings.length, 1);
+  assert.ok(bilan.cleanableBranches.has("W01"));
+});
+
+test("la dernière intégration fait foi, y compris quand elle n'a pas de preuve", () => {
+  const commits = integrationCommits([integre("W01", "m1"), integre("W01")]);
+  // Conserver `m1` ferait passer pour durable une réintégration qui ne l'est
+  // pas, et le nettoyage supprimerait la branche qui prouve la seconde.
+  assert.equal(commits.get("W01"), undefined);
+  assert.equal(integrationCommits([integre("W01", "m1"), integre("W01", "m2")]).get("W01"), "m2");
+});
+
+test("les worktrees terminaux propres sont rangeables, les sales jamais", () => {
+  /*
+   * Le nettoyage ne doit réimplémenter aucune règle : la réconciliation dit ce
+   * qui est rangeable, il matérialise. Une unité terminale dont le worktree est
+   * propre a son contenu ailleurs — dans l'intégration, ou sur sa branche.
+   */
+  const integree = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: ["W01"], mergedUnits: [], confirmedCommits: ["m1"],
+  });
+  assert.ok(integree.cleanableWorktrees.has("W01"));
+
+  const sale = reconcile([ev("OPENED", "W01"), integre("W01", "m1")], {
+    openWorktrees: ["W01"], mergedUnits: [], confirmedCommits: ["m1"], dirtyWorktrees: ["W01"],
+  });
+  assert.ok(!sale.cleanableWorktrees.has("W01"), "un worktree sale n'est jamais rangeable");
+  assert.ok(!sale.cleanableBranches.has("W01"));
+});
+
+test("un abandon laisse un worktree rangeable mais jamais sa branche", () => {
+  const propre = reconcile([ev("OPENED", "W01"), ev("ABANDONED", "W01")], {
+    openWorktrees: ["W01"], mergedUnits: [],
+  });
+  assert.ok(propre.cleanableWorktrees.has("W01"));
+  assert.ok(!propre.cleanableBranches.has("W01"), "la branche porte le travail abandonné");
+
+  const sale = reconcile([ev("OPENED", "W01"), ev("ABANDONED", "W01")], {
+    openWorktrees: ["W01"], mergedUnits: [], dirtyWorktrees: ["W01"],
+  });
+  assert.ok(!sale.cleanableWorktrees.has("W01"));
+});
+
+test("une intégration sans preuve durable ne rend rien rangeable de sa branche", () => {
+  const r = reconcile([ev("OPENED", "W01"), integre("W01")], {
+    openWorktrees: ["W01"], mergedUnits: ["W01"],
+  });
+  assert.ok(r.cleanableWorktrees.has("W01"), "le worktree propre, lui, est du ménage");
+  assert.ok(!r.cleanableBranches.has("W01"), "la branche est la preuve de l'intégration");
 });

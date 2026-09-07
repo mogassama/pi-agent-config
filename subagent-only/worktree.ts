@@ -21,6 +21,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { recordGitInvocation } from "./git-probe-counter.ts";
+
 /** Ce qui interdit d'intégrer une lane, quoi que dise la review. */
 export type MergeBlock =
   | "reserved-violation"
@@ -42,9 +44,34 @@ export interface LaneMerge {
   /** Fichiers en conflit, quand git a refusé. */
   conflicts: string[];
   reason: string;
+  /**
+   * Le commit qui porte l'intégration, sur un merge réussi.
+   *
+   * C'est la preuve que le registre enregistre. Sans elle, l'appelant devrait
+   * relire HEAD lui-même après coup — donc entre le merge et la lecture, et une
+   * lane suivante intégrée dans cet intervalle lui donnerait le mauvais commit.
+   * Le rendre ici lie le SHA à l'opération qui l'a créé.
+   */
+  commit?: string;
+  /**
+   * Le commit gelé de la lane, quand un conflit a empêché son intégration.
+   *
+   * C'est `P2`, et il ne se retrouve pas après coup. Le rollback ramène la
+   * branche à `previousHead` pour que la lane redevienne sale et son travail
+   * visible — donc `laneTip` rend, après un conflit, le commit d'**avant** le
+   * gel. Chercher `P2` là ouvrirait le contexte d'intégration sur l'état que le
+   * reviewer n'a pas approuvé.
+   *
+   * L'objet est brièvement sans référence, et son contenu existe : le contexte
+   * d'intégration le référence dès son ouverture. Si le processus meurt avant,
+   * la lane sale est intacte et un nouveau gel le refera — rien n'est perdu.
+   */
+  frozenCommit?: string;
 }
 
 function git(cwd: string, args: string[]): string {
+  // La feuille qui lance : `tryGit` passe par ici et n'incrémente pas lui-même.
+  recordGitInvocation();
   return execFileSync("git", args, {
     cwd,
     encoding: "utf-8",
@@ -188,6 +215,28 @@ export function laneChanges(root: string, laneId: string, base = "HEAD"): string
  * Rien à figer n'est pas une erreur : une lane dont la review approuve sans
  * qu'aucun fichier n'ait changé est légitime.
  */
+/**
+ * Les messages que le runtime écrit, conventionnels.
+ *
+ * Ils ne l'étaient pas : `subagent: lane <id>` et `subagent: integrate lane
+ * <id>` échouent tous deux sur un hook `commit-msg` qui exige des Conventional
+ * Commits — celui de ce dépôt, par exemple. Une session qui installe ce hook
+ * voyait donc le gel de ses lanes refusé, ce qui n'a été découvert qu'en
+ * faisant passer le commit d'intégration par `git commit` plutôt que par
+ * `commit-tree`.
+ *
+ * Ce n'est pas une garantie que tout hook les acceptera, et ce n'en est pas
+ * l'objet : les hooks restent souverains, et leur refus est respecté. C'est une
+ * valeur par défaut cohérente avec le dépôt qui développe pi lui-même.
+ */
+export function freezeMessage(laneId: string): string {
+  return `chore(subagent): freeze ${laneId}`;
+}
+
+export function mergeMessage(laneId: string): string {
+  return `chore(subagent): integrate ${laneId}`;
+}
+
 export interface CommitResult {
   status: "clean" | "committed" | "failed";
   reason: string;
@@ -201,6 +250,15 @@ export interface CommitResult {
    * voie ce qu'elle contient.
    */
   previousHead?: string;
+  /**
+   * Le commit que le gel vient de créer.
+   *
+   * Il survit à son propre rollback : quand l'intégration échoue, `mergeLane`
+   * ramène la branche à `previousHead`, mais l'objet reste dans le dépôt et
+   * c'est lui — et jamais la branche après rollback — qui porte le travail que
+   * le reviewer a approuvé.
+   */
+  commit?: string;
 }
 
 export function commitLane(root: string, laneId: string, message: string): CommitResult {
@@ -231,7 +289,13 @@ export function commitLane(root: string, laneId: string, message: string): Commi
     tryGit(cwd, ["reset", "--mixed", "HEAD"]);
     return { status: "failed", reason: `git commit: ${done.out.trim()}` };
   }
-  return { status: "committed", reason: "", previousHead: head.ok ? head.out.trim() : undefined };
+  const apres = tryGit(cwd, ["rev-parse", "HEAD"]);
+  return {
+    status: "committed",
+    reason: "",
+    previousHead: head.ok ? head.out.trim() : undefined,
+    commit: apres.ok ? apres.out.trim() : undefined,
+  };
 }
 
 export function mergeLane(
@@ -251,7 +315,15 @@ export function mergeLane(
    * worktree est retiré, et le travail disparaît. Une lane sale dont le commit
    * échoue n'est pas intégrable — et surtout, elle garde son arbre.
    */
-  const frozen = commitLane(root, laneId, message ?? `subagent: lane ${laneId}`);
+  /*
+   * Le gel porte son propre message, jamais celui du merge.
+   *
+   * Le message de l'appelant servait aux deux, si bien qu'un seul texte
+   * racontait deux événements différents : « voici l'état figé de la lane » et
+   * « voici son intégration dans la base ». Un journal qui les confond ne
+   * distingue plus la lane de son entrée.
+   */
+  const frozen = commitLane(root, laneId, freezeMessage(laneId));
   if (frozen.status === "failed") {
     return { ok: false, conflicts: [], reason: `gel impossible : ${frozen.reason}` };
   }
@@ -261,10 +333,22 @@ export function mergeLane(
     "merge",
     "--no-ff",
     "-m",
-    message ?? `subagent: integrate lane ${laneId}`,
+    message ?? mergeMessage(laneId),
     branch,
   ]);
-  if (merged.ok) return { ok: true, conflicts: [], reason: "" };
+  if (merged.ok) {
+    /*
+     * Le HEAD lu immédiatement après le merge, dans la même fonction.
+     *
+     * Si la lecture échoue, l'intégration a bien eu lieu mais n'a pas de preuve
+     * durable : on rend le succès sans commit, et le registre retombera sur la
+     * preuve par branche. Inventer un SHA ou traiter le merge comme un échec
+     * seraient tous deux faux — le travail est dans l'intégration.
+     */
+    const tete = tryGit(root, ["rev-parse", "HEAD"]);
+    const sha = tete.ok ? tete.out.trim() : "";
+    return { ok: true, conflicts: [], reason: "", commit: sha || undefined };
+  }
 
   const conflicts = tryGit(root, ["diff", "--name-only", "--diff-filter=U"]);
   const files = conflicts.ok ? conflicts.out.split("\n").filter(Boolean) : [];
@@ -288,7 +372,128 @@ export function mergeLane(
   if (frozen.status === "committed" && frozen.previousHead) {
     tryGit(join(lanesDir(root), laneId), ["reset", "--mixed", frozen.previousHead]);
   }
-  return { ok: false, conflicts: files, reason: `conflit git sur ${files.length} fichier(s)` };
+  return {
+    ok: false,
+    conflicts: files,
+    reason: `conflit git sur ${files.length} fichier(s)`,
+    frozenCommit: frozen.commit,
+  };
+}
+
+/**
+ * Intégrer une lane, enregistrer la preuve, puis seulement nettoyer.
+ *
+ * L'ordre est l'invariant, et il ne tenait jusqu'ici que dans un commentaire de
+ * l'appelant : `removeLane` passait avant l'écriture de l'événement, si bien
+ * qu'un crash entre les deux laissait un worktree retiré, une lane ouverte au
+ * registre, et une intégration à deviner. La fenêtre est petite, mais elle
+ * s'ouvre exactement au moment où le run est le plus difficile à reconstruire.
+ *
+ * L'enregistrement est passé en argument plutôt qu'appelé depuis ici : ce module
+ * ne connaît ni le manifeste, ni le bail, ni le registre. Ce qui rend aussi
+ * l'ordre vérifiable en une ligne, sans monter un run.
+ *
+ * Si l'enregistrement échoue, le nettoyage n'a pas lieu et l'erreur remonte : le
+ * worktree survit, et la reprise nomme « intégration non enregistrée » — le
+ * registre en retard sur la réalité, jamais l'inverse.
+ */
+export function integrateLane(
+  root: string,
+  laneId: string,
+  blocks: readonly MergeBlock[],
+  message: string | undefined,
+  enregistrer: (commit?: string) => void,
+): LaneMerge {
+  const merge = mergeLane(root, laneId, blocks, message);
+  if (!merge.ok) return merge;
+  enregistrer(merge.commit);
+  removeLane(root, laneId);
+  return merge;
+}
+
+/**
+ * Parmi ces commits d'intégration, lesquels le dépôt confirme-t-il ?
+ *
+ * Une seule question posée à git : ce commit est-il dans l'histoire de HEAD ?
+ * Elle couvre tout ce qu'il y a à couvrir — un SHA inconnu du dépôt, un objet
+ * qui n'est pas un commit, un commit défait par un retour en arrière : dans les
+ * trois cas `merge-base --is-ancestor` échoue, et la réponse juste est « non ».
+ *
+ * Une première version vérifiait d'abord l'existence de l'objet par
+ * `cat-file -e <sha>^{commit}`. La contre-épreuve ne tombait pas : le retirer
+ * ne changeait aucun résultat, parce que la condition suivante rejetait déjà
+ * les mêmes entrées. C'était donc du code qui décrivait une garde sans en être
+ * une — et une garde qu'on croit avoir est pire que pas de garde.
+ *
+ * Si un jour le relevé doit distinguer « commit inconnu du dépôt » de « commit
+ * défait », c'est un diagnostic à rendre, pas une condition à rajouter ici.
+ */
+export function confirmIntegrations(root: string, shas: readonly string[]): string[] {
+  const confirmes: string[] = [];
+  for (const sha of new Set(shas)) {
+    if (!sha) continue;
+    if (!tryGit(root, ["merge-base", "--is-ancestor", sha, "HEAD"]).ok) continue;
+    confirmes.push(sha);
+  }
+  return confirmes;
+}
+
+/**
+ * Abandonner une lane : enregistrer la décision, puis retirer son worktree.
+ *
+ * L'abandon est une décision, pas un effet — il n'y a rien à produire dans git
+ * avant de l'écrire. L'ordre est donc celui de `closeAttempt` : le fait d'abord,
+ * le rangement ensuite. Un crash entre les deux laisse `residu-d-abandon`, que
+ * la réconciliation nomme et que l'opérateur range ; l'ordre inverse laisserait
+ * un worktree disparu sous une unité que le registre croit vivante.
+ *
+ * **La branche survit, et c'est le point.** `removeLane` ne retire que le
+ * worktree : la branche porte le travail abandonné, et c'est la seule chose qui
+ * le désigne encore. Abandonner une unité n'est pas détruire ce qu'elle a
+ * produit — quelqu'un peut vouloir le relire, ou s'apercevoir que l'abandon
+ * était une erreur.
+ *
+ * **Et une lane sale ne s'abandonne pas.** Retirer son worktree détruirait des
+ * changements que sa branche ne contient pas — ce qui est exactement l'inverse
+ * de ce que l'abandon promet. Le cas n'a rien de théorique : le rollback après
+ * un conflit ramène volontairement la branche à son ancien sommet en laissant le
+ * travail sous forme non commitée, et une unité déclarée intégrée sans preuve
+ * git est classée `integration-non-confirmee` sans que le contrôle de saleté ait
+ * eu l'occasion de dire quoi que ce soit.
+ *
+ * On ne commite pas non plus à la place de quelqu'un : cela transformerait du
+ * contenu que personne n'a revu en histoire git. Abandonner préserve ce qui
+ * existe ; détruire un surplus physique est une autre décision, qui a son propre
+ * verbe.
+ *
+ * Le nettoyage est passé en argument pour la même raison qu'ailleurs : c'est ce
+ * qui rend l'ordre vérifiable sans provoquer une vraie panne.
+ */
+export function abandonLane(
+  root: string,
+  laneId: string,
+  enregistrer: () => void,
+  nettoyer: (root: string, laneId: string) => boolean,
+): void {
+  if (openLanes(root).includes(laneId)) {
+    const sales = laneChanges(root, laneId);
+    if (sales.length > 0) {
+      throw new Error(
+        `${laneId} porte encore ${sales.length} changement(s) hors de sa branche : ` +
+        `${sales.slice(0, 3).join(", ")}${sales.length > 3 ? " …" : ""}. ` +
+        "Abandonner conserve le travail existant ; retirer ce worktree le détruirait. " +
+        "Conserver ou résoudre ces changements d'abord — ou choisir `discard` si leur " +
+        "destruction est bien la décision voulue.",
+      );
+    }
+  }
+  enregistrer();
+  if (!nettoyer(root, laneId)) {
+    throw new Error(
+      `${laneId} est abandonnée au registre, mais son worktree n'a pas pu être retiré. ` +
+      "C'est un résidu d'abandon : la décision tient, le rangement reste à faire.",
+    );
+  }
 }
 
 /**

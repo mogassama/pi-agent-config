@@ -147,7 +147,10 @@ for (const a of AGENTS) {
 test("every agent has a payload schema, and every schema has an agent", () => {
   const envelope = readFileSync(join(ROOT, "subagent-only", "envelope", "envelope.ts"), "utf-8");
   const block = envelope.slice(envelope.indexOf("const payloads = {"));
-  const declared = [...block.matchAll(/^ {2}([a-z][a-z0-9_-]*):\s*Type\.Object\(/gm)].map((m) => m[1]);
+  // Les clés entre guillemets comptent aussi : un nom de rôle à tiret n'est pas
+  // un identifiant JavaScript, et `integration-worker` était donc invisible à
+  // ce test — qui serait resté vert avec un rôle sans schéma d'enveloppe.
+  const declared = [...block.matchAll(/^ {2}"?([a-z][a-z0-9_-]*)"?:\s*Type\.Object\(/gm)].map((m) => m[1]);
   assert.ok(declared.length > 0, "no role schema found in envelope.ts");
 
   const defined = AGENTS.map((a) => a.name).sort();

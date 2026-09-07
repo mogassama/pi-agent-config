@@ -13,7 +13,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -28,8 +36,16 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" });
 }
 
-function repo(): { root: string; done: () => void } {
-  const root = mkdtempSync(join(tmpdir(), "pi-conc-"));
+function repo(): { root: string; mesures: string; done: () => void } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-conc-")));
+  /*
+   * Les mesures s'écrivent **hors** du dépôt.
+   *
+   * Un fichier de mesure posé sous `root` salirait la racine, et ce test vérifie
+   * précisément qu'elle ne voit rien passer. L'instrument ne doit pas modifier
+   * ce qu'il mesure.
+   */
+  const mesures = realpathSync(mkdtempSync(join(tmpdir(), "pi-conc-mesures-")));
   git(root, "init", "-q");
   git(root, "config", "user.email", "t@t");
   git(root, "config", "user.name", "t");
@@ -38,7 +54,30 @@ function repo(): { root: string; done: () => void } {
   writeFileSync(join(root, "src", "b.py"), "b = 1\n");
   git(root, "add", "-A");
   git(root, "commit", "-qm", "base");
-  return { root, done: () => rmSync(root, { recursive: true, force: true }) };
+  return {
+    root,
+    mesures,
+    done: () => {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(mesures, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * Aucune lane n'a rejeté.
+ *
+ * `state: "done"` ne le dit pas : le scheduler enregistre aussi une lane dont le
+ * callback a rejeté comme `done`, avec `reason: "échec"` et un `error`. Une
+ * assertion sur le seul `state` passe donc sur un succès comme sur un échec, ce
+ * qui est vrai depuis l'origine de ce fichier. C'est `error` qui distingue.
+ */
+function sansEchec(out: readonly { error?: unknown }[]): void {
+  assert.deepEqual(
+    out.filter((o) => o.error !== undefined).map((o) => String(o.error)),
+    [],
+    "une lane a rejeté — `done` ne distingue pas le succès de l'échec",
+  );
 }
 
 const unit = (id: string, scope: string[]): WorkUnit => ({
@@ -55,22 +94,83 @@ const cand = (id: string): Candidate => ({ workUnitId: id, task: `écrire pour $
  * simultanéité soit celle du système d'exploitation et non celle d'une
  * promesse.
  */
-async function fauxWorker(cwd: string, fichier: string, contenu: string, ms: number) {
+async function fauxWorker(
+  cwd: string,
+  fichier: string,
+  contenu: string,
+  ms: number,
+  journal: string,
+) {
+  /*
+   * L'enfant écrit ses horodatages dans un fichier, pas sur `stdout`.
+   *
+   * Le fait observé, et rien de plus : sous node 26 et pendant la suite, le
+   * `stdout` de cet enfant ne rendait pas deux nombres — `Number` en tirait
+   * `NaN`, la mesure disparaissait, et le test accusait l'ordonnanceur d'un
+   * défaut qui n'était pas le sien. La même invocation, lancée seule, rend ses
+   * deux horodatages. **La cause n'est pas identifiée** ; l'écrire ici comme si
+   * elle l'était serait inventer une explication.
+   *
+   * Ce qui est corrigé est autre chose, et vrai indépendamment de cette cause :
+   * le recouvrement de deux processus n'a aucune raison de passer par un canal
+   * que le lanceur de tests partage. Un fichier n'a qu'un seul écrivain, et une
+   * mesure ne doit dépendre que de ce qu'elle mesure.
+   */
   const code =
     `const {writeFileSync}=require("fs");` +
-    `setTimeout(()=>{writeFileSync(process.argv[1],process.argv[2]);` +
-    `console.log(Date.now())},${ms});` +
-    `console.log(Date.now())`;
-  const { stdout } = await run(process.execPath, ["-e", code, join(cwd, fichier), contenu]);
-  const [debut, fin] = stdout.trim().split("\n").map(Number);
-  return { debut, fin };
+    `const debut=Date.now();` +
+    `setTimeout(()=>{` +
+    `writeFileSync(process.argv[1],process.argv[2]);` +
+    `writeFileSync(process.argv[3],JSON.stringify({debut,fin:Date.now()}))` +
+    `},${ms});`;
+  await run(process.execPath, ["-e", code, join(cwd, fichier), contenu, journal]);
+
+  const brut = readFileSync(journal, "utf-8");
+  try {
+    return JSON.parse(brut) as { debut: number; fin: number };
+  } catch {
+    // Le contenu brut plutôt qu'un `NaN` muet : un instrument qui échoue doit
+    // dire ce qu'il a lu.
+    throw new Error(`journal de mesure illisible : ${JSON.stringify(brut)}`);
+  }
 }
 
 test("deux vrais workers écrivent en même temps dans deux vrais worktrees", async () => {
-  const { root, done } = repo();
+  const { root, mesures, done } = repo();
+  const journal = (id: string) => join(mesures, `${id}.json`);
   try {
     const units = [unit("W01", ["src/a.py"]), unit("W02", ["src/b.py"])];
     const lanes = new Map<string, string>();
+
+    /*
+     * Une barrière, et non un chronomètre.
+     *
+     * Le test pariait sur 120 ms : le premier worker devait dormir assez
+     * longtemps pour que le second démarre. `ensureLane` crée un worktree, ce
+     * qui est synchrone et parfois lent, si bien que le premier processus
+     * pouvait finir avant le lancement du second. L'échec ne réfutait alors pas
+     * l'ordonnanceur, seulement l'horloge — un test qui ment une fois sur trois,
+     * c'est-à-dire pire qu'absent, puisque le compte de la suite est ce sur quoi
+     * repose la détection de dérive.
+     *
+     * La propriété à prouver est que les deux callbacks sont actifs ensemble.
+     * Elle se vérifie donc directement : chacun signale sa présence et attend
+     * l'autre. Le recouvrement des deux processus, mesuré ensuite, redevient une
+     * conséquence plutôt qu'un pari.
+     */
+    let ouvrir!: () => void;
+    let refuser!: (erreur: Error) => void;
+    let prets = 0;
+    const depart = new Promise<void>((resolve, reject) => {
+      ouvrir = resolve;
+      refuser = reject;
+    });
+    // Sans expiration, un ordonnanceur qui sérialiserait les lanes ferait pendre
+    // la suite au lieu de la faire échouer. Le défaut doit rester lisible.
+    const expiration = setTimeout(
+      () => refuser(new Error("les deux callbacks n'ont pas été planifiés ensemble")),
+      5_000,
+    );
 
     const out = await runLanes(
       [cand("W01"), cand("W02")],
@@ -80,10 +180,17 @@ test("deux vrais workers écrivent en même temps dans deux vrais worktrees", as
         const lane = ensureLane(root, `run-${u.id}`);
         lanes.set(u.id, lane.cwd);
         const fichier = u.id === "W01" ? "src/a.py" : "src/b.py";
-        return fauxWorker(lane.cwd, fichier, `${u.id} est passée\n`, 120);
+        prets += 1;
+        if (prets === 2) {
+          clearTimeout(expiration);
+          ouvrir();
+        }
+        await depart;
+        return fauxWorker(lane.cwd, fichier, `${u.id} est passée\n`, 500, journal(u.id));
       },
     );
 
+    sansEchec(out);
     assert.deepEqual(out.map((o) => o.state), ["done", "done"]);
 
     // Simultanéité réelle : chacun a démarré avant que l'autre ne finisse.
@@ -123,7 +230,8 @@ test("deux vrais workers écrivent en même temps dans deux vrais worktrees", as
  * conflit garanti sur un travail déjà fait.
  */
 test("deux unités sur le même fichier n'ouvrent pas deux worktrees", async () => {
-  const { root, done } = repo();
+  const { root, mesures, done } = repo();
+  const journal = (id: string) => join(mesures, `${id}.json`);
   try {
     const units = [unit("W01", ["src/a.py"]), unit("W02", ["src/a.py"])];
     const ouvertes: string[] = [];
@@ -135,10 +243,11 @@ test("deux unités sur le même fichier n'ouvrent pas deux worktrees", async () 
       async (c, u) => {
         const lane = ensureLane(root, `run-${u.id}`);
         ouvertes.push(u.id);
-        return fauxWorker(lane.cwd, "src/a.py", `${u.id}\n`, 40);
+        return fauxWorker(lane.cwd, "src/a.py", `${u.id}\n`, 40, journal(u.id));
       },
     );
 
+    sansEchec(out);
     assert.deepEqual(out.map((o) => o.state), ["done", "queued"]);
     assert.deepEqual(ouvertes, ["W01"]);
     assert.equal(existsSync(join(lanesDir(root), "run-W02")), false);
@@ -155,7 +264,8 @@ test("deux unités sur le même fichier n'ouvrent pas deux worktrees", async () 
  * ouvrait un nouvel arbre, il repartirait d'une base sans le premier essai.
  */
 test("un rework retrouve le worktree de sa lane, il n'en ouvre pas un second", async () => {
-  const { root, done } = repo();
+  const { root, mesures, done } = repo();
+  const journal = (id: string) => join(mesures, `${id}.json`);
   try {
     const units = [unit("W01", ["src/a.py"])];
     const premier = ensureLane(root, "run-W01");
@@ -169,9 +279,10 @@ test("un rework retrouve le worktree de sa lane, il n'en ouvre pas un second", a
         assert.equal(lane.created, false);
         // Le rework voit ce que la première tentative a laissé.
         assert.equal(readFileSync(join(lane.cwd, "src", "a.py"), "utf-8"), "premier essai\n");
-        return fauxWorker(lane.cwd, "src/a.py", "reprise\n", 20);
+        return fauxWorker(lane.cwd, "src/a.py", "reprise\n", 20, journal(u.id));
       });
 
+    sansEchec(out);
     assert.deepEqual(out.map((o) => o.state), ["done"]);
     assert.equal(readFileSync(join(premier.cwd, "src", "a.py"), "utf-8"), "reprise\n");
     assert.deepEqual(laneChanges(root, "run-W01"), ["src/a.py"]);

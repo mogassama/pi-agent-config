@@ -27,60 +27,39 @@
  * The predicates themselves are in `role-rules.ts`, which imports nothing from
  * pi and is therefore unit-testable. This file is the wiring.
  */
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { basename } from "node:path";
-import { bundleRoot, isBundleFile, refuseMutation } from "./role-rules.ts";
+import { bundleRoot, decideRoleGuard } from "./role-rules.ts";
 
 export default function (pi: ExtensionAPI): void {
   const role = process.env.PI_SUBAGENT_ROLE ?? "";
   const readOnly = process.env.PI_SUBAGENT_READONLY === "1";
   const root = bundleRoot(process.cwd());
 
-
   pi.on("tool_call", async (event) => {
-    // --- The frozen bundle -------------------------------------------------
-    if (root) {
-      const path =
-        isToolCallEventType("read", event) ||
-        isToolCallEventType("write", event) ||
-        isToolCallEventType("edit", event)
-          ? (event.input as { path?: string })?.path
-          : undefined;
+    /*
+     * Translation, and nothing else.
+     *
+     * Everything decidable from a kind, an input and a role lives in
+     * `role-rules.ts`, where it is tested without pi. What stays here is the
+     * one thing that cannot: turning a pi event into a tool kind. When this
+     * file grows a rule again, the rule has left the reach of the suite.
+     */
+    const kind = isToolCallEventType("read", event)
+      ? "read"
+      : isToolCallEventType("write", event)
+        ? "write"
+        : isToolCallEventType("edit", event)
+          ? "edit"
+          : isToolCallEventType("bash", event)
+            ? "bash"
+            : "other";
 
-      if (path && isBundleFile(path, root)) {
-        const writing = !isToolCallEventType("read", event);
-        const reason = writing
-          ? `blocked by role-guard: ${basename(path)} is a frozen bundle file. Only the ` +
-            "operator changes it, and the one field pi may write — the `Statut` line of a " +
-            "DESIGN.md decision — belongs to the orchestrator, not to a delegation. If the " +
-            "task cannot be done without changing it, say so in `deviations` and implement " +
-            "what can be."
-          : `blocked by role-guard: ${basename(path)} is a frozen bundle file, and whatever ` +
-            "you need from it has been quoted into your task verbatim. Reading it returns " +
-            "what you were already given and costs turns you will need for the work. If " +
-            "something decisive is genuinely missing from the task text, name it in your " +
-            "envelope rather than going to look for it.";
-        return { block: true, reason };
-      }
-    }
-
-    // --- Read-only means read-only through bash too ------------------------
-    if (readOnly && isToolCallEventType("bash", event)) {
-      const reason = refuseMutation(event.input.command);
-      if (reason) {
-        return {
-          block: true,
-          reason:
-            `blocked by role-guard: ${reason}. \`${role || "this role"}\` is read-only — it ` +
-            "has no `edit` and no `write` by design, and `bash` is not a way around that. " +
-            "Use it to search and to read. If the answer requires changing something, that " +
-            "is a different role and the orchestrator's call, not yours.",
-        };
-      }
-    }
-
-    return undefined;
+    const reason = decideRoleGuard(kind, (event.input ?? {}) as Record<string, string>, {
+      root,
+      readOnly,
+      role,
+    });
+    return reason ? { block: true, reason } : undefined;
   });
 }

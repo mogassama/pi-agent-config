@@ -18,19 +18,26 @@ import { join } from "node:path";
 
 import { changedBetween, treeState } from "../subagent-only/tree.ts";
 import {
+  abandonLane,
   commitLane,
+  confirmIntegrations,
   ensureLane,
+  freezeMessage,
+  integrateLane,
   isMerged,
   laneBranch,
   laneChanges,
+  laneTip,
   laneUnmergedCommitCount,
   lanesDir,
   mergeLane,
+  mergeMessage,
   openLanes,
   removeLane,
   removeLaneBranch,
   runBranches,
 } from "../subagent-only/worktree.ts";
+import { reconcile, type LaneEvent } from "../subagent-only/lane-ledger.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" });
@@ -595,6 +602,390 @@ test("une branche avec commits non intégrés exige une suppression forcée", ()
     assert.doesNotThrow(() => git(root, "rev-parse", "--verify", "pi-lane/9a6766-W77"));
 
     assert.equal(removeLaneBranch(root, "9a6766-W77", true), true);
+  } finally {
+    done();
+  }
+});
+
+// ------------------------------------------- la preuve durable d'intégration
+
+test("un merge réussi rend le commit qu'il vient de créer", () => {
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    const merge = mergeLane(root, "9a6766-W01", []);
+    assert.equal(merge.ok, true);
+    assert.equal(merge.commit, git(root, "rev-parse", "HEAD").trim());
+  } finally {
+    done();
+  }
+});
+
+test("un merge refusé ne rend aucun commit", () => {
+  const { root, done } = repo();
+  try {
+    ensureLane(root, "9a6766-W01");
+    const merge = mergeLane(root, "9a6766-W01", ["not-approved"]);
+    assert.equal(merge.ok, false);
+    assert.equal(merge.commit, undefined);
+  } finally {
+    done();
+  }
+});
+
+test("un commit d'intégration se confirme, un SHA inventé ne se confirme pas", () => {
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    const m = mergeLane(root, "9a6766-W01", []).commit!;
+    assert.deepEqual(confirmIntegrations(root, [m]), [m]);
+    assert.deepEqual(confirmIntegrations(root, ["0".repeat(40)]), []);
+    assert.deepEqual(confirmIntegrations(root, [""]), []);
+  } finally {
+    done();
+  }
+});
+
+test("un commit hors de l'intégration courante ne la prouve pas", () => {
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    const m = mergeLane(root, "9a6766-W01", []).commit!;
+    // La racine revient en arrière : le commit existe toujours, il n'est plus
+    // dans l'histoire de HEAD. Le confirmer dirait qu'un travail défait est
+    // intégré, et libérerait les dépendantes de l'unité sur cette base.
+    git(root, "reset", "--hard", "-q", `${m}^`);
+    assert.equal(git(root, "cat-file", "-t", m).trim(), "commit");
+    assert.deepEqual(confirmIntegrations(root, [m]), []);
+  } finally {
+    done();
+  }
+});
+
+test("un objet connu du dépôt qui n'est pas un commit ne prouve rien", () => {
+  const { root, done } = repo();
+  try {
+    // Un blob dont le SHA est valide et présent dans le dépôt : « cet objet
+    // existe » est vrai et ne veut rien dire. La question posée à git est
+    // « est-il dans l'histoire de HEAD », et elle répond non.
+    const blob = git(root, "hash-object", "-w", join(root, "src", "a.py")).trim();
+    assert.equal(git(root, "cat-file", "-t", blob).trim(), "blob");
+    assert.deepEqual(confirmIntegrations(root, [blob]), []);
+  } finally {
+    done();
+  }
+});
+
+test("une intégration reste prouvée après la suppression de sa branche", () => {
+  /*
+   * Le cas qui motive tout ce lot, de bout en bout.
+   *
+   * Avant : `isMerged` interroge la branche, donc la supprimer produit
+   * `integration-non-confirmee` — une contradiction qui ferme le run entier,
+   * pour un fait parfaitement juste. Le nettoyage était donc interdit.
+   */
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    const base = git(root, "rev-parse", "HEAD").trim();
+    const m = mergeLane(root, "9a6766-W01", []).commit!;
+    removeLane(root, "9a6766-W01");
+    assert.equal(removeLaneBranch(root, "9a6766-W01"), true);
+
+    // L'ancienne preuve a disparu avec la branche.
+    assert.equal(isMerged(root, "9a6766-W01", base), false);
+    // La nouvelle tient.
+    const events: LaneEvent[] = [
+      { event: "OPENED", work_unit: "W01", at: "t", base },
+      { event: "INTEGRATED", work_unit: "W01", at: "t", integration_commit: m },
+    ];
+    const bilan = reconcile(events, {
+      openWorktrees: [],
+      mergedUnits: [],
+      runBranches: runBranches(root, "9a6766"),
+      confirmedCommits: confirmIntegrations(root, [m]),
+    });
+    assert.equal(bilan.conflicts.size, 0);
+    assert.ok(bilan.integrated.has("W01"));
+  } finally {
+    done();
+  }
+});
+
+// ------------------------------------ l'ordre : merge, preuve, puis nettoyage
+
+test("l'enregistrement passe avant le nettoyage", () => {
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    const traces: string[] = [];
+    const merge = integrateLane(root, "9a6766-W01", [], undefined, (commit) => {
+      // Au moment où la preuve s'écrit, ce qu'elle décrit est encore là.
+      traces.push(openLanes(root).includes("9a6766-W01") ? "worktree present" : "worktree parti");
+      traces.push(commit ? "commit connu" : "commit inconnu");
+    });
+    assert.equal(merge.ok, true);
+    assert.deepEqual(traces, ["worktree present", "commit connu"]);
+    assert.deepEqual(openLanes(root), []);
+  } finally {
+    done();
+  }
+});
+
+test("un enregistrement qui échoue ne fait pas disparaître la lane", () => {
+  /*
+   * Le registre en retard sur la réalité se diagnostique ; une lane nettoyée
+   * sans preuve écrite ne se diagnostique pas. On garde donc le worktree, et la
+   * reprise nommera « intégration non enregistrée ».
+   */
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    assert.throws(
+      () => integrateLane(root, "9a6766-W01", [], undefined, () => {
+        throw new Error("bail perdu");
+      }),
+      /bail perdu/,
+    );
+    assert.deepEqual(openLanes(root), ["9a6766-W01"]);
+  } finally {
+    done();
+  }
+});
+
+test("un merge refusé n'enregistre rien", () => {
+  const { root, done } = repo();
+  try {
+    ensureLane(root, "9a6766-W01");
+    let appele = false;
+    const merge = integrateLane(root, "9a6766-W01", ["not-approved"], undefined, () => {
+      appele = true;
+    });
+    assert.equal(merge.ok, false);
+    assert.equal(appele, false);
+    assert.deepEqual(openLanes(root), ["9a6766-W01"]);
+  } finally {
+    done();
+  }
+});
+
+// -------------------------------------- les messages du runtime, conventionnels
+
+test("le gel et l'intégration portent chacun leur message", () => {
+  /*
+   * Le message de l'appelant servait aux deux commits : un seul texte racontait
+   * « voici l'état figé de la lane » et « voici son entrée dans la base ». Et
+   * aucun des deux défauts ne passait un hook `commit-msg` conventionnel, celui
+   * de ce dépôt compris — le gel des lanes échouait donc sur tout dépôt qui
+   * l'installe, ce qu'aucun test ne disait.
+   */
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    const merge = mergeLane(root, "9a6766-W01", []);
+    assert.equal(merge.ok, true);
+
+    assert.equal(git(root, "log", "-1", "--format=%s").trim(), "chore(subagent): integrate 9a6766-W01");
+    assert.equal(
+      git(root, "log", "-1", "--format=%s", "pi-lane/9a6766-W01").trim(),
+      "chore(subagent): freeze 9a6766-W01",
+    );
+
+    // Le motif conventionnel que le hook du dépôt exige.
+    const conventionnel = /^(feat|fix|refactor|perf|docs|test|chore|ci|build)(\([a-z0-9._/-]+\))?!?: [a-z]/;
+    assert.match(freezeMessage("x"), conventionnel);
+    assert.match(mergeMessage("x"), conventionnel);
+  } finally {
+    done();
+  }
+});
+
+test("un message d'intégration donné par l'appelant ne devient pas celui du gel", () => {
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    mergeLane(root, "9a6766-W01", [], "chore(subagent): integrate W01");
+    assert.equal(git(root, "log", "-1", "--format=%s").trim(), "chore(subagent): integrate W01");
+    assert.equal(
+      git(root, "log", "-1", "--format=%s", "pi-lane/9a6766-W01").trim(),
+      "chore(subagent): freeze 9a6766-W01",
+    );
+  } finally {
+    done();
+  }
+});
+
+// --------------------------------- le commit gelé survit à son propre rollback
+
+test("un conflit rend le commit gelé, que la branche ne porte plus", () => {
+  /*
+   * Après un conflit, le rollback ramène la branche à `previousHead` — c'est
+   * voulu : la lane redevient sale et son travail redevient visible. Mais
+   * `laneTip` rend alors le commit d'avant le gel, pas celui que git vient
+   * d'essayer d'intégrer. Ouvrir un contexte d'intégration sur ce SHA-là
+   * partirait de l'état que le reviewer n'a pas approuvé.
+   */
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 'lane'\n");
+    const avant = git(root, "rev-parse", "pi-lane/9a6766-W01").trim();
+
+    // La racine touche la même ligne : le merge conflictuera.
+    writeFileSync(join(root, "src", "a.py"), "a = 'racine'\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "racine avance");
+
+    const merge = mergeLane(root, "9a6766-W01", []);
+    assert.equal(merge.ok, false);
+    assert.deepEqual(merge.conflicts, ["src/a.py"]);
+
+    const p2 = merge.frozenCommit;
+    assert.ok(p2, "le commit gelé doit remonter");
+    // La branche ne le porte plus, et c'est la propriété qu'on veut garder.
+    assert.equal(git(root, "rev-parse", "pi-lane/9a6766-W01").trim(), avant);
+    assert.notEqual(laneTip(root, "9a6766-W01"), p2);
+    // La lane est redevenue sale : son travail est visible.
+    assert.match(
+      git(lane.cwd, "status", "--porcelain").trim(),
+      /a\.py/,
+      "la lane doit rester exploitable comme avant la tentative",
+    );
+
+    // Et l'objet existe encore, avec exactement le travail approuvé dedans.
+    assert.equal(git(root, "cat-file", "-t", p2!).trim(), "commit");
+    assert.equal(git(root, "show", `${p2}:src/a.py`), "a = 'lane'\n");
+    assert.equal(git(root, "rev-parse", `${p2}^`).trim(), avant);
+  } finally {
+    done();
+  }
+});
+
+test("une lane déjà propre n'a pas de commit gelé à rendre", () => {
+  // Rien à geler : le conflit porte sur un travail déjà commité, et `frozenCommit`
+  // ne doit pas inventer un SHA pour autant.
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 'lane'\n");
+    commitLane(root, "9a6766-W01", "chore(subagent): freeze 9a6766-W01");
+    writeFileSync(join(root, "src", "a.py"), "a = 'racine'\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "racine avance");
+
+    const merge = mergeLane(root, "9a6766-W01", []);
+    assert.equal(merge.ok, false);
+    assert.equal(merge.frozenCommit, undefined);
+    // Ici la branche porte le travail : `laneTip` est le bon P2.
+    assert.equal(git(root, "show", `${laneTip(root, "9a6766-W01")}:src/a.py`), "a = 'lane'\n");
+  } finally {
+    done();
+  }
+});
+
+// ------------------------------------------- l'abandon d'une lane
+
+test("un abandon enregistre avant de ranger, et laisse la branche", () => {
+  /*
+   * L'ordre : le fait, puis le rangement. Un crash entre les deux laisse
+   * `residu-d-abandon`, que la réconciliation nomme ; l'ordre inverse laisserait
+   * un worktree disparu sous une unité que le registre croit vivante.
+   *
+   * Et la branche survit : elle porte le travail abandonné, et c'est la seule
+   * chose qui le désigne encore.
+   */
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 'travail abandonné'\n");
+    commitLane(root, "9a6766-W01", "chore(subagent): freeze 9a6766-W01");
+    const tip = laneTip(root, "9a6766-W01");
+
+    const trace: string[] = [];
+    abandonLane(root, "9a6766-W01", () => {
+      trace.push(openLanes(root).includes("9a6766-W01") ? "worktree present" : "worktree parti");
+    }, (r, id) => {
+      trace.push("rangement");
+      return removeLane(r, id);
+    });
+
+    assert.deepEqual(trace, ["worktree present", "rangement"]);
+    assert.deepEqual(openLanes(root), []);
+    // La branche est là, et son contenu aussi.
+    assert.equal(laneTip(root, "9a6766-W01"), tip);
+    assert.equal(git(root, "show", `${tip}:src/a.py`), "a = 'travail abandonné'\n");
+  } finally {
+    done();
+  }
+});
+
+test("un rangement impossible n'annule pas l'abandon", () => {
+  const { root, done } = repo();
+  try {
+    ensureLane(root, "9a6766-W01");
+    let enregistre = false;
+    assert.throws(
+      () => abandonLane(root, "9a6766-W01", () => { enregistre = true; }, () => false),
+      /résidu d'abandon/,
+    );
+    assert.equal(enregistre, true, "la décision tient : on ne la défait pas");
+  } finally {
+    done();
+  }
+});
+
+test("une lane sale ne s'abandonne pas : son travail n'est pas dans sa branche", () => {
+  /*
+   * Le cas que le premier scénario évitait sans le dire : il commitait avant
+   * d'abandonner, donc il prouvait « si tout le travail est déjà dans la
+   * branche, retirer le worktree le conserve » — pas la propriété annoncée.
+   *
+   * Le rollback après conflit produit précisément cet état : branche ramenée à
+   * son ancien sommet, travail présent sous forme non commitée.
+   */
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 'commité'\n");
+    commitLane(root, "9a6766-W01", "chore(subagent): freeze 9a6766-W01");
+    const tip = laneTip(root, "9a6766-W01");
+    // Et du travail par-dessus, que la branche ne porte pas.
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 'pas encore commité'\n");
+
+    let enregistre = false;
+    assert.throws(
+      () => abandonLane(root, "9a6766-W01", () => { enregistre = true; }, () => true),
+      /retirer ce worktree le détruirait/,
+    );
+    assert.equal(enregistre, false, "aucune décision n'est écrite");
+    assert.deepEqual(openLanes(root), ["9a6766-W01"]);
+    assert.equal(readFileSync(join(lane.cwd, "src", "a.py"), "utf-8"), "a = 'pas encore commité'\n");
+    assert.equal(laneTip(root, "9a6766-W01"), tip);
+  } finally {
+    done();
+  }
+});
+
+test("une lane sans worktree s'abandonne sans regarder sa propreté", () => {
+  // Il n'y a rien à détruire : la garde n'a pas d'objet.
+  const { root, done } = repo();
+  try {
+    const lane = ensureLane(root, "9a6766-W01");
+    writeFileSync(join(lane.cwd, "src", "a.py"), "a = 2\n");
+    commitLane(root, "9a6766-W01", "chore(subagent): freeze 9a6766-W01");
+    removeLane(root, "9a6766-W01");
+
+    let enregistre = false;
+    abandonLane(root, "9a6766-W01", () => { enregistre = true; }, () => true);
+    assert.equal(enregistre, true);
   } finally {
     done();
   }

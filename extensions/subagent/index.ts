@@ -34,6 +34,7 @@ import {
   RunBusyError,
   LANE_LEDGER_VERSION,
   acquireRunOwnership,
+  appendIntegrationEvent,
   appendLaneEvent,
   readManifest,
   readLaneEvents,
@@ -48,19 +49,59 @@ import {
   type Heartbeat,
   type Lease,
 } from "../../subagent-only/run-manifest.js";
+import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
 import {
   SchedulerInputError,
   runLanes,
   type Candidate,
 } from "../../subagent-only/scheduler.js";
-import { validateTaskCall } from "../../subagent-only/task-policy.js";
 import {
-  ensureLane, isMerged, laneChanges, mergeLane, openLanes, removeLane, runBranches,
-  type MergeBlock,
+  isLaneBound, validateTaskCall, type IntegrationPhase,
+} from "../../subagent-only/task-policy.js";
+import {
+  attemptId,
+  describeIntegrationConflicts,
+  type IntegrationConflict,
+  type IntegrationEvent,
+} from "../../subagent-only/integration-ledger.js";
+import {
+  observeIntegrations,
+  type IntegrationSnapshot,
+} from "../../subagent-only/integration-observe.js";
+import {
+  observeLanes,
+  type LaneRead,
+  type LaneSnapshot,
+} from "../../subagent-only/lane-observe.js";
+import {
+  readGitInvocationCount,
+  recordGitInvocation,
+} from "../../subagent-only/git-probe-counter.js";
+import { planCleanup } from "../../subagent-only/cleanup.js";
+import {
+  buildRunReport,
+  formatRunReport,
+  type RunMetrics,
+} from "../../subagent-only/run-report.js";
+import {
+  confirmIntegrations, ensureLane, integrateLane, isMerged, laneChanges, laneTip,
+  mergeMessage, openLanes, runBranches, type MergeBlock,
 } from "../../subagent-only/worktree.js";
 import {
-  describeConflicts, reconcile, type Conflict,
+  describeConflicts, integrationCommits, reconcile, type Conflict,
 } from "../../subagent-only/lane-ledger.js";
+import {
+  commitIntegration,
+  integrationReview,
+  integrationTree,
+  integrationsDir,
+  landIntegration,
+  openIntegration,
+  removeIntegration,
+  supersedeAttempt,
+  type IntegrationAttempt,
+  type IntegrationCommit,
+} from "../../subagent-only/integration.js";
 import {
   parsePlan,
   reservedTouched,
@@ -94,9 +135,27 @@ const SESSION_ID = `s-${randomBytes(4).toString("hex")}`;
  * Connaître l'identité ne donne aucun droit. Le chargement découvre le run et
  * l'affiche ; la propriété se prend à la première mutation, pas ici.
  */
-const RUN_DIR = join(process.cwd(), ".pi-subagent-runs");
-const RUN = openRun(RUN_DIR, baseCommit());
-const RUN_ID = RUN.manifest.runId;
+const RUNS_DIR = ".pi-subagent-runs";
+const RUN_DIR = join(process.cwd(), RUNS_DIR);
+
+/*
+ * Le préflight du dépôt, avant la toute première écriture.
+ *
+ * Il devait aller « à l'activation du premier run mutateur, avant la première
+ * écriture dans .pi-subagent-runs/ ». Ces deux moments ne sont pas le même :
+ * `openRun` crée le répertoire et le manifeste **au chargement du module**, bien
+ * avant qu'une délégation soit demandée. Le placer plus tard voudrait donc dire
+ * découvrir la mauvaise configuration après l'avoir causée.
+ *
+ * Vérifier tôt, refuser tard. Si le dépôt n'ignore pas son instrumentation, le
+ * run n'est pas ouvert du tout — rien n'est écrit, rien n'est sali — et la
+ * raison est gardée pour la première délégation, qui la rendra. Une session qui
+ * ne délègue jamais ne voit rien et n'a rien à voir : le chargement d'une
+ * extension n'a pas à échouer pour une propriété qui ne concerne que les runs.
+ */
+const PREFLIGHT = instrumentationIgnored(process.cwd(), RUNS_DIR);
+const RUN = PREFLIGHT.ok ? openRun(RUN_DIR, baseCommit()) : undefined;
+const RUN_ID = RUN?.manifest.runId ?? "";
 
 /*
  * L'état durable est reconstruit au chargement, pas à l'ouverture d'une session.
@@ -123,6 +182,7 @@ let LEASE_ABORT = new AbortController();
 
 function baseCommit(): string | undefined {
   try {
+    recordGitInvocation();
     return execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: process.cwd(),
       encoding: "utf-8",
@@ -302,6 +362,149 @@ function laneView(laneId: string | undefined): Delegation[] {
  */
 const LANE_BLOCKS = new Map<string, Set<MergeBlock>>();
 
+/**
+ * Le cache mémoire de l'état reconstruit, par unité.
+ *
+ * La source de vérité est le registre `<runId>-integrations.jsonl` croisé aux
+ * contextes git, pas cette Map : elle est recalculée au chargement puis à chaque
+ * reconstruction, et un redémarrage la retrouve identique parce que rien
+ * d'important n'y vit.
+ *
+ * Une seule entrée par unité : une tentative périmée est remplacée, jamais
+ * accumulée — et deux tentatives vivantes pour une même unité sont une
+ * contradiction que la réconciliation nomme.
+ */
+/** Un événement de tentative, horodaté à l'écriture. */
+function noteAttempt(
+  event: Omit<IntegrationEvent, "at"> & { at?: string },
+  lease: Lease,
+): void {
+  appendIntegrationEvent(RUN_DIR, { ...event, at: new Date().toISOString() } as IntegrationEvent, lease);
+}
+
+interface AttemptState {
+  attempt: IntegrationAttempt;
+  phase: IntegrationPhase;
+  /** `M` et ses bornes, dès que le commit existe. */
+  landing?: IntegrationCommit;
+}
+
+const ATTEMPTS = new Map<string, AttemptState>();
+
+/**
+ * Rouvrir une tentative périmée sur le même `P2` et la base courante.
+ *
+ * Partagée entre les deux endroits où un atterrissage peut se découvrir périmé :
+ * la première tentative, et la reprise d'un `ready-to-land`. Elles avaient deux
+ * machines différentes, et la seconde n'en avait aucune — elle rendait le motif
+ * du refus et laissait la phase inchangée, si bien que toutes les reprises
+ * suivantes repartaient de l'ancien `P1`. Une boucle dont rien ne sortait.
+ *
+ * Ce n'est pas tenir l'approbation pour valide contre une autre base : la review
+ * de lane approuve `P2` lui-même, et c'est la review d'intégration qui juge la
+ * rencontre. Si le nouveau `P1` exige un troisième fichier, le mécanisme de
+ * dépassement renverra l'unité dans sa lane.
+ */
+function reopenStaleAttempt(
+  unit: string,
+  ancienne: IntegrationAttempt,
+  lease: Lease,
+  motif: string,
+): string {
+  /*
+   * L'ordre, et il n'est pas indifférent.
+   *
+   * Ouvrir le nouveau contexte, l'enregistrer, enregistrer le remplacement de
+   * l'ancien, et seulement ensuite le retirer. Une version antérieure retirait
+   * l'ancien même quand l'ouverture échouait : le travail restait dans `P2`,
+   * mais la seule chose qui le désignait disparaissait avec le contexte.
+   *
+   * Si l'ouverture échoue, l'ancien reste — avec sa provenance — et la reprise
+   * est explicite. Si le retrait échoue après `SUPERSEDED`, c'est un résidu
+   * connu, pas une seconde tentative vivante.
+   */
+  const seq = allocateSeq(RUN_DIR, lease).seq;
+  const suivante = openIntegration(process.cwd(), attemptId(RUN_ID, unit, seq), ancienne.p2);
+  if (!suivante.ok) {
+    return (
+      `  TENTATIVE PÉRIMÉE  ${unit} : ${motif}\n` +
+      `    et la rouvrir a échoué : ${suivante.reason}\n` +
+      `    ${ancienne.id} est conservée : son travail est dans ${ancienne.p2.slice(0, 12)}.`
+    );
+  }
+  supersedeAttempt(
+    ancienne.id,
+    (etape) =>
+      etape === "opened"
+        ? noteAttempt({
+            event: "ATTEMPT_OPENED",
+            id: suivante.attempt.id,
+            work_unit: unit,
+            seq,
+            p1: suivante.attempt.p1,
+            p2: suivante.attempt.p2,
+            conflicts: [...suivante.attempt.conflicts],
+          }, lease)
+        : noteAttempt({ event: "SUPERSEDED", id: ancienne.id, by: suivante.attempt.id }, lease),
+    (id) => removeIntegration(process.cwd(), id),
+  );
+  ATTEMPTS.set(unit, { attempt: suivante.attempt, phase: "resolving" });
+  return suivante.attempt.clean
+    ? `  TENTATIVE PÉRIMÉE, ROUVERTE  ${unit} : ${suivante.attempt.id}\n` +
+      `    ${motif}\n` +
+      "    la nouvelle base ne conflicte pas : rien à résoudre.\n" +
+      `    déléguer : agent=reviewer work_unit=${unit}`
+    : `  TENTATIVE PÉRIMÉE, ROUVERTE  ${unit} : ${suivante.attempt.id}\n` +
+      `    ${motif}\n` +
+      `    fichiers  : ${suivante.attempt.conflicts.join(", ")}\n` +
+      `    déléguer : agent=integration-worker work_unit=${unit}`;
+}
+
+type LandingRetry =
+  | { done: true; text: string }
+  | { blocked: true; text: string };
+
+/**
+ * Reprendre une tentative dont seul l'atterrissage a échoué.
+ *
+ * `M` existe et vaut ; ce qui a échoué est réparable hors du runtime — une
+ * racine salie, un `ff-only` refusé. La reprise est donc un nouvel essai,
+ * tenté avant toute délégation qui poursuit le cycle de l'unité, plutôt
+ * qu'annoncé comme une consigne que personne n'exécuterait.
+ *
+ * **Elle rend toujours, et l'appelant retourne toujours.** Laisser l'appel
+ * suivre son cours après un atterrissage réussi lançait un worker sur une unité
+ * qui venait d'être intégrée — le travail qu'il aurait produit n'aurait plus eu
+ * ni lane ni review qui l'attende.
+ */
+function retryLanding(unit: string, etat: AttemptState, lease: Lease): LandingRetry {
+  const atterri = landIntegration(process.cwd(), etat.landing!, (commit) =>
+    appendLaneEvent(
+      RUN_DIR,
+      { event: "INTEGRATED", work_unit: unit, at: new Date().toISOString(), integration_commit: commit },
+      lease,
+    ),
+  );
+  if (atterri.ok) {
+    noteAttempt({ event: "CLOSED", id: etat.attempt.id, outcome: "integrated" }, lease);
+    ATTEMPTS.delete(unit);
+    INTEGRATED.add(unit);
+    OPEN_UNITS.delete(unit);
+    return { done: true, text: `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}` };
+  }
+  if (atterri.stale) {
+    return { blocked: true, text: reopenStaleAttempt(unit, etat.attempt, lease, atterri.reason) };
+  }
+  return {
+    blocked: true,
+    text:
+      `  ATTERRISSAGE BLOQUÉ  ${unit} : ${atterri.reason}\n` +
+      `    ${etat.landing!.commit.slice(0, 12)} est construit et vérifié ; il attend une\n` +
+      "    racine propre et sur sa base. Corriger l'obstacle, puis reprendre l'unité\n" +
+      "    avec worker ou reviewer : le runtime réessaiera avant toute délégation.",
+  };
+}
+
 function blockLane(laneId: string, block: MergeBlock): void {
   const set = LANE_BLOCKS.get(laneId) ?? new Set<MergeBlock>();
   set.add(block);
@@ -319,7 +522,6 @@ function blockLane(laneId: string, block: MergeBlock): void {
 let RISKS: RiskRecord[] = [];
 
 /** Where the instrumentation of a run is written. */
-const RUNS_DIR = ".pi-subagent-runs";
 
 /**
  * Deux lanes au premier run parallèle, et pas quatre.
@@ -387,6 +589,22 @@ let RECOVERY_NOTE = "";
 let RECOVERY_CONFLICTS = new Map<string, Conflict>();
 
 /**
+ * Ce que la dernière reconstruction a vu, et ce qu'elle a coûté.
+ *
+ * Gardé pour le relevé, et pour lui seul : aucune décision ne le lit. Le relevé
+ * ne doit pas reconstruire de son côté — il consommerait `observeLanes` et
+ * `observeIntegrations` une seconde fois, à un autre instant, et publierait un
+ * état que le runtime n'a jamais eu. C'est la divergence de 3c.1, transposée
+ * d'un outil à un rapport.
+ *
+ * `undefined` quand le registre correspondant était inexploitable : on ne garde
+ * pas la vue précédente, qui décrirait un disque qu'on vient de renoncer à lire.
+ */
+let LAST_LANES: LaneSnapshot | undefined;
+let LAST_INTEGRATIONS: IntegrationSnapshot | undefined;
+let LAST_SCAN: RunMetrics = { recovery_scan_ms: 0, git_probe_count: 0 };
+
+/**
  * Les lignes du registre qu'on n'a pas su lire.
  *
  * Elles ferment le run au même titre qu'une contradiction. Les compter sans
@@ -405,6 +623,9 @@ let RECOVERY_MALFORMED: number[] = [];
  * réécrirait de la provenance qu'il ne comprend pas.
  */
 let RECOVERY_LEDGER_VERSION: number | undefined = LANE_LEDGER_VERSION;
+
+/** Les contradictions du registre des tentatives, pour la porte de reprise. */
+let INTEGRATION_CONFLICTS: readonly IntegrationConflict[] = [];
 
 /**
  * Reconstruit l'état durable du run à partir du registre et du disque.
@@ -449,62 +670,141 @@ function noterOuverture(unit: string, lease: Lease, base: string | undefined): v
 }
 
 function reconstruire(): void {
-  const { events, malformed, malformedLines, version } = readLaneEvents(RUN_DIR, RUN_ID);
-  const worktrees = openLanes(process.cwd())
-    .filter((id) => id.startsWith(`${RUN_ID}-`))
-    .map((id) => id.slice(RUN_ID.length + 1));
-
   /*
-   * La base de chaque lane, telle que son ouverture l'a enregistrée.
+   * La fenêtre de mesure : avant la première lecture, après la seconde
+   * réconciliation.
    *
-   * Sans elle, git ne distingue pas « intégrée » de « n'a rien produit » : une
-   * lane ouverte après un premier merge part d'un HEAD déjà avancé, et compter
-   * ses commits depuis la base du run y trouve ceux de l'unité précédente. Une
-   * unité sans base enregistrée n'est donc jamais déclarée intégrée — on ne
-   * peut pas le prouver, et affirmer serait pire que se taire.
+   * Le corps est une fonction à part parce qu'il sort tôt sur un registre
+   * partiel, et que ce refus a coûté son scan comme un autre — la forme linéaire
+   * mesure les deux issues sans avoir à les distinguer.
+   *
+   * Pas de `try/finally` : il n'y en avait un que pour le cas où la
+   * reconstruction jette, et ce cas-là ne rend `LAST_SCAN` observable nulle part
+   * — l'exception traverse `releveDuRun` avant qu'on le lise. Une garde dont le
+   * retrait ne change rien est décorative, et celle-ci l'était.
+   *
+   * Le compte de sondes se lit par différence, jamais par remise à zéro. Il est
+   * exact parce que cette reconstruction et ses appels git sont séquentiels dans
+   * le même processus, sans autre producteur git en vol pendant la fenêtre. Le bail dit qu'aucune autre session n'agit sur ce run ; il ne dit
+   * rien de ce processus-ci, et c'est la synchronie qui tient la mesure.
    */
-  const bases = new Map<string, string>();
-  for (const e of events) {
-    if (e.event === "OPENED" && e.base && !bases.has(e.work_unit)) bases.set(e.work_unit, e.base);
-  }
-  const bilan = reconcile(events, {
-    openWorktrees: worktrees,
-    // Un worktree qui porte encore des changements n'est pas un résidu : c'est
-    // du travail que le fait enregistré ne couvre pas.
-    dirtyWorktrees: worktrees.filter(
-      (u) => laneChanges(process.cwd(), `${RUN_ID}-${u}`).length > 0,
-    ),
-    // La base propre à chaque lane situe ce qu'elle a produit : sans elle, une
-    // lane fraîche passerait pour intégrée puisqu'elle pointe sur HEAD.
-    // Troisième source : une branche mergée dont le worktree a été retiré et que
-    // le registre ignore n'apparaît ni dans les événements ni dans les
-    // worktrees. C'est pourtant le cas même d'une intégration sans provenance.
-    runBranches: runBranches(process.cwd(), RUN_ID),
-    mergedUnits: [...bases.entries()]
-      .filter(([u, b]) => isMerged(process.cwd(), `${RUN_ID}-${u}`, b))
-      .map(([u]) => u),
-  });
+  const debut = performance.now();
+  const sondesAvant = readGitInvocationCount();
+  reconstruireSousMesure();
+  LAST_SCAN = {
+    recovery_scan_ms: performance.now() - debut,
+    git_probe_count: readGitInvocationCount() - sondesAvant,
+  };
+}
 
+function reconstruireSousMesure(): void {
+  const laneRead = readLaneEvents(RUN_DIR, RUN_ID);
+  /*
+   * L'observation est partagée avec `bin/subagent-recover` : un opérateur et un
+   * runtime qui regardent le même disque doivent en conclure le même état. Ils
+   * ne le faisaient pas — l'outil n'a jamais reçu `confirmedCommits`, et la
+   * divergence a vécu tout 3c.1 sans être visible.
+   *
+   * Le même `laneRead` part ensuite aux tentatives : une reconstruction ne
+   * mélange pas deux lectures d'un fichier que quelqu'un peut écrire entre les
+   * deux.
+   */
+  const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead });
+
+  RECOVERY_MALFORMED = laneRead.malformedLines;
+  RECOVERY_LEDGER_VERSION = laneRead.version;
+
+  if (!vu.usable) {
+    // Registre partiel : aucun bilan. Les caches sont vidés plutôt que laissés
+    // sur une vue périmée, et la porte se ferme sur la raison.
+    OPEN_UNITS.clear();
+    INTEGRATED.clear();
+    ATTEMPTS.clear();
+    RECOVERY_CONFLICTS = new Map();
+    INTEGRATION_CONFLICTS = [];
+    RECOVERY_NOTE = vu.reason;
+    // Les snapshots aussi : un relevé bâti sur la vue précédente parlerait d'un
+    // disque qu'on vient justement de renoncer à lire.
+    LAST_LANES = undefined;
+    LAST_INTEGRATIONS = undefined;
+    return;
+  }
+
+  LAST_LANES = vu.snapshot;
+  const bilan = vu.snapshot.reconciliation;
   OPEN_UNITS.clear();
   for (const u of bilan.openUnits) OPEN_UNITS.add(u);
   INTEGRATED.clear();
   for (const u of bilan.integrated) INTEGRATED.add(u);
   RECOVERY_CONFLICTS = bilan.conflicts;
-  RECOVERY_MALFORMED = malformedLines;
-  RECOVERY_LEDGER_VERSION = version;
 
   const lignes = [describeConflicts(bilan.conflicts)];
   // Le ménage se dit sans fermer le run : le signaler évite qu'il s'accumule
   // sans que personne ne sache qu'il est là.
   for (const w of bilan.warnings) lignes.push(`à ranger : ${w.detail}`);
-  if (malformed > 0) {
-    lignes.push(
-      `${malformed} ligne(s) illisible(s) dans le registre : il est incomplet, ` +
-        `et ce bilan avec lui.`,
-    );
-  }
+  reconstruireTentatives(lignes, laneRead);
   RECOVERY_NOTE = lignes.filter(Boolean).join("\n");
 }
+
+/**
+ * Reconstruit les tentatives d'intégration : le registre croisé au disque.
+ *
+ * Sans elle, tout ce qui précède serait un excellent registre que `ATTEMPTS`
+ * continuerait de ne jamais relire. Une session reprise oubliait qu'une unité
+ * était bloquée pendant que son contexte restait là : la politique ne savait
+ * plus qu'elle devait refuser, et un contexte sans provenance passait inaperçu.
+ *
+ * La collecte elle-même est dans `integration-observe.ts`, partagée avec
+ * `bin/subagent-recover` : un opérateur et un runtime qui regardent le même
+ * disque doivent en conclure le même état. Le snapshot du registre des lanes lui
+ * est passé, jamais relu — deux lectures peuvent tomber de part et d'autre d'une
+ * écriture.
+ */
+function reconstruireTentatives(lignes: string[], laneRead: LaneRead): void {
+  const vu = observeIntegrations({
+    root: process.cwd(),
+    runDir: RUN_DIR,
+    runId: RUN_ID,
+    laneRead,
+  });
+
+  if (!vu.usable) {
+    ATTEMPTS.clear();
+    INTEGRATION_CONFLICTS = [{ kind: "journal-illisible", detail: vu.reason }];
+    lignes.push(describeIntegrationConflicts(INTEGRATION_CONFLICTS));
+    LAST_INTEGRATIONS = undefined;
+    return;
+  }
+
+  LAST_INTEGRATIONS = vu.snapshot;
+  const { facts, reconciliation: bilan } = vu.snapshot;
+  ATTEMPTS.clear();
+  for (const [unit, { id, phase }] of bilan.phases) {
+    const a = facts.get(id);
+    if (!a) continue;
+    ATTEMPTS.set(unit, {
+      attempt: {
+        dir: join(integrationsDir(process.cwd()), id),
+        id,
+        p1: a.p1,
+        p2: a.p2,
+        clean: a.conflicts.length === 0,
+        conflicts: [...a.conflicts],
+      },
+      phase,
+      landing: a.committed
+        ? { commit: a.committed.commit, tree: a.committed.tree, p1: a.p1, p2: a.p2 }
+        : undefined,
+    });
+  }
+  for (const u of bilan.integrated) INTEGRATED.add(u);
+
+  INTEGRATION_CONFLICTS = bilan.conflicts;
+  if (bilan.conflicts.length > 0) lignes.push(describeIntegrationConflicts(bilan.conflicts));
+  for (const w of bilan.warnings) lignes.push(`à ranger : ${w}`);
+  for (const id of bilan.residues) lignes.push(`à ranger : contexte ${id} terminé mais présent`);
+}
+
 
 /**
  * Le plan gelé, relu depuis le disque à la première délégation qui en a besoin.
@@ -840,6 +1140,7 @@ const DIFF_MAX_FILES = 15;
 function gitDiffFor(paths: string[], cwd: string): string {
   const run = (args: string[]): string => {
     try {
+      recordGitInvocation();
       return execFileSync("git", args, {
         cwd,
         encoding: "utf-8",
@@ -857,6 +1158,7 @@ function gitDiffFor(paths: string[], cwd: string): string {
   for (const path of paths) {
     let tracked = true;
     try {
+      recordGitInvocation();
       execFileSync("git", ["ls-files", "--error-unmatch", "--", path], {
         cwd,
         stdio: "ignore",
@@ -999,8 +1301,54 @@ function logRefusal(runId: string, agentName: string, reason: string): void {
 
 reconstruire();
 
+/**
+ * Le relevé, depuis la session.
+ *
+ * Il commence par reconstruire — mais par le chemin partagé, celui-là même que
+ * la reprise emprunte, pas par une collecte à lui. La contrainte n'est pas « ne
+ * rien relire », c'est « ne rien reconstruire d'indépendant » : un relevé bâti
+ * sur des snapshots vieux de vingt délégations dirait un disque qui n'existe
+ * plus, et un relevé bâti sur sa propre collecte dirait un état que le runtime
+ * n'a jamais eu. Reconstruire par `reconstruire()` évite les deux.
+ *
+ * Il ne mute rien et ne prend pas le bail : observer n'exige pas la propriété,
+ * ici comme pour `bin/subagent-recover cleanup` sans `--apply`.
+ */
+function releveDuRun(): { ok: true; texte: string } | { ok: false; raison: string } {
+  reconstruire();
+  const manifeste = readManifest(RUN_DIR);
+  if (!manifeste) return { ok: false, raison: `aucun run dans ${RUNS_DIR}/` };
+  if (!LAST_LANES) {
+    return {
+      ok: false,
+      raison: RECOVERY_NOTE || "le registre des lanes est inexploitable : aucun relevé.",
+    };
+  }
+  const plan = planCleanup(LAST_LANES.reconciliation, LAST_INTEGRATIONS?.reconciliation);
+  return {
+    ok: true,
+    texte: formatRunReport(
+      buildRunReport(
+        { runId: manifeste.runId, status: manifeste.status },
+        LAST_LANES,
+        LAST_INTEGRATIONS,
+        plan,
+        LAST_SCAN,
+      ),
+    ),
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
+
+  pi.registerCommand("subagent-report", {
+    description: "Relevé terminal du run : unités, résidus, ce qui est rangeable, coût du scan",
+    handler: async (_args: unknown, ctx: { ui: { notify: (t: string, k?: string) => void } }) => {
+      const releve = releveDuRun();
+      ctx.ui.notify(releve.ok ? releve.texte : releve.raison, releve.ok ? "info" : "error");
+    },
+  });
 
   // The UI context is only handed out with an event or a call. Capture it at
   // session_start so the dispatch loop can publish progress without one.
@@ -1066,14 +1414,23 @@ export default function (pi: ExtensionAPI) {
     /*
      * Instrumentation is not a material change.
      *
-     * The shadow plan is written by the orchestrator's own `write` into
-     * `.pi-subagent-runs/`, and without this the first plan of a run would
-     * enter `HISTORY` as a delegation that changed a file — which is what the
-     * review boundary keys on. The consequences are both wrong and quiet: a
-     * plan written after a review would open a new boundary and discard the
-     * files the next review was owed, and the plan itself would be listed as
-     * part of the change under review. The directory is instrumentation of the
-     * run, never its subject.
+     * `HISTORY` has to reflect the orchestrator's own inline writes, or the
+     * guards that read it stop being true. Two of them do: the free regime
+     * reviews against `HISTORY` itself, and the refusal of a second review with
+     * no work between — "a review already ran and no worker has run since" —
+     * keys on its last entry. The shadow plan is written by the orchestrator's
+     * own `write` into `.pi-subagent-runs/`, so without this filter it would
+     * enter as a delegation that changed a file, and the plan itself would be
+     * listed as part of the change under review. The directory is
+     * instrumentation of the run, never its subject.
+     *
+     * An earlier version of this note also said such a write would open a new
+     * boundary and discard the files the next review was owed. That was true of
+     * a single global boundary and is no longer the whole picture: a planned
+     * review reads `laneView(laneId)`, which filters on the lane, and an inline
+     * write carries no `laneId` — so it does not reach a lane's diff. The
+     * consequence stands for the free regime and for the guards that read
+     * `HISTORY` whole, which is reason enough for the filter.
      */
     if (path.split(/[\\/]/).includes(RUNS_DIR)) return undefined;
 
@@ -1223,7 +1580,26 @@ export default function (pi: ExtensionAPI) {
         "Consistency within the change is reviewer work, not preflight scout work. Whether the change reached an unknown caller or pattern is scouted only when the reviewer returns that specific where-question in `open_risks`; do not scout it speculatively before the worker. And a question you can already answer is not scout work either — scouting a tree you have just read yourself returns what you gave it.",
         "When a reviewer result reports one or more `open-risks`, their text is printed under the head line, identified. Route an entry to scout only when a bounded lookup would settle it — a term, a file, a caller of a named symbol, a definition — and route it before any further mutation of the same change. An inventory, a completeness check, or a proof of absence that no exact bounded search can settle is not scoutable: leave that risk open rather than send someone to a ceiling. An absence with an exact target — a named symbol, a module path, a precise string — is scoutable, because one search concludes it. Preserve the reviewer's concern; do not broaden it and do not invent new ones. If its search target is too broad, narrow it only when the narrower lookup still settles the same review question; otherwise leave it open. If several routable risks from that review share a scope, batch them in one call. The scout's locations go into a follow-up review of the same open change, not to a worker: it is the review that was left open, and only a confirmed defect sends a worker. Carry the ids in `for_risks` on both calls — the follow-up review is handed the risk texts from them, and it can only close what it was handed.",
         "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
-        `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing.`,
+        ...(PREFLIGHT.ok
+          ? [
+              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing.`,
+            ]
+          : [
+              /*
+               * Le préflight a échoué, et la guideline normale dirait d'écrire
+               * un plan sous le répertoire qui est précisément le problème —
+               * avec un `runId` vide, puisque aucun run n'a été ouvert. Le
+               * runtime n'écrit rien ; l'orchestrateur, lui, suit ses
+               * instructions, et celle-là créerait `.pi-subagent-runs/-plan.json`
+               * avant même le premier `task`. Refuser dans `execute` arrive
+               * après.
+               *
+               * « Redémarrer » n'est pas une politesse : `PREFLIGHT` et `RUN`
+               * sont établis au chargement, donc corriger l'exclusion en cours
+               * de session ne réveille pas ce runtime.
+               */
+              `This repository is not ready for a run: ${RUNS_DIR}/ is not ignored by git, or files under it are tracked. Do not write anything under ${RUNS_DIR}/ — no plan, no scratch file. Delegation is refused until this is fixed. Add ${RUNS_DIR}/ to the repository's .gitignore, or to .git/info/exclude, then restart pi: this run's state was decided at load time and does not re-evaluate mid-session.`,
+            ]),
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
         "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
         "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
@@ -1231,6 +1607,23 @@ export default function (pi: ExtensionAPI) {
       parameters,
 
       async execute(_id, params: Static<typeof parameters>, { signal }: { signal?: AbortSignal } = {}) {
+        /*
+         * Le préflight du dépôt, rendu ici parce que c'est ici qu'il coûte
+         * quelque chose. Le run n'a pas été ouvert, donc rien n'a été écrit :
+         * il n'y a rien à défaire, seulement une configuration à corriger.
+         */
+        if (!PREFLIGHT.ok) {
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `Refusé : ce dépôt n'est pas prêt pour un run.\n${PREFLIGHT.reason}\n` +
+                "Aucun run n'a été ouvert et rien n'a été écrit.",
+            }],
+            isError: true,
+          };
+        }
+
         const agent = agents.get(params.agent);
         if (!agent) {
           return { content: [{ type: "text" as const, text: `unknown agent: ${params.agent}` }], isError: true };
@@ -1310,6 +1703,7 @@ export default function (pi: ExtensionAPI) {
           hasBatch,
           hasTask,
           declaredWorkUnit: params.work_unit,
+          integrationPhase: unit ? ATTEMPTS.get(unit)?.phase : undefined,
         });
         if (!policy.ok) return invalidCall(policy.reason);
 
@@ -1432,6 +1826,31 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
+        /*
+         * Les tentatives ferment la même porte que les lanes.
+         *
+         * Un contexte que le registre ignore, une tentative dont le contexte a
+         * disparu, deux tentatives vivantes pour une unité : dans tous les cas,
+         * le runtime ne sait pas ce qu'il a devant lui. Continuer sur une autre
+         * unité ajouterait des faits à un run qu'il ne comprend pas — c'est la
+         * règle du registre des lanes, et il n'y a pas de raison qu'elle
+         * s'applique à moitié.
+         */
+        if (INTEGRATION_CONFLICTS.length > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[run: tentatives d'intégration à trancher]\n` +
+                `${describeIntegrationConflicts(INTEGRATION_CONFLICTS)}\n` +
+                "Aucune délégation n'a été lancée. Ces contextes vivent sous " +
+                ".git/pi-integrations/ ; leur provenance est dans " +
+                `${RUN_ID}-integrations.jsonl.`,
+            }],
+            isError: true,
+          };
+        }
+
         if (RECOVERY_CONFLICTS.size > 0) {
           return {
             content: [{
@@ -1450,6 +1869,48 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text" as const, text: propriete.refus }], isError: true };
         }
         const lease = propriete.lease;
+
+        /*
+         * Une tentative dont seul l'atterrissage a échoué se reprend ici.
+         *
+         * Après le bail, et pas avant la politique comme d'abord écrit : faire
+         * atterrir un commit est une mutation, et une mutation ne se tente pas
+         * sans la capacité qui l'autorise.
+         *
+         * `M` existe et vaut ; l'obstacle est hors du runtime — une racine
+         * salie, un `ff-only` refusé. Annoncer « corrigez puis relancez » sans
+         * réessayer laisserait l'unité bloquée : le worker est interdit, le
+         * reviewer n'a plus d'objet, et rien ne rouvrirait la porte. On réessaie
+         * donc à chaque délégation qui touche l'unité, et si ça passe la
+         * tentative se ferme et l'appel suit son cours normal.
+         */
+        /*
+         * Seuls les rôles qui poursuivent le cycle de l'unité déclenchent la
+         * reprise. Un scout est global et en lecture seule ; il peut se
+         * retrouver rattaché à W03 par la provenance de ses risques, et il n'a
+         * aucune raison de devenir la cause d'un `ff-only`. Une mutation ne se
+         * déclenche pas depuis un rôle qui n'en fait aucune.
+         */
+        const roleJoue = agent.envelopeRole ?? agent.name;
+        if (unit && (roleJoue === "worker" || roleJoue === "reviewer")) {
+          const enAttente = ATTEMPTS.get(unit);
+          if (enAttente?.phase === "ready-to-land" && enAttente.landing) {
+            /*
+             * On retourne dans les deux cas, sans lancer personne.
+             *
+             * Sur succès parce que l'unité vient d'être intégrée : le worker
+             * demandé produirait un travail qu'aucune lane ni review n'attend
+             * plus. Sur échec parce que la tentative n'est pas reprise, et la
+             * délégation ne peut pas la précéder.
+             */
+            const reprise = retryLanding(unit, enAttente, lease);
+            return {
+              content: [{ type: "text" as const, text: reprise.text.trim() }],
+              isError: !("done" in reprise),
+            };
+          }
+        }
+
 
         /*
          * Le bilan de reprise, dit une seule fois.
@@ -1518,8 +1979,27 @@ export default function (pi: ExtensionAPI) {
           throw err;
         }
 
+        /*
+         * Les rôles globaux le sont jusqu'au bout : ni lane, ni contexte.
+         *
+         * Un scout ou un advisor peut porter une unité — déclarée, ou héritée de
+         * la provenance de ses risques — sans que cela change ce qu'il est : un
+         * lecteur qui répond sur le dépôt. Le laisser ouvrir une lane lui ferait
+         * créer un worktree et un `OPENED` au registre pour une unité que
+         * personne n'a commencée ; le laisser hériter du contexte d'intégration
+         * lui ferait lire des marqueurs de conflit et un état intermédiaire que
+         * son contrat ne mentionne pas.
+         *
+         * Sur le rôle joué, et surtout pas sur `isReadOnly(agent.tools)` : le
+         * reviewer n'a ni `edit` ni `write`, donc ce critère l'aurait rendu
+         * global alors qu'il juge le travail d'une lane et doit le voir depuis
+         * cette lane. Une variante sur un autre modèle déclare son
+         * `envelopeRole` et hérite de la décision sans être inscrite nulle part.
+         */
+        const roleGlobal = !isLaneBound(roleJoue);
+
         let lane: LaneContext | undefined;
-        if (unit) {
+        if (unit && !roleGlobal) {
           let baseLane: string | undefined;
           try {
             lane = openLane(unit, { runId: RUN_ID, root: process.cwd() }, (r, id) => {
@@ -1568,8 +2048,72 @@ export default function (pi: ExtensionAPI) {
         // entre-temps ne grossit donc pas cette review, ce qui est la propriété
         // que `review-boundary.ts` prépare depuis le début.
         const changed = changedSinceLastReview(laneView(lane?.laneId));
-        const pkg =
-          params.agent === "reviewer" && changed.length > 0
+
+        /*
+         * La tentative d'intégration déplace tout : le répertoire, le paquet, et
+         * ce que les outils de l'enfant voient.
+         *
+         * Le diff seul ne suffirait pas. Un reviewer à qui l'on donne le bon
+         * texte mais qui tourne encore dans la lane lira `src/a.py` de la lane
+         * quand il l'ouvrira, c'est-à-dire un fichier que la résolution a
+         * changé. La correctness porte sur ce que ses outils voient autant que
+         * sur ce qu'on lui écrit.
+         */
+        const etatAttempt = unit && !roleGlobal ? ATTEMPTS.get(unit) : undefined;
+        const attempt = etatAttempt?.attempt;
+        const cwdEnfant = attempt?.dir ?? lane?.cwd ?? process.cwd();
+
+        let integrationPkg: { text: string; tree?: string } | undefined;
+        if (attempt && (params.agent === "reviewer" || params.agent === "integration-worker")) {
+          if (params.agent === "reviewer") {
+            const t = integrationTree(attempt.dir);
+            if (!t.ok) {
+              return {
+                content: [{
+                  type: "text" as const,
+                  text:
+                    `Refused: la résolution de ${unit} n'est pas revisable — ${t.reason}\n` +
+                    `Déléguer à nouveau agent=integration-worker work_unit=${unit}.`,
+                }],
+                isError: true,
+              };
+            }
+            const rv = integrationReview(attempt.dir, attempt, t.tree);
+            if (!rv.ok) {
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: `Refused: paquet d'intégration incalculable pour ${unit} — ${rv.reason}`,
+                }],
+                isError: true,
+              };
+            }
+            integrationPkg = {
+              tree: t.tree,
+              text:
+                `## Integration review — ${unit}\n\n` +
+                `Two approved states are being combined. Conflicted files: ` +
+                `${rv.review.conflicts.join(", ")}\n\n` +
+                "### What this integration would add to the base (P1 → T)\n\n" +
+                `\`\`\`diff\n${rv.review.fromBase}\n\`\`\`\n\n` +
+                "### What the resolution changed, on the conflicted files only (P2 → T)\n\n" +
+                `\`\`\`diff\n${rv.review.fromLaneOnConflicts}\n\`\`\`\n\n`,
+            };
+          } else {
+            integrationPkg = {
+              text:
+                `## Merge conflict — ${unit}\n\n` +
+                `Base: ${attempt.p1.slice(0, 12)}   Lane: ${attempt.p2.slice(0, 12)}\n` +
+                `Conflicted files, and your entire scope:\n` +
+                `${attempt.conflicts.map((f) => `  ${f}`).join("\n")}\n\n` +
+                "Editing anything else ends this attempt without a merge commit.\n\n",
+            };
+          }
+        }
+
+        const pkg = integrationPkg
+          ? { text: integrationPkg.text, degraded: false, diffChars: integrationPkg.text.length }
+          : params.agent === "reviewer" && changed.length > 0
             ? diffSection(changed, lane?.cwd ?? process.cwd())
             : { text: "", degraded: false, diffChars: 0 };
 
@@ -1850,7 +2394,16 @@ export default function (pi: ExtensionAPI) {
                   agentDir: AGENT_DIR,
                   selfDir: SELF_DIR,
                   runId: RUN_ID,
-                  cwd: lane?.cwd,
+                  /*
+                   * Explicite, et une seule source.
+                   *
+                   * Le contexte d'intégration s'il y en a un, sinon la lane,
+                   * sinon la racine. C'était `lane?.cwd`, donc `undefined` pour
+                   * un rôle sans lane, et `dispatch` retombait sur son propre
+                   * `process.cwd()` — juste, mais illisible : rien ne disait où
+                   * un scout tourne, et rien ne pouvait l'affirmer.
+                   */
+                  cwd: cwdEnfant,
                 },
                 seq: seqs[i],
                 signal: bothSignals(signal),
@@ -1977,8 +2530,18 @@ export default function (pi: ExtensionAPI) {
             role: params.agent,
             work_unit: unit ?? null,
             work_unit_declared: params.work_unit ?? null,
-            lane_id: lane?.laneId ?? null,
-            cwd: lane?.cwd ?? process.cwd(),
+            /*
+             * Pas de `laneId` sur une délégation d'intégration.
+             *
+             * Elle appartient à l'unité, mais elle ne s'est pas exécutée dans sa
+             * lane. La lui attribuer ferait entrer dans `laneView(W03)` des
+             * changements faits dans un autre worktree — exactement la confusion
+             * que le contexte d'intégration existe pour supprimer. Le reviewer
+             * d'intégration ne reconstruit d'ailleurs pas son objet depuis
+             * `HISTORY` : il le reçoit d'`integrationReview`.
+             */
+            lane_id: attempt ? null : lane?.laneId ?? null,
+            cwd: attempt?.dir ?? lane?.cwd ?? process.cwd(),
             reserved_touched: reservedTouched(r.changedFiles ?? []),
             // Une unité que le plan gelé ne connaît pas est un résultat, pas une
             // faute d'instrument : le plan n'avait pas prévu ce travail. Le plan
@@ -2011,7 +2574,175 @@ export default function (pi: ExtensionAPI) {
          * reprendra, et l'effacer sur une review perdrait le travail.
          */
         let integration = "";
-        if (lane && params.agent === "reviewer" && !results[0]?.failure) {
+
+        /*
+         * Le cycle d'une tentative d'intégration, décidé par le runtime.
+         *
+         * Il précède l'intégration de lane et l'exclut : tant qu'une tentative
+         * vit, ce qui doit entrer dans la base est son résultat, pas la branche
+         * de la lane. Les deux chemins ne se rencontrent jamais.
+         */
+        if (attempt && unit && !results[0]?.failure) {
+          if (params.agent === "integration-worker") {
+            /*
+             * Le scope, mécanique et non déclaratif.
+             *
+             * `changedFiles` vient de `dispatch`, qui compare l'arbre avant et
+             * après l'enfant : ce n'est pas ce que l'agent dit avoir touché.
+             *
+             * Un dépassement ne s'absorbe pas. Le signal « il faut aussi
+             * modifier foo.ts » veut dire que le contenu de l'unité doit
+             * évoluer, et une unité évolue dans sa lane, sous sa propre review.
+             * L'absorber ici transformerait progressivement « résoudre P1 × P2 »
+             * en « continuer à développer W03 pendant le merge ».
+             */
+            const horsScope = (results[0]?.changedFiles ?? []).filter(
+              (f) => !attempt.conflicts.includes(f),
+            );
+            /*
+             * Le chemin sûr que son mandat lui prescrit compte autant que le
+             * dépassement mécanique.
+             *
+             * On lui dit : si un fichier hors conflits semble nécessaire, ne le
+             * touche pas, mets-le dans `deviations`. Un agent qui obéit
+             * parfaitement produisait donc `horsScope = []` et une résolution
+             * annoncée prête — qui pouvait finir intégrée en emportant le
+             * problème signalé. La récompense de l'obéissance était de rendre le
+             * signal invisible.
+             *
+             * Le contrôle mécanique reste souverain sur ce qu'il a écrit ; la
+             * déclaration s'y ajoute, elle ne le remplace pas.
+             */
+            const signale = (results[0]?.deviations ?? []).filter(Boolean);
+            if (horsScope.length > 0 || signale.length > 0) {
+              /*
+               * La tentative se termine ; l'unité, non.
+               *
+               * Rien n'est enregistré au registre **des lanes** : `W03` y reste
+               * `OPEN`, et c'est la distinction qui compte — une tentative
+               * abandonnée n'est pas une unité abandonnée. Le registre des
+               * tentatives, lui, enregistre bien sa clôture juste en dessous. Le contexte est retiré, sans quoi notre
+               * propre règle « worker refusé si une tentative est ouverte »
+               * interdirait le retour en lane qu'on demande.
+               *
+               * Et rien n'est recopié du contexte vers la lane. Une correction
+               * qui semble bonne n'a pas été revue pour ce qu'elle est ; la
+               * transporter serait une porte dérobée autour du cycle worker →
+               * reviewer de l'unité.
+               */
+              // La vérité d'abord : un crash après `CLOSED` ne laisse qu'un
+              // résidu connu, là où l'ordre inverse laisserait un contexte que
+              // rien ne dit terminé.
+              noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "returned-to-lane" }, lease);
+              removeIntegration(process.cwd(), attempt.id);
+              ATTEMPTS.delete(unit);
+              const motif = horsScope.length > 0
+                ? `    hors des fichiers en conflit : ${horsScope.join(", ")}\n`
+                : `    signalé hors résolution : ${signale.join(" ; ")}\n`;
+              integration =
+                `  TENTATIVE ABANDONNÉE  ${unit} : ${attempt.id}\n` +
+                motif +
+                "    aucune intégration, aucun commit, le registre est inchangé et l'unité\n" +
+                "    reste ouverte. Sa lane n'a pas été touchée : ces changements ne sont pas\n" +
+                "    transportés, ils sont à refaire là où ils seront revus.\n" +
+                `    déléguer : agent=worker work_unit=${unit}, en lui disant ce que la\n` +
+                `    résolution d'intégration a révélé : ${[...horsScope, ...signale].join(" ; ")}.`;
+            } else {
+              integration =
+                `  RÉSOLUTION PRÊTE  ${unit} : ${attempt.id}\n` +
+                `    déléguer : agent=reviewer work_unit=${unit}`;
+            }
+          } else if (params.agent === "reviewer") {
+            if (results[0]?.verdict !== "approved") {
+              integration =
+                `  RÉSOLUTION NON APPROUVÉE  ${unit} : la tentative ${attempt.id} reste ouverte.\n` +
+                `    déléguer : agent=integration-worker work_unit=${unit}`;
+            } else {
+              /*
+               * Approuvée : le runtime crée `M` et l'intègre, dans cet ordre, et
+               * n'enregistre qu'après. `commitIntegration` recalcule le tree et
+               * refuse s'il a changé depuis la review ; `landIntegration`
+               * revalide `M` avant de toucher la racine.
+               */
+              const m = commitIntegration(attempt, integrationPkg?.tree ?? "", unit);
+              if (!m.ok && m.committed) {
+                /*
+                 * Le commit a eu lieu et sa forme est fausse. Le contexte n'est
+                 * plus sur `P1`, n'a plus de `MERGE_HEAD`, et porte un objet
+                 * qu'on refuse d'intégrer : personne ne peut continuer dessus.
+                 * Y renvoyer un integration-worker le ferait travailler dans un
+                 * état qu'aucune suite ne reprend, pendant que le worker de la
+                 * lane reste interdit — un blocage sans sortie.
+                 */
+                noteAttempt({ event: "RECOVERY_REQUIRED", id: attempt.id, reason: m.reason }, lease);
+                ATTEMPTS.set(unit, { attempt, phase: "recovery-required" });
+                integration =
+                  `  REPRISE REQUISE  ${unit} : ${m.reason}\n` +
+                  `    le contexte ${attempt.id} porte un commit dont la forme est fausse.\n` +
+                  "    aucune délégation sur cette unité tant qu'un opérateur ne l'a pas tranché ;\n" +
+                  "    le contexte est conservé pour ça.";
+              } else if (!m.ok) {
+                integration = `  INTÉGRATION REFUSÉE  ${unit} : ${m.reason}`;
+              } else {
+                /*
+                 * `M` existe : le registre le dit avant qu'on tente de le faire
+                 * atterrir. Un crash entre les deux laisserait sinon un contexte
+                 * portant un commit dont aucune provenance ne parle.
+                 */
+                noteAttempt({
+                  event: "COMMITTED",
+                  id: attempt.id,
+                  commit: m.integration.commit,
+                  tree: m.integration.tree,
+                }, lease);
+                const atterri = landIntegration(process.cwd(), m.integration, (commit) =>
+                  appendLaneEvent(
+                    RUN_DIR,
+                    {
+                      event: "INTEGRATED",
+                      work_unit: unit,
+                      at: new Date().toISOString(),
+                      integration_commit: commit,
+                    },
+                    lease,
+                  ),
+                );
+                if (atterri.ok) {
+                  noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "integrated" }, lease);
+                  ATTEMPTS.delete(unit);
+                  LANE_BLOCKS.delete(lane?.laneId ?? "");
+                  INTEGRATED.add(unit);
+                  OPEN_UNITS.delete(unit);
+                  integration = `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`;
+                } else if (atterri.stale) {
+                  /*
+                   * La base a bougé pendant la review : on rouvre sur le même
+                   * `P2` et le nouveau `P1`. La même transition sert à la
+                   * reprise d'un `ready-to-land` — deux machines séparées en
+                   * avaient produit une qui ne rouvrait jamais.
+                   *
+                   * Renvoyer vers une review de lane était inexécutable : le
+                   * dernier agent est le reviewer d'intégration, et la garde
+                   * globale refuse une review qu'aucun worker ne sépare de la
+                   * précédente.
+                   */
+                  integration = reopenStaleAttempt(unit, attempt, lease, atterri.reason);
+                } else {
+                  /*
+                   * `M` existe et vaut ; seul son atterrissage a échoué, pour une
+                   * raison hors du runtime. La tentative attend une reprise, elle
+                   * ne retourne pas à la résolution.
+                   */
+                  ATTEMPTS.set(unit, { attempt, phase: "ready-to-land", landing: m.integration });
+                  integration =
+                    `  ATTERRISSAGE BLOQUÉ  ${unit} : ${atterri.reason}\n` +
+                    `    ${m.integration.commit.slice(0, 12)} est construit et vérifié ; il attend\n` +
+                    "    une racine propre. La prochaine délégation sur cette unité réessaiera.";
+                }
+              }
+            }
+          }
+        } else if (lane && !attempt && params.agent === "reviewer" && !results[0]?.failure) {
           const blocks = [...(LANE_BLOCKS.get(lane.laneId) ?? [])];
           if (results[0]?.verdict !== "approved") blocks.push("not-approved");
 
@@ -2042,27 +2773,89 @@ export default function (pi: ExtensionAPI) {
           const unitDef = plan().units.find((u) => u.id === lane.workUnitId);
           const finalFiles = laneChanges(process.cwd(), lane.laneId);
           if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push("scope-breach");
-          const merged = mergeLane(process.cwd(), lane.laneId, blocks,
-            `subagent: integrate ${lane.workUnitId}`);
+          /*
+           * L'ordre — merge, puis preuve, puis nettoyage — est tenu par
+           * `integrateLane`, pas par la disposition des lignes ci-dessous.
+           * C'est ici, et seulement ici, qu'une unité devient une dépendance
+           * satisfaite : intégrée, pas terminée.
+           */
+          const merged = integrateLane(
+            process.cwd(),
+            lane.laneId,
+            blocks,
+            mergeMessage(lane.workUnitId),
+            (commit) =>
+              appendLaneEvent(
+                RUN_DIR,
+                {
+                  event: "INTEGRATED",
+                  work_unit: lane.workUnitId,
+                  at: new Date().toISOString(),
+                  integration_commit: commit,
+                },
+                lease,
+              ),
+          );
           if (merged.ok) {
-            removeLane(process.cwd(), lane.laneId);
             LANE_BLOCKS.delete(lane.laneId);
-            // C'est ici, et seulement ici, qu'une unité devient une dépendance
-            // satisfaite : intégrée, pas terminée.
-            // Après le merge, jamais avant : l'ordre inverse produirait un
-            // `INTEGRATED` sur une intégration qui n'a pas eu lieu.
-            appendLaneEvent(
-              RUN_DIR,
-              { event: "INTEGRATED", work_unit: lane.workUnitId, at: new Date().toISOString() },
-              lease,
-            );
             INTEGRATED.add(lane.workUnitId);
             OPEN_UNITS.delete(lane.workUnitId);
             integration = `  intégrée : ${lane.workUnitId}`;
           } else if (blocks.length > 0) {
             integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}`;
           } else if (merged.conflicts.length > 0) {
-            integration = `  CONFLIT  ${lane.workUnitId} : ${merged.conflicts.join(", ")}`;
+            /*
+             * Le conflit ouvre un contexte, il ne se contente plus de l'annoncer.
+             *
+             * `P2` vient de `frozenCommit` et jamais de `laneTip` : le rollback
+             * a ramené la branche à `previousHead` pour que la lane redevienne
+             * sale et son travail visible, donc la branche ne porte plus le
+             * commit que git vient d'essayer d'intégrer. Partir de la branche
+             * ouvrirait la tentative sur l'état que le reviewer n'a pas approuvé.
+             *
+             * Une lane déjà propre n'a pas eu de gel à faire : `laneTip` est
+             * alors le bon `P2`, et c'est le seul cas où on le lit.
+             */
+            const p2 = merged.frozenCommit ?? laneTip(process.cwd(), lane.laneId);
+            const seqTentative = p2 ? allocateSeq(RUN_DIR, lease).seq : 0;
+            const ouverture = p2
+              ? openIntegration(
+                  process.cwd(),
+                  attemptId(RUN_ID, lane.workUnitId, seqTentative),
+                  p2,
+                )
+              : { ok: false as const, reason: "aucun commit de lane à intégrer" };
+
+            if (ouverture.ok) {
+              /*
+               * Le contexte existe, puis le registre le dit, puis la mémoire le
+               * sait. L'inverse laisserait une tentative que le disque ignore.
+               */
+              noteAttempt({
+                event: "ATTEMPT_OPENED",
+                id: ouverture.attempt.id,
+                work_unit: lane.workUnitId,
+                seq: seqTentative,
+                p1: ouverture.attempt.p1,
+                p2: ouverture.attempt.p2,
+                conflicts: [...ouverture.attempt.conflicts],
+              }, lease);
+              ATTEMPTS.set(lane.workUnitId, { attempt: ouverture.attempt, phase: "resolving" });
+              integration =
+                `  CONFLIT D'INTÉGRATION  ${lane.workUnitId}\n` +
+                `    tentative : ${ouverture.attempt.id}\n` +
+                `    fichiers  : ${ouverture.attempt.conflicts.join(", ")}\n` +
+                `    déléguer  : agent=integration-worker work_unit=${lane.workUnitId}\n` +
+                "    la lane garde son travail ; le contexte est ailleurs et le runtime en\n" +
+                "    tient les clés. Ne pas relancer worker ni reviewer sur cette unité.";
+            } else {
+              // Le conflit reste vrai même si le contexte n'a pas pu s'ouvrir :
+              // le dire autrement laisserait croire que l'intégration a échoué
+              // pour une autre raison.
+              integration =
+                `  CONFLIT  ${lane.workUnitId} : ${merged.conflicts.join(", ")}\n` +
+                `    contexte d'intégration impossible : ${ouverture.reason}`;
+            }
           } else {
             // Un échec sans fichier en conflit n'est pas un conflit : un gel
             // impossible, par exemple. Le rendre comme « CONFLIT : » vide

@@ -14,6 +14,20 @@
  *     bin/subagent-recover <unité> abandoned    ce travail est abandonné
  *     bin/subagent-recover <unité> discard      retirer le worktree, puis abandonner
  *
+ *     bin/subagent-recover cleanup             ce qui est rangeable, et ce qui reste
+ *     bin/subagent-recover cleanup --apply     le ranger
+ *
+ *     bin/subagent-recover report              le relevé terminal du run
+ *     bin/subagent-recover report --json       le même, pour une mesure
+ *
+ *     bin/subagent-recover attempts                        voir les tentatives d'intégration
+ *     bin/subagent-recover attempt <id> return-to-lane     clore, l'unité repart en lane
+ *     bin/subagent-recover attempt <id> discard-context    retirer un contexte terminé
+ *
+ * Les tentatives se désignent par leur identifiant durable, jamais par leur
+ * unité : plusieurs peuvent s'être succédé pour la même, et un opérateur doit
+ * savoir lequel de ces objets il tranche.
+ *
  * Chaque résolution prend le bail, agit, puis enregistre le fait accompli —
  * dans cet ordre, comme partout ailleurs. Aucune ne devine : elle applique la
  * décision de celui qui l'a tapée.
@@ -24,7 +38,9 @@ import { execFileSync } from "node:child_process";
 
 import {
   acquireRunOwnership,
+  appendIntegrationEvent,
   appendLaneEvent,
+  decideUnderLease,
   LANE_LEDGER_VERSION,
   migrateLaneLedger,
   readLaneEvents,
@@ -32,10 +48,20 @@ import {
   releaseRunOwnership,
   takeOverRun,
 } from "../subagent-only/run-manifest.ts";
-import { describeConflicts, reconcile } from "../subagent-only/lane-ledger.ts";
+import { describeConflicts } from "../subagent-only/lane-ledger.ts";
+import { observeLanes } from "../subagent-only/lane-observe.ts";
+import { isActive } from "../subagent-only/integration-ledger.ts";
+import { observeIntegrations } from "../subagent-only/integration-observe.ts";
+import { closeAttempt, removeIntegration } from "../subagent-only/integration.ts";
+import { applyCleanup, planCleanup } from "../subagent-only/cleanup.ts";
+import {
+  readGitInvocationCount,
+  recordGitInvocation,
+} from "../subagent-only/git-probe-counter.ts";
+import { buildRunReport, formatRunReport } from "../subagent-only/run-report.ts";
 import { validatePlan } from "../subagent-only/work-units.ts";
 import {
-  isMerged, laneChanges, laneHasDiverged, laneTip, laneUnmergedCommitCount,
+  abandonLane, confirmIntegrations, isMerged, laneChanges, laneHasDiverged, laneTip, laneUnmergedCommitCount,
   openLanes, removeLane, removeLaneBranch, runBranches,
 } from "../subagent-only/worktree.ts";
 
@@ -46,6 +72,7 @@ const dir = join(root, RUNS);
 /** Une commande git qui répond oui ou non, sans jeter. */
 function tryGitRecover(args) {
   try {
+    recordGitInvocation();
     execFileSync("git", args, { cwd: root, stdio: "ignore" });
     return true;
   } catch {
@@ -60,32 +87,25 @@ if (!manifest) {
 }
 const runId = manifest.runId;
 
+/**
+ * L'état des lanes, par l'observateur que le runtime utilise.
+ *
+ * Cette fonction bâtissait sa propre collecte, et elle a divergé : elle n'a
+ * jamais reçu `confirmedCommits`, donc elle tenait chaque unité intégrée pour
+ * prouvée par sa seule branche. Plus prudent que le runtime, donc invisible — et
+ * différent, ce qui est la seule chose qui compte pour un outil censé trancher
+ * ce que le runtime refuse.
+ */
 function etat() {
-  const { events, malformed, malformedLines, version } = readLaneEvents(dir, runId);
-  const worktrees = openLanes(root)
-    .filter((id) => id.startsWith(`${runId}-`))
-    .map((id) => id.slice(runId.length + 1));
-  /*
-   * L'outil observe exactement comme le runtime.
-   *
-   * La première version reprenait la base du run pour toutes les lanes et ne
-   * regardait ni les branches, ni les bases enregistrées. Deux vues
-   * différentes du même dépôt auraient produit deux diagnostics — et l'outil
-   * censé trancher aurait tranché sur autre chose que ce que pi refuse.
-   */
-  const bases = new Map();
-  for (const e of events) {
-    if (e.event === "OPENED" && e.base && !bases.has(e.work_unit)) bases.set(e.work_unit, e.base);
-  }
-  const bilan = reconcile(events, {
-    openWorktrees: worktrees,
-    dirtyWorktrees: worktrees.filter((u) => laneChanges(root, `${runId}-${u}`).length > 0),
-    runBranches: runBranches(root, runId),
-    mergedUnits: [...bases.entries()]
-      .filter(([u, b]) => isMerged(root, `${runId}-${u}`, b))
-      .map(([u]) => u),
-  });
-  return { bilan, malformed, malformedLines, ledgerVersion: version };
+  const laneRead = readLaneEvents(dir, runId);
+  return { laneRead, vu: observeLanes({ root, runId, laneRead }) };
+}
+
+/** Sortir si le registre des lanes interdit toute reconstruction. */
+function exigerLanes(vu) {
+  if (vu.usable) return vu.snapshot;
+  console.error(vu.reason);
+  process.exit(1);
 }
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
@@ -209,20 +229,25 @@ function refuserSiAmpute(lignes) {
 }
 
 if (!unite) {
-  const { bilan, malformedLines, ledgerVersion } = etat();
-  if (ledgerVersion !== LANE_LEDGER_VERSION) {
-    const trouve = ledgerVersion === undefined ? "aucune version" : `version ${ledgerVersion}`;
-    console.log(`run ${runId} · ${manifest.status}`);
+  const { laneRead, vu } = etat();
+  console.log(`run ${runId} · ${manifest.status}`);
+  if (laneRead.version !== LANE_LEDGER_VERSION) {
+    const trouve = laneRead.version === undefined ? "aucune version" : `version ${laneRead.version}`;
     console.log(`registre d'une autre version : ${trouve} (ce runtime lit ${LANE_LEDGER_VERSION})`);
     console.log("  migrer avec : bin/subagent-recover --migrate-ledger");
     process.exit(0);
   }
-  console.log(`run ${runId} · ${manifest.status}`);
-  if (malformedLines.length > 0) {
-    console.log(`registre illisible : ligne(s) ${malformedLines.join(", ")}`);
-    console.log("  le bilan ci-dessous porte sur un registre amputé et ne prouve rien.");
+  if (!vu.usable) {
+    /*
+     * Un registre amputé ne donne aucun bilan — ni ici ni ailleurs. La version
+     * précédente en affichait un en le disant « sans preuve », ce qui invitait
+     * à le lire quand même.
+     */
+    console.log(vu.reason);
+    process.exit(0);
   }
-  console.log(bilan.conflicts.size === 0 && malformedLines.length === 0
+  const bilan = vu.snapshot.reconciliation;
+  console.log(bilan.conflicts.size === 0
     ? "aucune contradiction : le run accepte les délégations."
     : describeConflicts(bilan.conflicts));
   for (const c of bilan.conflicts.values()) {
@@ -230,6 +255,468 @@ if (!unite) {
     if (quoi.length) console.log(`  ${c.workUnitId} → ${quoi.join(" ou ")}`);
   }
   for (const w of bilan.warnings) console.log(`à ranger : ${w.detail}`);
+  process.exit(0);
+}
+
+
+// ---------------------------------- les tentatives d'intégration
+
+/**
+ * L'état durable des tentatives, croisé au disque.
+ *
+ * Lu sans le bail : observer n'exige pas la propriété, et un opérateur doit
+ * pouvoir regarder avant de décider.
+ *
+ * La même collecte que le runtime, par le même module : un opérateur et un
+ * runtime qui regardent le même disque doivent en conclure le même état. Cet
+ * outil lisait le registre des lanes de son côté, sans en vérifier la version ni
+ * les lignes abîmées — un registre corrompu fermait donc le run pendant que
+ * l'outil calculait tranquillement et acceptait de trancher.
+ */
+function etatTentatives(laneRead) {
+  const lu = laneRead ?? readLaneEvents(dir, runId);
+  return { laneRead: lu, vu: observeIntegrations({ root, runDir: dir, runId, laneRead: lu }) };
+}
+
+/** Sortir si l'un des deux registres interdit toute reconstruction. */
+function exigerObservable(vu) {
+  if (vu.usable) return vu.snapshot;
+  console.error(vu.reason);
+  process.exit(1);
+}
+
+/** Ce que l'outil montre : l'observation, sans remède inventé. */
+function montrerTentatives() {
+  const { facts: attempts, contexts: contextes, reconciliation: bilan } =
+    exigerObservable(etatTentatives().vu);
+  if (attempts.size === 0 && contextes.length === 0) {
+    console.log("aucune tentative d'intégration dans ce run.");
+    return;
+  }
+  const phaseDe = new Map();
+  for (const [, v] of bilan.phases) phaseDe.set(v.id, v.phase);
+  for (const a of attempts.values()) {
+    const etat = !isActive(a)
+      ? a.closed ? `close (${a.closed})` : `remplacée par ${a.supersededBy}`
+      : (phaseDe.get(a.id) ?? "état indéterminé");
+    console.log(`${a.id}`);
+    console.log(`  unité      ${a.workUnit}`);
+    console.log(`  état       ${etat}`);
+    console.log(`  P1         ${a.p1}`);
+    console.log(`  P2         ${a.p2}`);
+    if (a.committed) console.log(`  M / T      ${a.committed.commit} / ${a.committed.tree}`);
+    if (a.recovery) console.log(`  reprise    ${a.recovery.reason}`);
+    console.log(`  contexte   ${contextes.includes(a.id) ? "présent" : "absent"}`);
+    /*
+     * Aucun verbe n'intègre `M`.
+     *
+     * Le runtime sait déjà faire atterrir un commit vérifié, et lui donner un
+     * second chemin créerait deux mécanismes concurrents capables d'intégrer.
+     * Pour une tentative prête, la reprise normale reste : lever l'obstacle,
+     * puis déléguer sur l'unité — le runtime réessaiera de lui-même.
+     */
+    if (phaseDe.get(a.id) === "ready-to-land") {
+      console.log("  suite      lever l'obstacle, puis worker|reviewer sur l'unité :");
+      console.log("             le runtime refera atterrir M lui-même.");
+    } else if (isActive(a)) {
+      console.log(`  suite      bin/subagent-recover attempt ${a.id} return-to-lane`);
+    } else if (contextes.includes(a.id)) {
+      console.log(`  suite      bin/subagent-recover attempt ${a.id} discard-context`);
+    }
+    console.log();
+  }
+  for (const id of contextes) {
+    if (attempts.has(id)) continue;
+    console.log(`${id}`);
+    console.log("  contexte présent, aucune provenance au registre.");
+    console.log("  aucun verbe : un contexte sans provenance ne se clôt pas, il se comprend.");
+    console.log();
+  }
+  if (bilan.conflicts.length > 0) {
+    console.log("contradictions :");
+    for (const c of bilan.conflicts) console.log(`  ${c.kind} — ${c.detail}`);
+  }
+}
+
+/** Le plan, tel qu'un opérateur doit le lire avant qu'il agisse. */
+function afficherPlan(plan) {
+  const rien =
+    plan.laneWorktrees.length === 0 &&
+    plan.laneBranches.length === 0 &&
+    plan.integrationContexts.length === 0;
+
+  console.log("à retirer :");
+  if (rien) console.log("  rien");
+  for (const u of plan.laneWorktrees) console.log(`  worktree  ${runId}-${u}`);
+  for (const u of plan.laneBranches) console.log(`  branche   pi-lane/${runId}-${u}`);
+  for (const id of plan.integrationContexts) console.log(`  contexte  ${id}`);
+
+  if (plan.retained.length > 0) {
+    console.log();
+    console.log("conservé :");
+    for (const r of plan.retained) console.log(`  ${r.object}\n    ${r.reason}`);
+  }
+  return rien;
+}
+
+/**
+ * Le plan, à partir d'une seule lecture du registre des lanes.
+ *
+ * Les deux observateurs reçoivent le même snapshot, et un registre de lanes
+ * inexploitable arrête tout : un plan bâti sur les événements encore lisibles
+ * pourrait supprimer un worktree ou une branche que les lignes illisibles
+ * protégeaient.
+ */
+function planDeNettoyage() {
+  const laneRead = readLaneEvents(dir, runId);
+  const lanes = observeLanes({ root, runId, laneRead });
+  if (!lanes.usable) return { ok: false, reason: lanes.reason };
+  const vuT = etatTentatives(laneRead).vu;
+  return {
+    ok: true,
+    plan: planCleanup(
+      lanes.snapshot.reconciliation,
+      vuT.usable ? vuT.snapshot.reconciliation : undefined,
+    ),
+    tentativesLisibles: vuT.usable,
+    raisonTentatives: vuT.usable ? undefined : vuT.reason,
+  };
+}
+
+if (args[0] === "report") {
+  /*
+   * Le relevé, vu de l'opérateur.
+   *
+   * Une reconstruction, mesurée, puis une projection. Les deux observateurs sont
+   * ceux du runtime et reçoivent la même lecture du registre des lanes ; le
+   * relevé lui-même ne sonde rien — il reçoit ce qu'ils ont vu.
+   *
+   * La fenêtre part avant `readLaneEvents` et s'arrête après la seconde
+   * réconciliation, `planCleanup` en dehors : le plan est une projection pure,
+   * pas une reconstruction, et l'inclure gonflerait `recovery_scan_ms` d'un
+   * travail que la mesure ne prétend pas couvrir.
+   */
+  const debut = performance.now();
+  const sondesAvant = readGitInvocationCount();
+
+  const laneRead = readLaneEvents(dir, runId);
+  const lanes = observeLanes({ root, runId, laneRead });
+  const vuT = lanes.usable ? etatTentatives(laneRead).vu : undefined;
+
+  const metrics = {
+    recovery_scan_ms: performance.now() - debut,
+    git_probe_count: readGitInvocationCount() - sondesAvant,
+  };
+
+  if (!lanes.usable) {
+    console.error(lanes.reason);
+    process.exit(1);
+  }
+
+  const tentatives = vuT?.usable ? vuT.snapshot : undefined;
+  const releve = buildRunReport(
+    { runId, status: manifest.status },
+    lanes.snapshot,
+    tentatives,
+    planCleanup(lanes.snapshot.reconciliation, tentatives?.reconciliation),
+    metrics,
+  );
+
+  if (process.argv.includes("--json")) console.log(JSON.stringify(releve, null, 2));
+  else console.log(formatRunReport(releve));
+  process.exit(0);
+}
+
+if (args[0] === "cleanup") {
+  /*
+   * Le nettoyage : un plan, puis des suppressions, et rien entre les deux.
+   *
+   * Sans `--apply`, il montre — et il observe sans le bail, parce qu'observer
+   * n'exige pas la propriété. C'est le mode par défaut à dessein : une
+   * suppression se lit avant de se faire, et le plan dit aussi bien ce qu'il
+   * retire que ce qu'il garde, avec la raison de chaque objet gardé.
+   *
+   * Il ne décide de rien. Les ensembles rangeables viennent des deux
+   * réconciliations ; une contradiction non tranchée retient ce qu'elle porte,
+   * et c'est aux verbes de recovery de la trancher.
+   */
+  // `args` a déjà filtré les options : c'est `process.argv` qui les porte.
+  const appliquer = process.argv.includes("--apply");
+
+  if (!appliquer) {
+    const vu = planDeNettoyage();
+    if (!vu.ok) {
+      console.error(vu.reason);
+      process.exit(1);
+    }
+    const { plan, tentativesLisibles, raisonTentatives } = vu;
+    if (!tentativesLisibles) {
+      console.log("registre des tentatives illisible : aucun contexte n'entre dans ce plan.");
+      console.log(`  ${raisonTentatives}`);
+      console.log();
+    }
+    const rien = afficherPlan(plan);
+    console.log();
+    console.log(rien ? "rien à faire." : "relancer avec --apply pour retirer ces objets.");
+    process.exit(0);
+  }
+
+  /*
+   * Sous le bail, le plan se recalcule.
+   *
+   * Acquérir la propriété sérialise ce qui vient après ; cela ne valide pas un
+   * plan bâti quand une autre session pouvait encore rouvrir une lane ou clore
+   * une tentative. Pour une écriture de registre, le pire serait un fait faux —
+   * refusé par sa garde. Ici, l'effet est une suppression : le plan appliqué
+   * doit être celui qu'on vient de lire, et il est affiché juste avant d'agir.
+   *
+   * Le bail sert aussi à autre chose : retirer un worktree sous une session qui
+   * travaille dedans serait un dégât, et la capacité est ce qui dit que
+   * personne ne travaille.
+   */
+  const sessionCleanup = `recover-${process.pid}`;
+  let leaseC;
+  let bilanCleanup;
+  const resultatCleanup = decideUnderLease({
+    acquire: () => {
+      const pris = acquireRunOwnership(dir, runId, sessionCleanup);
+      if (pris.ok) leaseC = pris.lease;
+      else if (pris.kind === "recovery-required") {
+        console.log("  bail périmé : reprise explicite");
+        leaseC = takeOverRun(dir, runId, sessionCleanup);
+      } else {
+        console.error("  le run est tenu par une autre session ; réessayer plus tard.");
+        process.exit(1);
+      }
+    },
+    reread: () => planDeNettoyage(),
+    validate: (x) => (x.ok ? null : x.reason),
+    act: ({ plan, tentativesLisibles, raisonTentatives }) => {
+      if (!tentativesLisibles) {
+        console.log("registre des tentatives illisible : aucun contexte n'entre dans ce plan.");
+        console.log(`  ${raisonTentatives}`);
+        console.log();
+      }
+      if (afficherPlan(plan)) return;
+      bilanCleanup = applyCleanup(root, runId, plan);
+    },
+    release: () => {
+      if (leaseC) releaseRunOwnership(dir, leaseC);
+    },
+  });
+
+  if (!resultatCleanup.ok) {
+    console.error(resultatCleanup.reason);
+    process.exit(1);
+  }
+  if (!bilanCleanup) process.exit(0);
+
+  console.log();
+  for (const w of bilanCleanup.removedWorktrees) console.log(`  retiré  worktree ${w}`);
+  for (const b of bilanCleanup.removedBranches) console.log(`  retiré  ${b}`);
+  for (const c of bilanCleanup.removedContexts) console.log(`  retiré  contexte ${c}`);
+  if (bilanCleanup.failures.length > 0) {
+    console.log();
+    console.log("non retiré :");
+    for (const f of bilanCleanup.failures) console.log(`  ${f.object}\n    ${f.reason}`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+if (args[0] === "attempts") {
+  montrerTentatives();
+  process.exit(0);
+}
+
+/**
+ * Ce qui interdit un verbe, ou null s'il est permis.
+ *
+ * La même fonction sert au relevé d'avant le bail — pour refuser vite et nommer
+ * l'objet — et à la relecture faite sous le bail, qui seule autorise. Deux jeux
+ * de règles auraient fini par diverger, et c'est la seconde qui compte.
+ */
+function refusDeVerbe(verbe, cible, snapshot, lanes) {
+  const a = snapshot.facts.get(cible);
+  if (!a) {
+    return `${cible} n'existe pas au registre des tentatives.\n` +
+      "  `bin/subagent-recover attempts` montre celles qui existent.";
+  }
+
+  /*
+   * Les deux verbes ne sont pas synonymes, et leur domaine ne se recouvre pas.
+   *
+   * `return-to-lane` clôt une tentative vivante : c'est une décision métier.
+   * `discard-context` ne décide rien : il retire l'objet physique d'une
+   * tentative que le registre dit déjà terminée. Aucun événement métier n'en
+   * sort, parce qu'il n'y a rien de nouveau à raconter.
+   */
+  if (verbe === "discard-context") {
+    if (isActive(a)) {
+      return `${cible} est encore vivante : un contexte actif ne se jette pas.\n` +
+        "  la clore d'abord, ou la laisser au runtime.";
+    }
+    if (!snapshot.contexts.includes(cible)) {
+      return `${cible} n'a pas de contexte sur le disque : rien à retirer.`;
+    }
+    return null;
+  }
+
+  if (!isActive(a)) return `${cible} est déjà terminée : il n'y a plus de tentative à clore.`;
+
+  if (!tryGitRecover(["-C", root, "cat-file", "-e", `${a.p2}^{commit}`])) {
+    return `le travail gelé de ${a.workUnit} (${a.p2.slice(0, 12)}) n'est plus dans le dépôt.\n` +
+      "  clore la tentative dirait que l'unité repart dans sa lane, et elle n'a plus\n" +
+      "  d'où repartir. C'est une contradiction à comprendre, pas à trancher ici.";
+  }
+
+  /*
+   * Et la lane doit être un endroit où revenir.
+   *
+   * `P2` existe ne le prouve pas : tant que le contexte d'intégration est là, il
+   * tient cette référence à lui seul. Une lane supprimée sous une tentative
+   * vivante donnait donc un `P2` valide, un `CLOSED` écrit, un contexte retiré —
+   * et le travail n'était plus désigné que par un SHA dans un JSONL, promis au
+   * ramasse-miettes de git.
+   *
+   * Une seule condition : la réconciliation retire déjà de `openUnits` toute
+   * unité en contradiction. Le conflit sert à dire pourquoi, pas à décider.
+   */
+  if (!lanes.openUnits.has(a.workUnit)) {
+    const contradiction = lanes.conflicts.get(a.workUnit);
+    return `${a.workUnit} n'a pas de lane où revenir.\n` +
+      (contradiction
+        ? `  sa lane est en contradiction : ${contradiction.kind} — ${contradiction.detail}\n`
+        : "  son registre ne la donne pas ouverte, ou son worktree n'est plus là.\n") +
+      `  ${cible} est conservée : tant que la lane n'est pas sûre, son contexte est\n` +
+      `  la référence qui protège le travail gelé (${a.p2.slice(0, 12)}).\n` +
+      "  trancher d'abord l'état de la lane : bin/subagent-recover";
+  }
+  return null;
+}
+
+if (args[0] === "attempt") {
+  const [, cible, verbe] = args;
+  const VERBES = new Set(["return-to-lane", "discard-context"]);
+  if (!cible || !verbe || !VERBES.has(verbe)) {
+    console.error("usage : bin/subagent-recover attempt <id> return-to-lane | discard-context");
+    process.exit(1);
+  }
+
+  /*
+   * Un premier relevé, sans le bail, pour refuser vite et sur le bon objet.
+   * Il n'autorise rien : la décision se prendra sur une relecture faite sous la
+   * propriété qui l'autorise.
+   */
+  /*
+   * Les lanes d'abord : c'est leur registre qui alimente les deux observateurs,
+   * donc c'est lui qui doit nommer la cause quand il est inexploitable.
+   * L'inverse marchait — `observeIntegrations` refuse aussi — mais le message
+   * venait alors du second lecteur pour un défaut du premier.
+   */
+  const { laneRead: avantRead, vu: avantLanes } = etat();
+  const lanesAvant = exigerLanes(avantLanes).reconciliation;
+  const avant = exigerObservable(etatTentatives(avantRead).vu);
+  const refusRapide = refusDeVerbe(verbe, cible, avant, lanesAvant);
+  if (refusRapide) {
+    console.error(refusRapide);
+    process.exit(1);
+  }
+
+  const sessionTentative = `recover-${process.pid}`;
+  let leaseT;
+  let echec;
+  const resultat = decideUnderLease({
+    acquire: () => {
+      const pris = acquireRunOwnership(dir, runId, sessionTentative);
+      if (pris.ok) leaseT = pris.lease;
+      else if (pris.kind === "recovery-required") {
+        console.log("  bail périmé : reprise explicite");
+        leaseT = takeOverRun(dir, runId, sessionTentative);
+      } else {
+        console.error("  le run est tenu par une autre session ; réessayer plus tard.");
+        process.exit(1);
+      }
+    },
+    /*
+     * La relecture qui autorise.
+     *
+     * Acquérir le bail sérialise les écritures futures ; cela ne valide pas
+     * rétroactivement ce qu'on a lu avant. Une autre session a pu, entre le
+     * relevé et l'acquisition, clore cette tentative ou abandonner la lane — et
+     * elle en avait parfaitement le droit.
+     */
+    reread: () => {
+      const { laneRead, vu } = etat();
+      return {
+        lanes: exigerLanes(vu).reconciliation,
+        snapshot: exigerObservable(etatTentatives(laneRead).vu),
+      };
+    },
+    validate: ({ snapshot, lanes }) => refusDeVerbe(verbe, cible, snapshot, lanes),
+    act: ({ snapshot }) => {
+      const a = snapshot.facts.get(cible);
+      try {
+        if (verbe === "discard-context") {
+          // Purement physique : le registre dit déjà ce qu'il y avait à dire.
+          // `removeIntegration` rend un booléen et ne jette pas ; l'ignorer
+          // faisait annoncer un retrait qui n'avait pas eu lieu.
+          if (!removeIntegration(root, cible)) {
+            throw new Error(
+              `le contexte ${cible} n'a pas pu être retiré (worktree verrouillé ?) ; ` +
+              "le registre est inchangé, rien n'a été décidé.",
+            );
+          }
+          console.log(`  contexte ${cible} retiré ; le registre est inchangé.`);
+        } else {
+          closeAttempt(
+            cible,
+            () =>
+              appendIntegrationEvent(
+                dir,
+                { event: "CLOSED", id: cible, outcome: "returned-to-lane", at: new Date().toISOString() },
+                leaseT,
+              ),
+            (id) => {
+              /*
+               * La décision durable est passée ; seul le nettoyage physique peut
+               * encore échouer. On ne défait surtout pas `CLOSED` — l'état juste
+               * est « tentative close, contexte à ranger », un résidu nommé.
+               */
+              if (!removeIntegration(root, id)) {
+                throw new Error(
+                  `${cible} est close et ${a.workUnit} repart dans sa lane, mais le contexte ` +
+                  `${id} n'a pas pu être retiré (worktree verrouillé ?). C'est un résidu : ` +
+                  `\`bin/subagent-recover attempt ${id} discard-context\` une fois débloqué.`,
+                );
+              }
+            },
+          );
+          console.log(`  ${cible} close : ${a.workUnit} repart dans sa lane.`);
+          console.log("  rien n'a été copié du contexte : ce qu'il contenait n'a pas été revu.");
+        }
+      } catch (e) {
+        echec = e instanceof Error ? e.message : String(e);
+        console.error(`  échec : ${echec}`);
+      }
+    },
+    release: () => {
+      if (leaseT) releaseRunOwnership(dir, leaseT);
+    },
+  });
+
+  if (!resultat.ok) {
+    console.error("  l'état a changé avant que le bail soit obtenu ; rien n'a été décidé.");
+    console.error(resultat.reason);
+    process.exit(1);
+  }
+  if (echec) process.exit(1);
+
+  console.log();
+  const apres = exigerObservable(etatTentatives().vu).reconciliation;
+  console.log(apres.conflicts.length === 0
+    ? "aucune contradiction de tentative restante."
+    : apres.conflicts.map((c) => `  ${c.kind} — ${c.detail}`).join("\n"));
   process.exit(0);
 }
 
@@ -261,9 +748,10 @@ function dansLePlan(u) {
     : { ok: false, pourquoi: `${u} ne figure pas dans le plan gelé` };
 }
 
-const { bilan, malformedLines, ledgerVersion } = etat();
-refuserSiAutreVersion(ledgerVersion);
-refuserSiAmpute(malformedLines);
+const { laneRead, vu: vuLanes } = etat();
+refuserSiAutreVersion(laneRead.version);
+refuserSiAmpute(laneRead.malformedLines);
+const bilan = exigerLanes(vuLanes).reconciliation;
 const conflit = bilan.conflicts.get(unite);
 if (!conflit) {
   console.error(`${unite} n'est pas en contradiction ; rien à trancher.`);
@@ -311,21 +799,19 @@ if (pris.ok) {
  * premier a déjà tranché. C'est la discipline de 3b.2 appliquée à son propre
  * outil — observer, acquérir, relire, vérifier, agir, enregistrer.
  */
-const {
-  bilan: apresBail,
-  malformedLines: amputeApres,
-  ledgerVersion: versionApres,
-} = etat();
-if (versionApres !== LANE_LEDGER_VERSION) {
+const { laneRead: apresRead, vu: apresVu } = etat();
+if (apresRead.version !== LANE_LEDGER_VERSION) {
   releaseRunOwnership(dir, lease);
-  refuserSiAutreVersion(versionApres);
+  refuserSiAutreVersion(apresRead.version);
 }
 // Le registre a pu devenir illisible entre l'observation et l'acquisition :
 // « observer, acquérir, relire » ne vaut que si la relecture porte sur tout.
-if (amputeApres.length > 0) {
+if (!apresVu.usable) {
   releaseRunOwnership(dir, lease);
-  refuserSiAmpute(amputeApres);
+  console.error(apresVu.reason);
+  process.exit(1);
 }
+const apresBail = apresVu.snapshot.reconciliation;
 const encore = apresBail.conflicts.get(unite);
 if (!encore) {
   console.log("  la contradiction a disparu entre-temps : rien à faire.");
@@ -417,6 +903,7 @@ if (action === "discard") {
       releaseRunOwnership(dir, lease);
       process.exit(1);
     }
+    recordGitInvocation();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf-8" }).trim();
     /*
      * Même quand tous les commits de la branche sont déjà dans HEAD, un tip
@@ -504,13 +991,43 @@ try {
       break;
     }
     case "integrated":
+      /*
+       * Sans `integration_commit`, délibérément.
+       *
+       * Le commit qui porte l'intégration n'est pas observable ici : `isMerged`
+       * établit que la branche est dans HEAD, pas lequel des commits de HEAD l'y
+       * a mise. Le reconstituer serait le fabriquer, et cet outil enregistre ce
+       * qui s'est passé. L'unité reste donc prouvée par sa branche, ce qui est
+       * vrai — et sa branche n'est pas supprimable, ce qui est la conséquence.
+       */
       appendLaneEvent(dir, { event: "INTEGRATED", work_unit: unite, at }, lease);
       console.log("  enregistrée comme intégrée");
+      console.log("  sa branche reste sa preuve : ne pas la supprimer");
       break;
-    case "abandoned":
-      appendLaneEvent(dir, { event: "ABANDONED", work_unit: unite, at, reason: conflit.kind }, lease);
-      console.log("  enregistrée comme abandonnée");
+    case "abandoned": {
+      /*
+       * Enregistrer l'abandon **et** ranger le worktree.
+       *
+       * Le verbe n'écrivait que l'événement. La réconciliation voit alors une
+       * unité abandonnée dont le worktree est encore là — `residu-d-abandon`,
+       * une contradiction qui ferme le run au tour suivant. L'outil créait donc
+       * le problème qu'il venait résoudre, une contradiction plus loin.
+       *
+       * La branche, elle, survit : elle porte le travail abandonné, et c'est la
+       * seule chose qui le désigne encore.
+       */
+      abandonLane(
+        root,
+        `${runId}-${unite}`,
+        () => appendLaneEvent(
+          dir, { event: "ABANDONED", work_unit: unite, at, reason: conflit.kind }, lease),
+        (r, id) => (openLanes(r).includes(id) ? removeLane(r, id) : true),
+      );
+      console.log("  enregistrée comme abandonnée, worktree rangé");
+      console.log(`  sa branche est conservée : elle porte le travail (${
+        laneTip(root, `${runId}-${unite}`)?.slice(0, 12) ?? "aucun commit"})`);
       break;
+    }
     case "discard": {
       /*
        * Une branche parasite se supprime, elle ne s'abandonne pas.
@@ -575,7 +1092,7 @@ try {
 
 if (erreurAction) process.exit(1);
 
-const apres = etat().bilan;
+const apres = exigerLanes(etat().vu).reconciliation;
 console.log();
 console.log(apres.conflicts.size === 0
   ? "aucune contradiction restante : le run accepte les délégations."

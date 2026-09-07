@@ -21,7 +21,11 @@ import {
   NotOwnerError,
   RecoveryError,
   RunBusyError,
+  appendIntegrationEvent,
   appendLaneEvent,
+  decideUnderLease,
+  integrationLedgerPath,
+  readIntegrationEvents,
   laneLedgerPath,
   migrateLaneLedger,
   readLaneEvents,
@@ -1541,4 +1545,220 @@ test("appendLaneEvent refuse un registre legacy tant qu'il n'est pas migré", ()
   } finally {
     done();
   }
+});
+
+/*
+ * Le commit d'intégration est facultatif, sa forme ne l'est pas.
+ *
+ * Absent, l'intégration se prouve par la branche — c'est le régime des
+ * registres écrits avant ce champ, et il reste légitime. Présent mais vide, la
+ * ligne prétend porter une preuve qui n'en est pas une : l'accepter rendrait
+ * `integration_commit: ""` indistinguable de l'absence, et la lane retomberait
+ * sur la preuve par branche en croyant en avoir une durable.
+ */
+test("un commit d'intégration traverse l'écriture et la relecture", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "abc" }, bail);
+    appendLaneEvent(
+      dir,
+      { event: "INTEGRATED", work_unit: "W03", at: "x", integration_commit: "deadbeef" },
+      bail,
+    );
+    const lu = readLaneEvents(dir, m.runId);
+    assert.equal(lu.malformed, 0);
+    const e = lu.events[1];
+    assert.equal(e.event === "INTEGRATED" ? e.integration_commit : undefined, "deadbeef");
+  } finally {
+    done();
+  }
+});
+
+test("une intégration sans commit reste lisible", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W03", at: "x" }, bail);
+    const lu = readLaneEvents(dir, m.runId);
+    assert.equal(lu.malformed, 0);
+    assert.equal(lu.events.length, 1);
+  } finally {
+    done();
+  }
+});
+
+test("un commit d'intégration vide ou d'un autre type est une ligne abîmée", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    for (const valeur of ["", 7, null, {}]) {
+      writeFileSync(laneLedgerPath(dir, m.runId),
+        `${JSON.stringify({ ledger: 1 })}\n` +
+        `${JSON.stringify({ event: "INTEGRATED", work_unit: "W03", at: "x", integration_commit: valeur })}\n`);
+      const lu = readLaneEvents(dir, m.runId);
+      assert.equal(lu.events.length, 0, `integration_commit=${JSON.stringify(valeur)}`);
+      assert.deepEqual(lu.malformedLines, [2]);
+    }
+  } finally {
+    done();
+  }
+});
+
+// ------------------------------- le registre des tentatives d'intégration
+
+/*
+ * Même discipline que celui des lanes, et pour la même raison : c'est une vérité
+ * durable sur le run. Une session qui a perdu son bail ne doit pas pouvoir
+ * écrire l'histoire des tentatives, sinon on aurait sécurisé le manifeste tout
+ * en ouvrant une seconde vérité sans règles.
+ */
+
+const attemptOuverte = (id: string, unit = "W03") => ({
+  event: "ATTEMPT_OPENED" as const,
+  id, work_unit: unit, seq: 7,
+  p1: "a".repeat(40), p2: "b".repeat(40),
+  conflicts: ["src/a.py"], at: "t",
+});
+
+test("un événement de tentative traverse l'écriture et la relecture", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    appendIntegrationEvent(dir, attemptOuverte("r-W03-7"), bail);
+    appendIntegrationEvent(dir,
+      { event: "COMMITTED", id: "r-W03-7", commit: "c".repeat(40), tree: "d".repeat(40), at: "t" },
+      bail);
+    const lu = readIntegrationEvents(dir, m.runId);
+    assert.equal(lu.malformed, 0);
+    assert.equal(lu.version, 1);
+    assert.equal(lu.events.length, 2);
+    assert.equal(lu.events[0].id, "r-W03-7");
+  } finally {
+    done();
+  }
+});
+
+test("écrire sans le bail est refusé", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    // Un bail d'une autre session : la capacité n'est pas la sienne.
+    const usurpe = { ...bail, sessionId: "s-autre" };
+    assert.throws(() => appendIntegrationEvent(dir, attemptOuverte("r-W03-7"), usurpe));
+    assert.equal(readIntegrationEvents(dir, m.runId).events.length, 0);
+  } finally {
+    done();
+  }
+});
+
+test("un événement incomplet est une ligne abîmée, pas un fait partiel", () => {
+  /*
+   * Chaque nature a ses champs obligatoires. Accepter un `COMMITTED` sans
+   * `tree` reviendrait à enregistrer une preuve qui ne prouve rien, et la
+   * réconciliation en tirerait un état qu'elle croirait vérifié.
+   */
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const incomplets = [
+      { event: "ATTEMPT_OPENED", id: "x", work_unit: "W03", seq: 1, p1: "a", at: "t" },
+      { event: "COMMITTED", id: "x", commit: "c", at: "t" },
+      { event: "SUPERSEDED", id: "x", at: "t" },
+      { event: "CLOSED", id: "x", at: "t" },
+      { event: "INCONNU", id: "x", at: "t" },
+      { event: "COMMITTED", commit: "c", tree: "d", at: "t" },
+    ];
+    for (const doc of incomplets) {
+      writeFileSync(integrationLedgerPath(dir, m.runId),
+        `${JSON.stringify({ integration_ledger: 1 })}\n${JSON.stringify(doc)}\n`);
+      const lu = readIntegrationEvents(dir, m.runId);
+      assert.equal(lu.events.length, 0, JSON.stringify(doc));
+      assert.deepEqual(lu.malformedLines, [2], JSON.stringify(doc));
+    }
+  } finally {
+    done();
+  }
+});
+
+test("une ligne abîmée bloque toute écriture ultérieure", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    writeFileSync(integrationLedgerPath(dir, m.runId),
+      `${JSON.stringify({ integration_ledger: 1 })}\n{ pas du json\n`);
+    assert.throws(() => appendIntegrationEvent(dir, attemptOuverte("r-W03-7"), bail), /illisible/);
+  } finally {
+    done();
+  }
+});
+
+test("une version inconnue exige une migration avant d'écrire", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    writeFileSync(integrationLedgerPath(dir, m.runId),
+      `${JSON.stringify({ integration_ledger: 2 })}\n`);
+    assert.throws(() => appendIntegrationEvent(dir, attemptOuverte("r-W03-7"), bail), /migration/);
+  } finally {
+    done();
+  }
+});
+
+// ------------------------------ décider sous la propriété, pas avant
+
+/*
+ * Acquérir un bail sérialise les écritures futures ; cela ne rend pas
+ * rétroactivement valide une décision prise avant. Cette primitive existe pour
+ * que l'ordre soit une propriété vérifiable, et non la disposition des lignes
+ * d'un appelant.
+ */
+
+test("l'état est relu après l'acquisition, jamais avant", () => {
+  const trace: string[] = [];
+  const r = decideUnderLease({
+    acquire: () => trace.push("bail"),
+    reread: () => { trace.push("relecture"); return { ok: true }; },
+    validate: () => { trace.push("validation"); return null; },
+    act: () => trace.push("mutation"),
+    release: () => trace.push("rendu"),
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(trace, ["bail", "relecture", "validation", "mutation", "rendu"]);
+});
+
+test("un état qui a changé sous le bail refuse la mutation", () => {
+  // Ce que la fenêtre produisait : une autre session tranche entre le premier
+  // relevé et l'acquisition, et la décision partait sur le monde d'avant.
+  let mute = false;
+  const r = decideUnderLease({
+    acquire: () => {},
+    reread: () => ({ closeParQuelquUnDautre: true }),
+    validate: (etat) => (etat.closeParQuelquUnDautre ? "la tentative a été close entre-temps" : null),
+    act: () => { mute = true; },
+    release: () => {},
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /close entre-temps/);
+  assert.equal(mute, false, "aucune mutation sur un état périmé");
+});
+
+test("le bail est rendu sur un refus comme sur une panne", () => {
+  let rendus = 0;
+  decideUnderLease({
+    acquire: () => {}, reread: () => 1, validate: () => "non",
+    act: () => {}, release: () => { rendus += 1; },
+  });
+  assert.throws(() => decideUnderLease({
+    acquire: () => {}, reread: () => 1, validate: () => null,
+    act: () => { throw new Error("disque plein"); },
+    release: () => { rendus += 1; },
+  }), /disque plein/);
+  assert.equal(rendus, 2);
 });

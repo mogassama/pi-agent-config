@@ -129,3 +129,118 @@ test("sans plan, la forme reste jugée", () => {
     /qu'au worker/,
   );
 });
+
+// ------------------------------------------------ le rôle d'intégration
+
+const integ = (extra: Partial<CallShape> = {}): CallShape => ({
+  agent: "integration-worker",
+  plannedMode: true,
+  hasTask: true,
+  hasBatch: false,
+  resolvedWorkUnit: "W03",
+  declaredWorkUnit: "W03",
+  integrationPhase: "resolving",
+  ...extra,
+});
+
+test("integration-worker passe quand une tentative est ouverte", () => {
+  assert.equal(validateTaskCall(integ()).ok, true);
+});
+
+test("integration-worker sans tentative est refusé", () => {
+  const r = validateTaskCall(integ({ integrationPhase: undefined }));
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /aucune tentative d'intégration/);
+});
+
+test("integration-worker sans unité est refusé", () => {
+  const r = validateTaskCall(integ({ resolvedWorkUnit: undefined, declaredWorkUnit: undefined }));
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /doit déclarer son/);
+});
+
+test("integration-worker sur une unité seulement dérivée est refusé", () => {
+  /*
+   * `resolvedWorkUnit` peut venir de la provenance des risques : un appel qui
+   * porte `for_risks` rattachés à W03 en hérite sans l'avoir nommée. La
+   * dérivation existe pour le reviewer de continuation ; une résolution de
+   * conflit n'est jamais une continuation, et laisser deviner l'unité ferait
+   * résoudre le conflit de quelqu'un d'autre.
+   */
+  const r = validateTaskCall(integ({ declaredWorkUnit: undefined }));
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /doit déclarer son/);
+});
+
+test("integration-worker est refusé dès que le commit existe", () => {
+  for (const phase of ["ready-to-land", "recovery-required"] as const) {
+    const r = validateTaskCall(integ({ integrationPhase: phase }));
+    assert.equal(r.ok, false, phase);
+    if (!r.ok) assert.match(r.reason, /il n'y a plus de conflit à résoudre/);
+  }
+});
+
+test("aucune délégation sur une unité dont la tentative a déjà commité", () => {
+  for (const agent of ["worker", "reviewer", "scout"]) {
+    const r = validateTaskCall({
+      agent, plannedMode: true, hasTask: true, hasBatch: false,
+      resolvedWorkUnit: "W03", declaredWorkUnit: "W03",
+      integrationPhase: "recovery-required",
+    });
+    assert.equal(r.ok, false, agent);
+    if (!r.ok) assert.match(r.reason, /tant qu'elle n'est pas reprise/);
+  }
+});
+
+test("integration-worker en lot est refusé", () => {
+  const r = validateTaskCall(integ({ hasTask: false, hasBatch: true, resolvedWorkUnit: undefined, declaredWorkUnit: undefined }));
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /une tentative à la fois|batch/);
+});
+
+test("integration-worker n'existe pas en régime libre", () => {
+  /*
+   * Contrairement à tous les autres rôles. Ils gardent un sens sans plan — pi
+   * fonctionne à l'identique sans bundle — mais celui-ci n'en a aucun : sans
+   * lane, sans gel et sans contexte, il n'y a pas de rencontre à résoudre.
+   */
+  const r = validateTaskCall(integ({ plannedMode: false, integrationPhase: undefined }));
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /aucune tentative d'intégration/);
+});
+
+test("le worker est refusé pendant qu'une tentative vit", () => {
+  const r = validateTaskCall({
+    agent: "worker", plannedMode: true, hasTask: true, hasBatch: false,
+    resolvedWorkUnit: "W03", integrationPhase: "resolving",
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.reason, /tentative d'intégration est ouverte/);
+});
+
+test("le reviewer passe pendant une tentative : c'est lui qui la revoit", () => {
+  /*
+   * Une première version le refusait aussi, au motif qu'il est lié à la lane.
+   * Elle rendait le flux impossible : la résolution doit être revue, et le
+   * runtime donne alors au reviewer le contexte d'intégration au lieu de la
+   * lane. Il change d'objet, pas de droit.
+   */
+  assert.equal(
+    validateTaskCall({
+      agent: "reviewer", plannedMode: true, hasTask: true, hasBatch: false,
+      resolvedWorkUnit: "W03", integrationPhase: "resolving",
+    }).ok,
+    true,
+  );
+});
+
+test("un scout reste global même pendant une tentative", () => {
+  // Il ne possède rien et ne modifie rien : la tentative ne le concerne pas.
+  assert.equal(
+    validateTaskCall({
+      agent: "scout", plannedMode: true, hasTask: true, hasBatch: false,
+      resolvedWorkUnit: "W03", integrationPhase: "resolving",
+    }).ok,
+    true,
+  );
+});

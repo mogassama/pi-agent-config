@@ -8,6 +8,7 @@
  */
 export type { RunResult } from "../../subagent-only/dispatch.ts";
 import type { RunResult } from "../../subagent-only/dispatch.ts";
+import { changedBetween, treeState } from "../../subagent-only/tree.ts";
 
 export interface AppelDispatch {
   agent: string;
@@ -43,9 +44,26 @@ export async function dispatch(
     cwd: opts?.ctx?.cwd,
   };
   APPELS.push(appel);
+  /*
+   * L'arbre est réellement observé autour de l'enfant simulé.
+   *
+   * Le vrai `dispatch` compare `treeState` avant et après, et c'est de là que
+   * viennent les `changedFiles` sur lesquels le runtime décide — dépassement de
+   * scope d'un worker, dépassement du contexte d'intégration, « rien n'a changé
+   * depuis la dernière review ». Un substitut qui rendait toujours `[]` faisait
+   * passer ces décisions pour vraies sans qu'aucune ne soit exercée : deux
+   * scénarios d'intégration ont été verts pour cette seule raison avant que le
+   * harnais les mette en défaut.
+   *
+   * `PILOTE.resultat` reste souverain : un scénario qui veut déclarer autre
+   * chose que ce que l'arbre montre le peut encore, et c'est parfois le sujet.
+   */
+  const cwd = opts?.ctx?.cwd;
+  const avant = cwd ? treeState(cwd) : new Map<string, string>();
   // Le scénario peut agir pendant que « l'enfant tourne » — c'est ainsi qu'on
   // reproduit une perte de propriété au milieu d'une délégation.
   await PILOTE.pendant?.(appel);
+  const changedFiles = cwd ? changedBetween(avant, treeState(cwd)) : [];
   /*
    * Un résultat complet, pas minimal.
    *
@@ -65,7 +83,7 @@ export async function dispatch(
     usage: vide,
     withoutDelta: [],
     modelUsed: "modèle-de-test",
-    changedFiles: [],
+    changedFiles,
     ...(PILOTE.resultat ?? {}),
   } as unknown as RunResult;
 }

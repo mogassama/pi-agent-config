@@ -21,6 +21,7 @@ import type { AgentDefinition } from "./agents.js";
 import { runAttempts } from "./attempts.js";
 import { envelopeCounts, reviewAction, type EnvelopeCounts, type ReviewAction } from "./counts.js";
 import { changedBetween, treeState } from "./tree.js";
+import { envelopeStrings } from "./envelope/read.js";
 import { buildSpawnPlan, type BuildContext } from "./spawn-args.js";
 import {
   batchLifecycle,
@@ -57,6 +58,15 @@ export interface RunResult extends EnvelopeCounts {
    * `EnvelopeCounts`.
    */
   verdict?: string;
+  /**
+   * Ce que l'enfant déclare n'avoir pas fait, ou avoir fait autrement.
+   *
+   * Remonté parce qu'un rôle peut avoir un chemin sûr qui passe par là : on
+   * demande à l'integration-worker de signaler un fichier hors conflits plutôt
+   * que de le modifier, et sans ce champ le runtime ne voyait que les fichiers
+   * modifiés — donc rien, quand l'agent obéissait.
+   */
+  deviations?: string[];
   /**
    * Ids of the risks this review says it settled, as submitted.
    *
@@ -489,9 +499,8 @@ async function runOnce(
     summary: String(envelope.summary ?? "").trim() || "(empty summary)",
     next: deriveNext(envelope),
     verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
-    resolvedRisks: Array.isArray(envelope.resolved_risks)
-      ? envelope.resolved_risks.filter((r: unknown): r is string => typeof r === "string")
-      : undefined,
+    deviations: envelopeStrings(envelope, "deviations"),
+    resolvedRisks: envelopeStrings(envelope, "resolved_risks"),
     recommendation:
       typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,
     action: reviewAction(envelope, typeof envelope.verdict === "string" ? envelope.verdict : undefined),

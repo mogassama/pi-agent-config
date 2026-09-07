@@ -20,7 +20,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { refuseMutation, bundleRoot, isBundleFile, BUNDLE_FILES } from "../subagent-only/role-rules.ts";
+import {
+  refuseMutation, refuseGitMutation, gitSubcommand, parseGit, decideRoleGuard,
+  bundleRoot, isBundleFile, BUNDLE_FILES,
+} from "../subagent-only/role-rules.ts";
 import { scan, EXEMPT_PATH } from "../extensions/pi-secret-gate/rules.ts";
 import { TOKEN_PATTERNS, TOKEN_FILE_PATTERN, MEDIUM_PATTERNS, findMatch } from "../extensions/bash-guard/patterns.ts";
 
@@ -269,4 +272,177 @@ test("example files are exempt", () => {
   assert.equal(EXEMPT_PATH.test(".env.example"), true);
   assert.equal(EXEMPT_PATH.test("config/.env.sample"), true);
   assert.equal(EXEMPT_PATH.test("src/client.py"), false);
+});
+
+// --------------------------------------------- git belongs to the runtime
+
+/*
+ * `refuseGitMutation` applies to every child, including the ones that may
+ * write files. "No agent commits" is too narrow a statement of it: a worker
+ * that runs `git reset --hard` or `git worktree remove` in its lane destroys
+ * work without creating a commit, and leaves `previousHead` exactly as
+ * ambiguous.
+ */
+
+const refusedForEveryone = [
+  "git commit -m 'wip'",
+  "git -C /srv/repo commit -m x",
+  "git -c user.name=x commit -m y",
+  "git -c alias.ci=commit ci -m y",
+  "git commit-tree abc -m x",
+  "git merge feature",
+  "git rebase -i HEAD~3",
+  "git cherry-pick abc",
+  "git revert abc",
+  "git reset --hard HEAD~1",
+  "git checkout -b other",
+  "git switch -c other",
+  "git branch tmp",
+  "git tag v1",
+  "git stash",
+  "git update-ref refs/heads/main abc",
+  "git push origin main",
+  "git worktree remove ../lane",
+  "git add -A",
+  "git config user.email a@b",
+  "npm test && git commit -am done",
+  "echo $(git commit -m sneaky)",
+  "echo `git reset --hard`",
+];
+
+for (const command of refusedForEveryone) {
+  test(`refused for every role: ${command}`, () => {
+    assert.notEqual(refuseGitMutation(command), null, "should have been refused");
+  });
+}
+
+const allowedForWriters = [
+  "git status --porcelain",
+  "git diff --stat",
+  "git log --oneline -5",
+  "git rev-parse HEAD",
+  "git show HEAD:src/a.py",
+  "git -C /srv/repo log --oneline",
+  "git config user.email",
+  "pytest -q",
+  "rm -rf build && npm run build",
+  "echo $(git rev-parse HEAD)",
+];
+
+for (const command of allowedForWriters) {
+  test(`allowed for a role that may write: ${command}`, () => {
+    assert.equal(refuseGitMutation(command), null, "should have been allowed");
+  });
+}
+
+test("the token on disk opens nothing", () => {
+  /*
+   * `bash-guard` lets a commit through when `~/.pi/.allow-commit` exists. That
+   * token authorises the operator's own commit; a child that finds it lying
+   * around must not inherit the capability.
+   *
+   * The guarantee is structural — `refuseGitMutation` reads a string and
+   * consults nothing — so this test cannot fail today. It exists so that the
+   * day someone adds a consultation, it does.
+   */
+  const home = mkdtempSync(join(tmpdir(), "pi-token-"));
+  const previous = process.env.HOME;
+  try {
+    writeFileSync(join(home, ".allow-commit"), "");
+    process.env.HOME = home;
+    assert.notEqual(refuseGitMutation("git commit -m x"), null);
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a git option that takes a value is not read as the subcommand", () => {
+  // `git -C /srv/repo log` was refused as a `git /srv/repo`: fail-closed, and
+  // therefore invisible — a legal command cost a turn and the message named
+  // the wrong thing.
+  assert.equal(gitSubcommand(["-C", "/srv/repo", "log"]), "log");
+  assert.equal(gitSubcommand(["-c", "user.name=x", "commit"]), "commit");
+  assert.equal(gitSubcommand(["--git-dir=/x/.git", "status"]), "status");
+  assert.equal(gitSubcommand(["--no-pager", "diff"]), "diff");
+  assert.equal(gitSubcommand([]), undefined);
+});
+
+// ------------------------------------------------ role-guard's whole decision
+
+/*
+ * The wiring, which nothing checked.
+ *
+ * `refuseGitMutation` had a hundred cases against it and none of them proved
+ * role-guard ever called it. The harness found five defects in `execute` that
+ * were all instruction order; this file had the same blind spot, one layer
+ * down.
+ */
+
+const bundle = () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-bundle-"));
+  for (const f of BUNDLE_FILES) writeFileSync(join(root, f), "");
+  return { root, done: () => rmSync(root, { recursive: true, force: true }) };
+};
+
+const worker = (root: string | null = null) => ({ root, readOnly: false, role: "worker" });
+const scout = (root: string | null = null) => ({ root, readOnly: true, role: "scout" });
+
+test("a role that may write still cannot write to git", () => {
+  // The point of the whole rule: `readOnly` is false here.
+  const reason = decideRoleGuard("bash", { command: "git commit -m x" }, worker());
+  assert.match(reason ?? "", /Git belongs to the runtime/);
+});
+
+test("a role that may write keeps its shell", () => {
+  assert.equal(decideRoleGuard("bash", { command: "rm -rf build" }, worker()), null);
+  assert.equal(decideRoleGuard("bash", { command: "pytest -q" }, worker()), null);
+  assert.equal(decideRoleGuard("bash", { command: "git diff --stat" }, worker()), null);
+});
+
+test("a read-only role is refused as a read-only role", () => {
+  // Order: the read-only rule comes first, so its message — the one that
+  // explains the role has no `edit` by design — is the one the scout sees.
+  const reason = decideRoleGuard("bash", { command: "git commit -m x" }, scout());
+  assert.match(reason ?? "", /is read-only/);
+  assert.match(decideRoleGuard("bash", { command: "rm -rf build" }, scout()) ?? "", /is read-only/);
+});
+
+test("the frozen bundle is refused for reading and for writing", () => {
+  const { root, done } = bundle();
+  try {
+    const path = join(root, "DESIGN.md");
+    assert.match(decideRoleGuard("write", { path }, worker(root)) ?? "", /frozen bundle file/);
+    assert.match(decideRoleGuard("read", { path }, worker(root)) ?? "", /quoted into your task/);
+    assert.equal(decideRoleGuard("read", { path: join(root, "src.py") }, worker(root)), null);
+    // Free regime: no bundle, no rule.
+    assert.equal(decideRoleGuard("write", { path }, worker(null)), null);
+  } finally {
+    done();
+  }
+});
+
+test("a tool that is neither a path nor a command is left alone", () => {
+  assert.equal(decideRoleGuard("other", {}, worker()), null);
+  assert.equal(decideRoleGuard("other", { command: "git commit -m x" }, worker()), null);
+});
+
+test("the config rule counts what follows the subcommand, not the whole line", () => {
+  // `git -C <path> config <key>` counted three words and was refused as a
+  // write. Fail-closed and invisible: exactly what `parseGit` exists to remove.
+  assert.equal(refuseGitMutation("git config user.email"), null);
+  assert.equal(refuseGitMutation("git -C /srv/repo config user.email"), null);
+  assert.equal(refuseGitMutation("git --no-pager config user.email"), null);
+  assert.notEqual(refuseGitMutation("git -C /srv/repo config user.email a@b"), null);
+  assert.notEqual(refuseGitMutation("git config --global --unset user.email"), null);
+  assert.notEqual(refuseGitMutation("git -C /srv/repo config --unset user.email"), null);
+});
+
+test("the parser returns what follows the subcommand", () => {
+  assert.deepEqual(parseGit(["-C", "/srv/repo", "config", "user.email"]),
+    { sub: "config", args: ["user.email"] });
+  assert.deepEqual(parseGit(["log", "--oneline", "-5"]),
+    { sub: "log", args: ["--oneline", "-5"] });
+  assert.deepEqual(parseGit(["-c", "user.name=x"]), { args: [] });
 });

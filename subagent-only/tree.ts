@@ -13,6 +13,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { recordGitInvocation } from "./git-probe-counter.ts";
+
 /**
  * A path git reports but that cannot be read is gone — deleted, or renamed away.
  *
@@ -37,6 +39,7 @@ export function treeState(cwd: string): Map<string, string> {
   const files = new Map<string, string>();
   let names: string[];
   try {
+    recordGitInvocation();
     const out = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
       cwd,
       encoding: "utf-8",

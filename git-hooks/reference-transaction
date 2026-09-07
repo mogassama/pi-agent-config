@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# reference-transaction — no child agent moves a ref.
+#
+# `pre-commit` catches the commit. This catches ref updates made without one:
+# `reset`, `checkout -b`, `switch -c`, `branch`, `tag`, `update-ref`, `stash`,
+# `rebase`, `merge`, `push`. Those make `previousHead` ambiguous just as
+# thoroughly as a stray commit would, and `mergeLane` undoes its own freeze with
+# `reset --mixed <previousHead>` — which only unmakes the freeze if nothing else
+# moved the branch underneath it.
+#
+# **Ref transactions, and nothing wider.** This does not make git read-only. A
+# mutation of the working tree or the index that updates no ref never reaches
+# this hook: `git clean -fd` and `git checkout -- <file>` destroy work without
+# one, and `git worktree remove` takes a lane away without one. Those are
+# refused by `role-guard`, which is the general guard; these hooks are extra
+# depth on two specific operations, not a proof that no mutation is possible.
+#
+# Same test as `pre-commit`: the child's environment. The orchestrator process
+# has no `PI_SUBAGENT_ROLE`, so the runtime's own lane operations pass.
+#
+# Fires in three phases — prepared, committed, aborted. Refusing in `prepared`
+# aborts the transaction; refusing later is too late and would only produce a
+# confusing failure, so the other phases are let through.
+#
+# Install: see git-hooks/pre-commit. Same two options, same caveat.
+
+set -euo pipefail
+
+phase="${1:-}"
+
+if [ "$phase" = "prepared" ] && [ -n "${PI_SUBAGENT_ROLE:-}" ]; then
+  # stdin carries <old> <new> <ref> per line. Drained so git does not see a
+  # broken pipe before it sees the exit code.
+  cat >/dev/null || true
+  echo "refused by reference-transaction: git history belongs to the runtime." >&2
+  echo "  role: ${PI_SUBAGENT_ROLE}" >&2
+  echo "  Edit files and run tests. Branches, resets and merges are made for" >&2
+  echo "  you once your work is approved." >&2
+  exit 1
+fi
+
+cat >/dev/null || true
+exit 0

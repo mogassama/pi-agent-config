@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# pre-commit — no commit is ever made by a child agent.
+#
+# Second layer, on commits only. The first is `role-guard`, which refuses the
+# command before it runs; this one refuses inside git, so it also catches what a
+# shell can hide from a string check — a variable holding the word, a here-doc,
+# a script the agent wrote and then ran.
+#
+# It covers commits, and `reference-transaction` covers ref updates. Neither
+# covers a mutation that touches only the working tree or the index. The general
+# guard is `role-guard`; these are depth on two operations, not a proof.
+#
+# The test is the environment, not a file on disk. `spawn-args.ts` sets
+# `PI_SUBAGENT_ROLE` on every child it launches, and the orchestrator process
+# does not carry it — so `commitLane` and `mergeLane`, which run there, pass.
+# Nothing here consults `~/.pi/.allow-commit`: that token authorises the
+# operator's own commits through `bash-guard`, and a child that finds it lying
+# around must not inherit the capability.
+#
+# Install (per repo):
+#   ln -sf ~/.pi/agent/git-hooks/pre-commit .git/hooks/pre-commit
+#
+# Install (all repos):
+#   git config --global core.hooksPath ~/.pi/agent/git-hooks
+#   # note: this replaces the default hooks path for every repo — any other
+#   # hook you rely on must then live in ~/.pi/agent/git-hooks too.
+#
+# Not installed automatically. Writing into the target repository's hooks would
+# mean overwriting whatever is already there, in a repository pi does not own.
+
+set -euo pipefail
+
+if [ -n "${PI_SUBAGENT_ROLE:-}" ]; then
+  echo "refused by pre-commit: commits belong to the runtime." >&2
+  echo "  role: ${PI_SUBAGENT_ROLE}" >&2
+  echo "  Your work is committed for you once it is approved. Leave the files" >&2
+  echo "  changed and say what you did; do not write the history yourself." >&2
+  exit 1
+fi

@@ -23,17 +23,18 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
 import { changedBetween, treeState } from "../subagent-only/tree.ts";
+import { envelopeStrings } from "../subagent-only/envelope/read.ts";
 
 const repos: string[] = [];
 
 function newRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), "dispatch-test-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "dispatch-test-")));
   repos.push(dir);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
   git("init", "-q");
@@ -115,4 +116,33 @@ test("a file staged but unchanged in content is not salvaged", () => {
   execFileSync("git", ["add", "kept.txt"], { cwd: dir });
   const before = treeState(dir);
   assert.deepEqual(changedBetween(before, treeState(dir)), []);
+});
+
+// ------------------------------------- ce que l'enveloppe rend au runtime
+
+/*
+ * Ces champs se lisaient en ligne dans `dispatch`, et rien ne les couvrait : le
+ * seul harnais qui les traverse substitue `dispatch` entier, donc retirer la
+ * lecture d'un champ ne cassait aucun test. `deviations` décide maintenant de
+ * l'abandon d'une tentative d'intégration ; l'absence de test devenait chère.
+ */
+
+test("un tableau de chaînes est rendu tel quel", () => {
+  assert.deepEqual(envelopeStrings({ deviations: ["a", "b"] }, "deviations"), ["a", "b"]);
+  assert.deepEqual(envelopeStrings({ deviations: [] }, "deviations"), []);
+});
+
+test("un champ absent ou d'un autre type ne rend rien", () => {
+  // `undefined` et `[]` ne veulent pas dire la même chose : le premier est « le
+  // rôle ne déclare pas ce champ », le second « il le déclare vide ».
+  assert.equal(envelopeStrings({}, "deviations"), undefined);
+  assert.equal(envelopeStrings({ deviations: "a" }, "deviations"), undefined);
+  assert.equal(envelopeStrings({ deviations: null }, "deviations"), undefined);
+});
+
+test("les entrées qui ne sont pas des chaînes sont écartées", () => {
+  assert.deepEqual(
+    envelopeStrings({ deviations: ["a", 7, null, { x: 1 }, "b"] }, "deviations"),
+    ["a", "b"],
+  );
 });
