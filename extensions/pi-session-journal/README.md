@@ -44,7 +44,7 @@ toujours eu lieu sur l'événement `before_agent_start`.
 | 2 | Parcourt `ctx.sessionManager.getEntries()` |
 | 3 | Extrait : fichiers écrits/édités, commandes bash, snippets de décision, résumé |
 | 4 | Appelle `appendFile(~/.pi/agent/journal.md, entry)` |
-| 5 | `ctx.ui.notify("Session logged to journal.md", "info")` — ou, si l'écriture a échoué, un avertissement **une fois par session** avec le motif |
+| 5 | `ctx.ui.notify("Session logged to journal.md", "info")` — ou, si la journalisation a échoué, une **tentative** de signalement avec le motif |
 
 ## Format du journal
 
@@ -80,6 +80,20 @@ First line of first three distinct assistant turns (120 chars max each).
 `PI_JOURNAL_PATH` déplace le fichier de journal. Par défaut
 `~/.pi/agent/journal.md`, qui est ignoré par git : c'est une sortie, pas une
 source.
+
+## Signalement des échecs
+
+> Une fermeture **tente** de signaler l'indisponibilité du journal. La fermeture
+> consomme la session, donc une même session ne produit pas de seconde
+> tentative. Si l'UI est elle-même indisponible, l'erreur reste non bloquante.
+
+« Tente » et non « avertit » : la livraison n'est pas garantissable, puisque
+`notify` peut jeter. Il n'y a pas de drapeau « une fois par session » — la
+consommation de session suffit, et un drapeau en plus garantissait la même chose
+sans qu'aucune contre-épreuve puisse le distinguer.
+
+Restent silencieux, parce qu'ils n'empêchent rien : l'échec de détection de
+branche (métadonnée facultative) et l'échec de nommage (qui a son repli).
 
 ## Limites connues
 

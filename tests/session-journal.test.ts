@@ -23,9 +23,18 @@ interface Notification { texte: string; genre?: string }
  * `branche` décide de ce que rend `git branch --show-current` : l'extension ne
  * lance jamais git ici, ce qui est le point — le nommage se teste sans dépôt.
  */
-function monter(over: { branche?: string; entrees?: unknown[]; entreesJettent?: boolean } = {}) {
+function monter(
+  over: {
+    branche?: string;
+    entrees?: unknown[];
+    entreesJettent?: boolean;
+    notifyJette?: boolean;
+  } = {},
+) {
   const evenements = new Map<string, (...a: unknown[]) => unknown>();
   const dits: Notification[] = [];
+  /** Ce que l'extension a TENTÉ de dire, même quand `notify` jette. */
+  const tentatives: Notification[] = [];
   const statuts: [string, string][] = [];
   let nomme: string | undefined;
 
@@ -38,7 +47,11 @@ function monter(over: { branche?: string; entrees?: unknown[]; entreesJettent?: 
     cwd: "/tmp",
     hasUI: true,
     ui: {
-      notify: (texte: string, genre?: string) => dits.push({ texte, genre }),
+      notify: (texte: string, genre?: string) => {
+        tentatives.push({ texte, genre });
+        if (over.notifyJette) throw new Error("UI indisponible");
+        dits.push({ texte, genre });
+      },
       setStatus: (k: string, v: string) => statuts.push([k, v]),
     },
     sessionManager: {
@@ -48,7 +61,7 @@ function monter(over: { branche?: string; entrees?: unknown[]; entreesJettent?: 
       },
     },
   };
-  return { pi, ctx, evenements, dits, statuts, nom: () => nomme };
+  return { pi, ctx, evenements, dits, tentatives, statuts, nom: () => nomme };
 }
 
 const messageUtilisateur = (texte: string) => ({
@@ -154,7 +167,7 @@ test("une session reprise ne se renomme pas et n'écrit rien", async () => {
 
 // --------------------------------------------------- l'échec, rendu visible
 
-test("un journal impossible à écrire avertit une fois, et ne jette pas", async () => {
+test("une fermeture consomme la session : une seconde ne réavertit pas", async () => {
   /*
    * Le `catch` vide d'origine ne bloquait rien — bonne intention — mais rendait
    * l'indisponibilité invisible. Ici le répertoire parent est un fichier : le
@@ -213,12 +226,12 @@ test("une erreur avant l'écriture se dit aussi, et ne jette pas", () => {
   })();
 });
 
-test("« une fois » veut dire une fois par session, pas par instance", async () => {
+test("deux sessions échouées produisent deux avertissements", async () => {
   /*
-   * Deux cycles complets dans la même instance doivent produire deux
-   * avertissements : le drapeau se remet à zéro à `session_start`. Sans ça, la
-   * garantie n'était qu'« une fois par processus », et une seconde session
-   * héritait du silence de la première.
+   * Rien ne persiste d'une session à l'autre : chaque fermeture qui n'a pas pu
+   * écrire tente son propre signalement. C'est la contrepartie de la
+   * consommation de session — elle borne à une tentative par session, elle n'en
+   * supprime pas d'une session à la suivante.
    */
   const dossier = mkdtempSync(join(tmpdir(), "pi-journal-"));
   const obstacle = join(dossier, "obstacle");
@@ -260,6 +273,60 @@ test("une seconde fermeture sans session ne rejournalise pas", async () => {
 
     const entrees = readFileSync(cible, "utf-8").split("\n").filter((l) => l.startsWith("## "));
     assert.equal(entrees.length, 1, "une fermeture consomme la session");
+  } finally {
+    delete process.env["PI_JOURNAL_PATH"];
+    rmSync(dossier, { recursive: true, force: true });
+  }
+});
+
+test("une UI incapable d'avertir ne fait pas échouer la fermeture", async () => {
+  /*
+   * Le cas qui n'avait aucun filet : `getEntries()` jette, le `catch` extérieur
+   * appelle l'avertissement, et `notify` jette à son tour. Aucun `catch` ne
+   * couvrait ce second saut — la fermeture serait tombée en essayant de dire
+   * qu'elle était tombée.
+   *
+   * La tentative est comptée, pas la livraison : c'est la seule chose que
+   * l'extension puisse garantir, et le README le dit désormais ainsi.
+   */
+  const module = await import(`${MODULE}?ui-jette`);
+  const h = monter({ entreesJettent: true, notifyJette: true });
+  module.default(h.pi);
+
+  await h.evenements.get("session_start")!({ reason: "startup" }, h.ctx);
+  await assert.doesNotReject(() => h.evenements.get("session_shutdown")!({}, h.ctx) as Promise<void>);
+
+  assert.equal(h.tentatives.length, 1, "une tentative de signalement, et une seule");
+  assert.match(h.tentatives[0]!.texte, /journal indisponible/);
+  assert.deepEqual(h.dits, [], "rien n'a été délivré, puisque l'UI jette");
+});
+
+test("un journal écrit n'est jamais annoncé indisponible, même si l'UI jette", async () => {
+  /*
+   * Le cas faux dans l'autre sens. Si la notification de succès passait
+   * directement par `ctx.ui.notify`, un `notify` qui jette ferait tomber la
+   * fermeture dans le `catch` extérieur, lequel annoncerait un journal
+   * indisponible — alors qu'il vient d'être écrit. Un signalement faux est pire
+   * qu'un silence : il envoie chercher une panne qui n'existe pas.
+   */
+  const dossier = mkdtempSync(join(tmpdir(), "pi-journal-"));
+  const cible = join(dossier, "journal.md");
+  process.env["PI_JOURNAL_PATH"] = cible;
+  try {
+    const module = await import(`${MODULE}?succes-ui-jette`);
+    const h = monter({ entrees: [messageUtilisateur("bonjour")], notifyJette: true });
+    module.default(h.pi);
+
+    await h.evenements.get("session_start")!({ reason: "startup" }, h.ctx);
+    await assert.doesNotReject(() => h.evenements.get("session_shutdown")!({}, h.ctx) as Promise<void>);
+
+    assert.ok(readFileSync(cible, "utf-8").includes("## "), "le journal a bien été écrit");
+    assert.deepEqual(
+      h.tentatives.filter((t) => t.genre === "warning"),
+      [],
+      "aucun avertissement : rien n'était indisponible",
+    );
+    assert.equal(h.tentatives.length, 1, "une seule tentative, celle du succès");
   } finally {
     delete process.env["PI_JOURNAL_PATH"];
     rmSync(dossier, { recursive: true, force: true });

@@ -273,6 +273,51 @@ async function appendJournal(entry: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * Notifier sans jamais jeter.
+ *
+ * L'UI peut être absente, partielle, ou jeter elle-même. Aucun de ces cas ne
+ * doit faire échouer une fermeture de session : le journal est une trace, pas
+ * une dépendance. La vérification est de forme, à l'exécution, comme partout
+ * ailleurs dans ce fichier.
+ *
+ * `notify` est appelée sur son objet et non détachée : une méthode détachée
+ * perdrait son receveur si l'implémentation de pi s'appuie dessus.
+ */
+function notifierSansJeter(ctx: unknown, texte: string, genre: string): void {
+  try {
+    if (!ctx || typeof ctx !== "object") return;
+    const candidat = ctx as { hasUI?: unknown; ui?: { notify?: unknown } };
+    if (candidat.hasUI !== true) return;
+    if (typeof candidat.ui?.notify !== "function") return;
+    (candidat.ui.notify as (t: string, k?: string) => void).call(candidat.ui, texte, genre);
+  } catch {
+    // L'UI d'avertissement est elle-même indisponible. Rien à faire de plus :
+    // il n'existe pas de canal pour signaler que le canal ne marche pas.
+  }
+}
+
+/**
+ * Dire que la journalisation n'a pas eu lieu.
+ *
+ * **Il n'y a pas de drapeau « une fois par session ».** Il y en a eu un, et sa
+ * suppression ne faisait échouer aucun test : la fermeture consomme la session —
+ * `sessionStartTime` repasse à zéro dans un `finally` — si bien qu'une seconde
+ * fermeture sort avant d'arriver ici. Le drapeau garantissait donc ce que la
+ * consommation garantissait déjà, sans qu'aucune contre-épreuve puisse le
+ * distinguer. Une garde infalsifiable est décorative, même quand elle protège
+ * une propriété vraie.
+ *
+ * La propriété réellement tenue est plus étroite, et c'est celle que le README
+ * annonce : une fermeture **tente** de signaler l'indisponibilité ; la session
+ * étant consommée, la même session n'en produit pas de seconde. Si l'UI est
+ * elle-même indisponible, l'erreur reste non bloquante — « tente » et non
+ * « avertit », parce que la livraison n'est pas garantissable.
+ */
+function avertirJournalIndisponible(ctx: unknown, motif: string): void {
+  notifierSansJeter(ctx, `journal indisponible : ${motif}`, "warning");
+}
+
 // ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
@@ -283,30 +328,15 @@ export default function (pi: ExtensionAPI): void {
   let sessionBranch = "";
   let sessionName = "";
   let sessionCwd = "";
-  let journalIndisponible = false;
   let hasNamed = false;
-
-  /**
-   * Prévenir une fois, sans jamais bloquer.
-   *
-   * « Une fois » veut dire une fois par **session**, pas une fois par instance
-   * d'extension : `session_start` remet le drapeau à zéro. Sans ça, une seconde
-   * session dans le même processus héritait du silence de la première.
-   */
-  const avertirUneFois = (ctx: { hasUI: boolean; ui: { notify: (t: string, k?: string) => void } }, motif: string) => {
-    if (journalIndisponible || !ctx.hasUI) return;
-    journalIndisponible = true;
-    ctx.ui.notify(`journal indisponible : ${motif}`, "warning");
-  };
 
   // -------------------------------------------------------------------------
   // session_start
   // -------------------------------------------------------------------------
   pi.on("session_start", async (event, ctx) => {
     /*
-     * L'état de session repart de zéro ici — sans quoi « une fois par session »
-     * ne serait qu'« une fois par instance », et une seconde session hériterait
-     * du silence de la première.
+     * L'état de session repart de zéro ici : une seconde session dans le même
+     * processus ne doit rien hériter de la première.
      *
      * `hasNamed` est la seule exception, et elle est délibérée. Sur une reprise,
      * il ne revient pas à `false` mais à `true` : la session existante **possède
@@ -319,7 +349,6 @@ export default function (pi: ExtensionAPI): void {
     sessionBranch = "";
     sessionName = "";
     sessionCwd = "";
-    journalIndisponible = false;
     hasNamed = false;
 
     if (event.reason === "resume") {
@@ -329,8 +358,6 @@ export default function (pi: ExtensionAPI): void {
 
     sessionStartTime = Date.now();
     sessionCwd = ctx.cwd;
-    sessionBranch = "";
-    sessionName = "";
 
     try {
       // git-launch: outside-recovery
@@ -396,9 +423,12 @@ export default function (pi: ExtensionAPI): void {
       const echec = await appendJournal(entry);
 
       if (!echec) {
-        if (ctx.hasUI) ctx.ui.notify("Session logged to journal.md", "info");
+        // Même primitive que l'avertissement : une UI qui jette ici ferait
+        // tomber la fermeture dans le `catch` extérieur, qui annoncerait alors
+        // un journal indisponible alors qu'il vient d'être écrit.
+        notifierSansJeter(ctx, "Session logged to journal.md", "info");
       } else {
-        avertirUneFois(ctx, echec);
+        avertirJournalIndisponible(ctx, echec);
       }
     } catch (e) {
       /*
@@ -413,7 +443,7 @@ export default function (pi: ExtensionAPI): void {
        * branche est une métadonnée facultative, et le nommage a son repli. Ici,
        * rien n'est écrit du tout.
        */
-      avertirUneFois(ctx, e instanceof Error ? e.message : String(e));
+      avertirJournalIndisponible(ctx, e instanceof Error ? e.message : String(e));
     } finally {
       // Une fermeture consomme la session : une seconde ne rejournalise pas.
       sessionStartTime = 0;
