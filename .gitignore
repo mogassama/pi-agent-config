@@ -11,7 +11,8 @@ tmp/
 .pi-subagents/
 cc-cli-logs/
 run-history.jsonl
-extensions/pi-session-journal/
+# journal.md est la SORTIE de pi-session-journal ; l'extension, elle, est
+# versionnée depuis 2026-09-08 — elle fait partie de la configuration lancée.
 journal.md
 
 # Local settings

@@ -177,6 +177,8 @@ export default function (pi: ExtensionAPI): void {
 
       let output: string;
       try {
+        // git-launch: opaque-shell
+        // Commande construite ; contenu non analysable statiquement.
         const result = await pi.exec("bash", ["-lc", dryRunCommand], {
           timeout: settings.autoGateTimeoutMs ?? 60_000,
           signal: ctx.signal,

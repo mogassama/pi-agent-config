@@ -213,6 +213,10 @@ const MANIFESTS = [
 
 async function sh(pi: ExtensionAPI, cmd: string, cwd: string, timeout = 15_000): Promise<string> {
   try {
+    // git-launch: opaque-shell
+    // `cmd` est construit par l'appelant et lance parfois git. Un test textuel
+    // ne suit pas une liaison de variable : ce site est déclaré opaque plutôt
+    // que faussement analysé. Interdit dans le chemin de reconstruction.
     const r = await pi.exec("bash", ["-lc", cmd], { timeout });
     return (r.stdout || "").trim();
   } catch {

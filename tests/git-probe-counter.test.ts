@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { readGitInvocationCount, recordGitInvocation } from "../subagent-only/git-probe-counter.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
@@ -310,107 +310,194 @@ function sourcesDeProduction(): string[] {
   return trouves;
 }
 
-/**
- * Ce qui compte comme un lancement de git dans une source.
+/*
+ * L'inventaire des lanceurs, en deux couches.
  *
- * Les guillemets simples et `execFile` manquaient : `execFileSync('git', args)`
- * passait entièrement sous le radar — `vus` restait à onze et `manquants` restait
- * vide, donc le test restait vert en ne regardant rien. Un détecteur qui rate
- * une feuille est pire qu'aucun détecteur, puisqu'il fait croire à une
+ * La version précédente mélangeait les deux et affirmait « tout lanceur git de
+ * production incrémente ». C'était faux — `pi.exec("git", …)` et
+ * `pi.exec("bash", ["-lc", …])` lui échappaient entièrement — et un test qui
+ * rate une feuille est pire qu'aucun test, puisqu'il fait croire à une
  * couverture.
  *
- * `(["'])` puis `\\2` : le guillemet fermant doit être le même que l'ouvrant, sans
- * quoi `"git'` passerait.
+ *   couche 1   inventaire   tout lanceur reconnaissable est CLASSÉ
+ *   couche 2   exactitude   seuls les sites du chemin de reconstruction
+ *                           incrémentent, et l'oracle prouve qu'ils suffisent
  *
- * Un écart assumé par rapport au correctif demandé : `git` peut être suivi du
- * guillemet **ou d'un espace**, parce qu'`execSync` prend une ligne de commande
- * entière — `execSync("git status")` est un lancement de git au même titre, et la
- * forme exacte l'aurait raté comme elle ratait les guillemets simples. Aucun
- * `execSync` n'existe aujourd'hui dans le dépôt ; c'est le lanceur de demain que
- * ça couvre.
+ * Trois classes :
+ *
+ *   counted-git        lance git ET appelle `recordGitInvocation()`
+ *   outside-recovery   lance git sans incrément, déclaré hors de la fenêtre
+ *   opaque-shell       lance un shell dont le contenu n'est pas analysé
+ *
+ * **Les noms de classe sont factuels.** La première s'est d'abord appelée
+ * `recovery-git`, ce qui affirmait qu'un site était atteignable depuis
+ * `reconstruire()` — or `baseCommit`, `gitDiffFor`, `repo-preflight`, `tree` et le
+ * `rev-parse` du verbe `discard` incrémentent tous sans jamais être dans une
+ * fenêtre. La classification reproduisait, en plus étroit, le défaut de langage
+ * qu'elle corrigeait. `counted-git` ne dit que ce qui est vérifiable : ce site
+ * lance git et l'incrémente.
+ *
+ * **La classe se déduit du code, pas d'une étiquette redondante.** Un site qui
+ * appelle `recordGitInvocation()` EST `counted-git` ; les deux autres classes
+ * portent une annotation. Écrire `// git-launch: recovery-git` au-dessus d'un
+ * incrément aurait créé deux sources de vérité qui peuvent diverger — l'étiquette
+ * survivant au retrait de l'incrément. Ici, retirer l'incrément déclasse le site,
+ * et le test tombe.
+ *
+ * Ce que ce test ne fait pas, et ne doit pas prétendre faire : suivre une
+ * liaison de variable. `pi.exec("bash", ["-lc", cmd])` est déclaré opaque, pas
+ * analysé. L'invariant tenu est donc : aucun lanceur statiquement reconnaissable
+ * n'est non classé, et aucun shell opaque ne vit dans le chemin de reconstruction.
  */
-const LANCEUR = /\b(execFileSync|execFile|spawnSync|spawn|execSync)\(\s*(["'])git(?:\2|\s)/;
+const LANCEUR_GIT =
+  /\b(execFileSync|execFile|spawnSync|spawn|execSync)\(\s*(["'])git(?:\2|\s)|\bpi\.exec\(\s*(["'])git\3/;
+const SHELL_OPAQUE = /\bpi\.exec\(\s*(["'])(bash|sh|zsh)\1|\b(execFileSync|execSync|spawnSync)\(\s*(["'])(bash|sh|zsh)\4/;
 
-/** Le détecteur d'avant le correctif, gardé pour montrer ce qu'il ratait. */
-const LANCEUR_AVANT = /(execFileSync|spawnSync|execSync|spawn)\(\s*"git"/;
+/** Les modules qu'une reconstruction peut traverser synchroniquement. */
+const SURFACE_RECONSTRUCTION = ["subagent-only/", "extensions/subagent/", "bin/"];
 
-test("le détecteur voit les guillemets simples et execFile", () => {
+const RACINE_SOURCES = join(import.meta.dirname, "..");
+
+/**
+ * Le chemin complet depuis la racine, jamais tronqué.
+ *
+ * Il l'était : `split("/").slice(-2)` rendait `subagent/index.ts` pour
+ * `extensions/subagent/index.ts`, si bien qu'aucun préfixe de surface ne
+ * correspondait plus. La garde du shell opaque était donc aveugle à tout
+ * `extensions/subagent/`, et ma propre mutation ne l'avait pas vu parce qu'elle
+ * ne portait que sur `subagent-only/`.
+ */
+function cheminRelatif(fichier: string): string {
+  return relative(RACINE_SOURCES, fichier).split(sep).join("/");
+}
+
+const dansSurfaceDeReconstruction = (fichier: string): boolean =>
+  SURFACE_RECONSTRUCTION.some((prefixe) => fichier.startsWith(prefixe));
+
+interface Site { fichier: string; ligne: number; classe: string }
+
+function inventaire(): Site[] {
+  const sites: Site[] = [];
+  for (const fichier of sourcesDeProduction()) {
+    if (fichier.endsWith("git-probe-counter.ts")) continue;
+    const source = readFileSync(fichier, "utf-8");
+    const lignes = source.split("\n");
+    const releve = (motif: RegExp, genre: string) => {
+      for (const trouve of source.matchAll(new RegExp(motif.source, "g"))) {
+        const i = source.slice(0, trouve.index).split("\n").length - 1;
+        const avant = lignes.slice(Math.max(0, i - 6), i).join("\n");
+        let classe = "NON CLASSÉ";
+        if (genre === "git" && avant.includes("recordGitInvocation()")) classe = "counted-git";
+        else if (avant.includes("// git-launch: outside-recovery")) classe = "outside-recovery";
+        else if (avant.includes("// git-launch: opaque-shell")) classe = "opaque-shell";
+        sites.push({ fichier: cheminRelatif(fichier), ligne: i + 1, classe });
+      }
+    };
+    releve(LANCEUR_GIT, "git");
+    releve(SHELL_OPAQUE, "shell");
+  }
+  return sites;
+}
+
+test("le détecteur voit les guillemets simples, execFile, pi.exec et le multiligne", () => {
   const formes = [
     'execFileSync("git", args, opts);',
     "execFileSync('git', args, opts);",
     'execFile("git", args, cb);',
-    "execFile('git', args, cb);",
     'spawnSync("git", args);',
     "spawn('git', args);",
     'execSync("git status");',
-    '  recordGitInvocation();\n  return execFileSync( "git", args);',
-    // Réparti sur plusieurs lignes : invisible tant que le motif s'appliquait
-    // ligne à ligne.
     'execFileSync(\n  "git",\n  args,\n);',
-    "execFileSync(\n  'git',\n  args,\n);",
+    'await pi.exec("git", ["branch", "--show-current"], {',
+    "await pi.exec('git', ['status']);",
   ];
-  for (const forme of formes) {
-    assert.ok(LANCEUR.test(forme), `non détecté : ${forme}`);
-  }
+  for (const forme of formes) assert.ok(LANCEUR_GIT.test(forme), `non détecté : ${forme}`);
 
-  // Ce que l'ancien ratait, et qui motive le correctif.
-  assert.equal(LANCEUR_AVANT.test("execFileSync('git', args, opts);"), false);
-  assert.equal(LANCEUR_AVANT.test('execFile("git", args, cb);'), false);
+  const shells = [
+    'await pi.exec("bash", ["-lc", cmd], { timeout });',
+    "await pi.exec('sh', ['-c', `command -v ${name}`]);",
+    'execFileSync("bash", ["-lc", cmd]);',
+  ];
+  for (const forme of shells) assert.ok(SHELL_OPAQUE.test(forme), `shell non détecté : ${forme}`);
 
-  // Ce qu'aucun des deux ne voit, et qui est assumé : le nom de l'exécutable
-  // passé par une variable. Un test sur du texte ne suit pas une liaison.
-  assert.equal(LANCEUR.test('const executable = "git";\nexecFileSync(executable, args);'), false);
-
-  // Et ce qui ne doit pas déclencher : une mention en commentaire ou en chaîne.
-  assert.equal(LANCEUR.test('// on lance ensuite execFileSync avec "git"'), false);
-  assert.equal(LANCEUR.test('const message = "git a échoué";'), false);
+  // Ce qu'aucun motif ne voit, et qui est assumé : l'exécutable ou la commande
+  // passés par une variable. Un test textuel ne suit pas une liaison.
+  assert.equal(LANCEUR_GIT.test('const exe = "git";\nexecFileSync(exe, args);'), false);
+  // Et ce qui ne doit pas déclencher.
+  assert.equal(LANCEUR_GIT.test('// on lance ensuite execFileSync avec "git"'), false);
+  assert.equal(LANCEUR_GIT.test('const message = "git a échoué";'), false);
+  assert.equal(SHELL_OPAQUE.test('await pi.exec("python3", ["-c", script]);'), false);
 });
 
-test("tout lanceur git de production incrémente le compteur", () => {
-  /*
-   * L'oracle prouve que la fenêtre de reconstruction est exactement couverte. Il
-   * ne peut rien dire des lanceurs qu'aucune fenêtre ne traverse — `baseCommit`,
-   * `gitDiffFor`, le statut du footer, les deux de l'outil de reprise : retirer
-   * leur incrément ne ferait échouer aucune mesure, parce qu'aucune mesure ne
-   * passe par eux.
-   *
-   * Ce test-ci les couvre, et couvre surtout le vrai risque : un lanceur ajouté
-   * plus tard, sur un chemin qui deviendra un jour un chemin d'observation. La
-   * règle « tout lanceur de production incrémente » est inconditionnelle, donc
-   * elle vit dans le code plutôt qu'en prose.
-   *
-   * Il lit du texte, ce qui est un aveu : il ne prouve pas que l'incrément est
-   * atteint, seulement qu'il est écrit au bon endroit. C'est l'oracle qui prouve
-   * l'atteinte, là où une fenêtre existe. Les deux ensemble, pas l'un ou l'autre.
-   */
-  const manquants: string[] = [];
-  let vus = 0;
+// ------------------------------------------------------ couche 1 : inventaire
 
+test("aucun lanceur reconnaissable n'échappe à une classe", () => {
+  const nonClasses = inventaire()
+    .filter((s) => s.classe === "NON CLASSÉ")
+    .map((s) => `${s.fichier}:${s.ligne}`);
+  assert.deepEqual(
+    nonClasses,
+    [],
+    "un lanceur git ou un shell opaque n'est pas classé : ajouter `recordGitInvocation()` " +
+      "s'il est dans le chemin de reconstruction, sinon `// git-launch: outside-recovery` " +
+      "ou `// git-launch: opaque-shell`",
+  );
+});
+
+test("l'inventaire est celui qu'on croit : un lanceur ajouté le fait bouger", () => {
+  const parClasse = new Map<string, number>();
+  for (const s of inventaire()) parClasse.set(s.classe, (parClasse.get(s.classe) ?? 0) + 1);
+  assert.deepEqual(
+    [...parClasse.entries()].sort(),
+    [["counted-git", 10], ["opaque-shell", 3], ["outside-recovery", 2]],
+    "l'inventaire a changé — classer le nouveau site plutôt que d'ajuster ce compte",
+  );
+});
+
+// ------------------------------------------------------ couche 2 : exactitude
+
+test("dans la surface de reconstruction, tout lanceur est compté", () => {
+  /*
+   * L'invariant, dans sa forme honnête : tout lanceur direct présent dans la
+   * surface de reconstruction est compté ; aucun lanceur non compté ni shell
+   * opaque n'y est admis.
+   *
+   * L'interdit du shell opaque est ce qui rend l'inventaire utile — un shell
+   * appelé pendant une reconstruction lancerait git sans qu'on puisse ni le
+   * compter ni le prouver, et le contrat deviendrait invérifiable. La formulation
+   * précédente ne visait que lui ; celle-ci couvre aussi le lanceur direct qu'on
+   * aurait oublié d'instrumenter.
+   */
+  const intrus = inventaire()
+    .filter((s) => dansSurfaceDeReconstruction(s.fichier))
+    .filter((s) => s.classe !== "counted-git")
+    .map((s) => `${s.fichier}:${s.ligne} (${s.classe})`);
+  assert.deepEqual(
+    intrus,
+    [],
+    "un lanceur non compté ou un shell opaque vit dans la surface de reconstruction",
+  );
+});
+
+test("un site hors reconstruction n'incrémente pas", () => {
+  /*
+   * L'inverse de la garde précédente. Un incrément posé hors fenêtre ne fausse
+   * rien aujourd'hui — la synchronie l'empêche de s'intercaler — mais il ferait
+   * du compteur un total approximatif au lieu d'une mesure de fenêtre, et c'est
+   * précisément la confusion que le contrat corrigé écarte.
+   */
+  const fautifs: string[] = [];
   for (const fichier of sourcesDeProduction()) {
     if (fichier.endsWith("git-probe-counter.ts")) continue;
-    /*
-     * Sur la source entière, pas ligne à ligne.
-     *
-     * Appliqué par ligne, le motif ne voyait pas un appel réparti sur plusieurs
-     * lignes — `execFileSync(\n  "git",\n  args,\n);`. Le total restait à onze et
-     * le test passait : exactement la fausse preuve qu'il existe pour empêcher.
-     * Le `\s*` du motif traverse déjà les retours à la ligne ; c'est le découpage
-     * qui l'en empêchait.
-     */
     const source = readFileSync(fichier, "utf-8");
     const lignes = source.split("\n");
-    for (const trouve of source.matchAll(new RegExp(LANCEUR.source, "g"))) {
+    for (const trouve of source.matchAll(new RegExp(LANCEUR_GIT.source, "g"))) {
       const i = source.slice(0, trouve.index).split("\n").length - 1;
-      vus += 1;
-      // Trois lignes de marge : l'incrément se place juste avant le lancement,
-      // et un appel peut être précédé d'un commentaire ou d'une accolade.
-      const avant = lignes.slice(Math.max(0, i - 3), i).join("\n");
-      if (!avant.includes("recordGitInvocation()")) {
-        manquants.push(`${fichier.split("/").slice(-2).join("/")}:${i + 1}`);
+      const avant = lignes.slice(Math.max(0, i - 6), i).join("\n");
+      if (avant.includes("// git-launch: outside-recovery") && avant.includes("recordGitInvocation()")) {
+        fautifs.push(`${cheminRelatif(fichier)}:${i + 1}`);
       }
     }
   }
-
-  assert.deepEqual(manquants, [], "des lanceurs git de production n'incrémentent pas");
-  assert.equal(vus, 11, "onze feuilles connues — un écart veut dire qu'il en est apparu une");
+  assert.deepEqual(fautifs, [], "un site déclaré hors reconstruction incrémente quand même");
 });

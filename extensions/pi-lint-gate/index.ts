@@ -91,6 +91,8 @@ export default function (pi: ExtensionAPI): void {
     if (cached !== undefined) return cached;
     let ok = false;
     try {
+      // git-launch: opaque-shell
+      // Gabarit interpolé ; contenu non analysable statiquement.
       const result = await pi.exec("sh", ["-c", `command -v ${name}`], { timeout: 5_000 });
       ok = (result.code ?? 1) === 0;
     } catch {

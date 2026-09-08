@@ -1,0 +1,6 @@
+{
+  "name": "pi-session-journal",
+  "version": "1.0.0",
+  "description": "Automatic session naming and markdown journal for pi",
+  "private": true
+}
