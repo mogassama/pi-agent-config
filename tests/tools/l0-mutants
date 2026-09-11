@@ -1,0 +1,76 @@
+#!/usr/bin/env -S node --experimental-strip-types
+/**
+ * l0-mutants — chaque porte éprouvée rougit-elle quand on la retire ?
+ *
+ *   tests/tools/l0-mutants
+ *
+ * Exige un mutant pour chaque couverture et pour chaque régression corrigée ;
+ * refuse un mutant sur une régression ouverte, qui n'a encore rien à retirer.
+ *
+ * Pour chaque mutant de tests/l0-mutants.json — { test, file, find, replace } :
+ *
+ *   1. une copie fraîche (fichiers suivis + fichiers L0 non suivis) : la preuve
+ *      intacte y est verte, et node rend 0 ;
+ *   2. une seconde copie fraîche : la cible y apparaît exactement une fois, le
+ *      fichier muté diffère de l'original, la preuve y est ROUGE sur une assertion
+ *      PROPRIÉTÉ, et node rend un code non nul.
+ *
+ * Deux copies par mutant plutôt qu'une restauration : un test qui modifierait un
+ * autre fichier que la cible ne contamine ainsi ni le mutant ni le suivant.
+ */
+import { createHash } from "node:crypto";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { copieJetable, declarations, echapper, lancer, lireTap, MARQUE } from "../l0-lib.ts";
+
+const root = join(import.meta.dirname, "..", "..");
+const mutants = JSON.parse(readFileSync(join(root, "tests", "l0-mutants.json"), "utf-8"));
+const { liste, anomalies } = declarations(root);
+const sha = (s) => createHash("sha256").update(s).digest("hex");
+if (mutants.length === 0) anomalies.push("tests/l0-mutants.json est vide");
+
+const eprouvees = liste.filter((d) => d.espece === "COUV" || d.corrigee);
+for (const d of eprouvees) {
+  if (!mutants.some((m) => m.test === d.nom)) anomalies.push(`${d.espece === "COUV" ? "couverture" : "régression corrigée"} sans mutant : ${d.nom}`);
+}
+
+
+for (const m of mutants) {
+  const decl = liste.find((d) => d.nom === m.test);
+  if (!decl) { anomalies.push(`mutant pour une preuve non déclarée : ${m.test}`); continue; }
+  if (decl.espece === "REG" && !decl.corrigee) { anomalies.push(`mutant sur une régression ouverte : ${m.test}`); continue; }
+  const motif = ["--test-name-pattern", `^${echapper(m.test)}$`];
+
+  const intacte = copieJetable(root);
+  try {
+    const { code, tap } = lancer(intacte, [decl.fichier], motif);
+    const r = lireTap(tap).get(m.test);
+    if (code !== 0 || !r || r.length !== 1 || !r[0].ok || r[0].directive) {
+      anomalies.push(`${m.test} : pas verte sur la copie intacte (node rc=${code})`);
+      continue;
+    }
+  } finally { rmSync(intacte, { recursive: true, force: true }); }
+
+  const mutee = copieJetable(root);
+  try {
+    const cible = join(mutee, m.file);
+    const original = readFileSync(cible, "utf-8");
+    if (sha(original) !== sha(readFileSync(join(root, m.file), "utf-8"))) { anomalies.push(`${m.test} : la copie de ${m.file} diffère du dépôt`); continue; }
+    const occurrences = original.split(m.find).length - 1;
+    if (occurrences !== 1) { anomalies.push(`${m.test} : cible trouvée ${occurrences} fois dans ${m.file}`); continue; }
+    const mute = original.replace(m.find, m.replace);
+    if (sha(mute) === sha(original)) { anomalies.push(`${m.test} : la mutation ne change pas le fichier`); continue; }
+    writeFileSync(cible, mute);
+    const { code, tap } = lancer(mutee, [decl.fichier], motif);
+    const r = lireTap(tap).get(m.test);
+    if (!r || r.length !== 1) anomalies.push(`${m.test} : absente du rapport sur le mutant (node rc=${code})`);
+    else if (r[0].ok) anomalies.push(`${m.test} : VERTE sur le mutant — la preuve ne tient pas sa porte`);
+    else if (!r[0].bloc.includes(MARQUE)) anomalies.push(`${m.test} : rouge sur le mutant SANS ${MARQUE} — rouge pour une autre raison`);
+    else if (code === 0) anomalies.push(`${m.test} : rouge sur le mutant mais node rend 0`);
+    else console.log(`  intacte verte · mutant rouge   ${m.test}`);
+  } finally { rmSync(mutee, { recursive: true, force: true }); }
+}
+
+console.log(`\nmutants · ${mutants.length} déclarés · preuves éprouvées ${eprouvees.length} · anomalies ${anomalies.length}`);
+for (const a of anomalies) console.log(`ANOMALIE  ${a}`);
+process.exit(anomalies.length === 0 ? 0 : 1);

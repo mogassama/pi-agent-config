@@ -1,0 +1,63 @@
+#!/usr/bin/env -S node --experimental-strip-types
+/**
+ * l0-check — chaque preuve de L0 est-elle dans l'état que son espèce exige ?
+ *
+ *   tests/tools/l0-check
+ *
+ *   regression(…)           rouge, sur une assertion PROPRIÉTÉ, sous todo
+ *   regressionCorrigee(…)   verte, sans todo — son mutant, c'est l0-mutants
+ *   couverture(…)           verte, sans todo — son mutant, c'est l0-mutants
+ *
+ * Une régression ouverte qui passe est une anomalie, pas une bonne nouvelle :
+ * soit le test ne voit pas le défaut, soit un lot l'a corrigé sans la déclarer
+ * corrigée. Les deux se tranchent à la main.
+ *
+ * JavaScript sans annotation, comme bin/subagent-recover : le retrait des types ne
+ * s'applique qu'aux fichiers .ts, et un script sans extension n'en est pas un.
+ */
+import { join } from "node:path";
+import { declarations, fichiersL0, lancer, lireTap, MARQUE } from "../l0-lib.ts";
+
+const root = join(import.meta.dirname, "..", "..");
+const { liste, anomalies } = declarations(root);
+
+const resultats = new Map();
+const fichiers = fichiersL0(root);
+for (const groupe of [fichiers.filter((f) => f.endsWith("-harness.test.ts")), fichiers.filter((f) => !f.endsWith("-harness.test.ts"))]) {
+  if (groupe.length === 0) continue;
+  const { code, tap } = lancer(root, groupe);
+  if (code !== 0) anomalies.push(`node --test a rendu ${code} sur ${groupe.join(" ")} : un échec hors todo, ou un fichier qui ne charge pas`);
+  for (const [nom, r] of lireTap(tap)) resultats.set(nom, [...(resultats.get(nom) ?? []), ...r]);
+}
+
+// Égalité des deux ensembles, dans les deux sens.
+const declares = new Set(liste.map((d) => d.nom));
+for (const nom of resultats.keys()) {
+  if (!declares.has(nom)) anomalies.push(`${nom} : rapportée par le TAP mais absente des déclarations lisibles`);
+}
+
+let ouvertes = 0, corrigees = 0, couvertes = 0;
+for (const d of liste) {
+  const r = resultats.get(d.nom);
+  if (!r || r.length !== 1) {
+    anomalies.push(`${d.nom} : ${r ? `${r.length} résultats` : "absente du rapport"}`);
+    continue;
+  }
+  const [x] = r;
+  if (x.directive === "SKIP") { anomalies.push(`${d.nom} : sautée`); continue; }
+  if (d.espece === "REG" && !d.corrigee) {
+    if (x.directive !== "TODO") anomalies.push(`${d.nom} : déclarée ouverte mais exécutée sans todo`);
+    else if (x.ok) anomalies.push(`${d.nom} : régression ouverte VERTE — défaut non détecté, ou corrigé sans être déclaré`);
+    else if (!x.bloc.includes(MARQUE)) anomalies.push(`${d.nom} : rouge SANS assertion ${MARQUE} — rouge pour une autre raison :\n${x.bloc.split("\n").slice(0, 6).join("\n")}`);
+    else { ouvertes++; console.log(`  rouge   ${d.nom}`); }
+  } else {
+    const espece = d.espece === "REG" ? "régression corrigée" : "couverture";
+    if (x.directive === "TODO") anomalies.push(`${d.nom} : ${espece} exécutée sous todo`);
+    else if (!x.ok) anomalies.push(`${d.nom} : ${espece} ROUGE`);
+    else { if (d.espece === "REG") corrigees++; else couvertes++; console.log(`  verte   ${d.nom}`); }
+  }
+}
+
+console.log(`\nL0 · ${liste.length} déclarées · régressions ouvertes ${ouvertes} · corrigées ${corrigees} · couvertures ${couvertes} · anomalies ${anomalies.length}`);
+for (const a of anomalies) console.log(`ANOMALIE  ${a}`);
+process.exit(anomalies.length === 0 ? 0 : 1);

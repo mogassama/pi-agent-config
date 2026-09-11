@@ -1,0 +1,32 @@
+[
+  {
+    "test": "L0 COUV C-P1-F04-m3 — un fichier hors scope bloque l'intégration",
+    "file": "extensions/subagent/index.ts",
+    "find": "if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push(\"scope-breach\");",
+    "replace": "void scopeBreach; void unitDef; void finalFiles;"
+  },
+  {
+    "test": "L0 COUV C-P1-F04-m4a — une écriture réservée dans un lot bloque l'intégration",
+    "file": "extensions/subagent/index.ts",
+    "find": "if (reservedTouched(result.changedFiles ?? []).length > 0) {",
+    "replace": "if (false) {"
+  },
+  {
+    "test": "L0 COUV C-P1-F04-m4b — une écriture réservée par le chemin simple bloque l'intégration",
+    "file": "extensions/subagent/index.ts",
+    "find": "if (reservedTouched(r.changedFiles ?? []).length > 0) {",
+    "replace": "if (false) {"
+  },
+  {
+    "test": "L0 COUV C-P1-F04-m5 — un risque laissé ouvert bloque l'intégration",
+    "file": "extensions/subagent/index.ts",
+    "find": "if (pending.length > 0) blocks.push(\"open-risks\");",
+    "replace": "void pending;"
+  },
+  {
+    "test": "L0 COUV C-P1-F04-m10 — une revue après un worker qui n'a rien écrit est refusée",
+    "file": "extensions/subagent/index.ts",
+    "find": "const wroteNothing = between.some((d) => !d.readOnly) && between.every((d) => d.produced && d.changedFiles.length === 0);",
+    "replace": "const wroteNothing = false;"
+  }
+]
