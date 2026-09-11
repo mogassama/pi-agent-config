@@ -28,5 +28,11 @@
     "file": "extensions/subagent/index.ts",
     "find": "const wroteNothing = between.some((d) => !d.readOnly) && between.every((d) => d.produced && d.changedFiles.length === 0);",
     "replace": "const wroteNothing = false;"
+  },
+  {
+    "test": "L0 COUV A-P1-F07a — role-guard est injecté exactement une fois dans l'argv réel de l'enfant",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "  const extensions = declared.includes(\"role-guard\") ? declared : [...declared, \"role-guard\"];",
+    "replace": "  // mutant A-P1-F07a : le motif textuel `declared.includes(\"role-guard\")` survit, l'injection non.\n  const extensions = declared;"
   }
 ]

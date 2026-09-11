@@ -7,6 +7,11 @@
  * Exige un mutant pour chaque couverture et pour chaque régression corrigée ;
  * refuse un mutant sur une régression ouverte, qui n'a encore rien à retirer.
  *
+ * Une préservation n'en exige pas : elle protège un comportement juste contre une
+ * correction future, et le code qui pourrait l'emporter n'existe pas encore. Elle
+ * est listée sans mutant, à voix haute, pour que ce trou reste visible ; le lot qui
+ * introduit ce code lui en donne un.
+ *
  * Pour chaque mutant de tests/l0-mutants.json — { test, file, find, replace } :
  *
  *   1. une copie fraîche (fichiers suivis + fichiers L0 non suivis) : la preuve
@@ -29,9 +34,16 @@ const { liste, anomalies } = declarations(root);
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 if (mutants.length === 0) anomalies.push("tests/l0-mutants.json est vide");
 
-const eprouvees = liste.filter((d) => d.espece === "COUV" || d.corrigee);
-for (const d of eprouvees) {
-  if (!mutants.some((m) => m.test === d.nom)) anomalies.push(`${d.espece === "COUV" ? "couverture" : "régression corrigée"} sans mutant : ${d.nom}`);
+const aMutant = (d) => mutants.some((m) => m.test === d.nom);
+// Obligatoire : ce qui prétend tenir une porte. Une préservation n'en exige pas encore ;
+// quand elle en a un, elle compte parmi les preuves éprouvées comme les autres.
+const obligatoires = liste.filter((d) => d.espece === "COUV" || d.corrigee);
+for (const d of obligatoires) {
+  if (!aMutant(d)) anomalies.push(`${d.espece === "COUV" ? "couverture" : "régression corrigée"} sans mutant : ${d.nom}`);
+}
+const eprouvees = liste.filter((d) => (d.espece === "COUV" || d.corrigee || d.espece === "PRES") && aMutant(d));
+for (const d of liste.filter((d) => d.espece === "PRES" && !aMutant(d))) {
+  console.log(`  préservation sans mutant       ${d.nom}`);
 }
 
 
@@ -71,6 +83,6 @@ for (const m of mutants) {
   } finally { rmSync(mutee, { recursive: true, force: true }); }
 }
 
-console.log(`\nmutants · ${mutants.length} déclarés · preuves éprouvées ${eprouvees.length} · anomalies ${anomalies.length}`);
+console.log(`\nmutants · ${mutants.length} déclarés · obligatoires ${obligatoires.length} · preuves éprouvées ${eprouvees.length} · anomalies ${anomalies.length}`);
 for (const a of anomalies) console.log(`ANOMALIE  ${a}`);
 process.exit(anomalies.length === 0 ? 0 : 1);

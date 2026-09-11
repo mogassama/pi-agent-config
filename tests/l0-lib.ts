@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 export const MARQUE = "PROPRIÉTÉ";
 
 export interface Declaration {
-  espece: "REG" | "COUV";
+  espece: "REG" | "COUV" | "PRES";
   /** Pour une régression : `regressionCorrigee(` plutôt que `regression(`. */
   corrigee: boolean;
   id: string;
@@ -36,7 +36,7 @@ export interface Resultat {
   bloc: string;
 }
 
-const DECLARANTS = /^(regression|regressionCorrigee|couverture)\(/;
+const DECLARANTS = /^(regression|regressionCorrigee|couverture|preservation)\(/;
 
 export function fichiersL0(root: string): string[] {
   return readdirSync(join(root, "tests"))
@@ -55,12 +55,12 @@ export function declarations(root: string): { liste: Declaration[]; anomalies: s
       if (!DECLARANTS.test(ligne)) return;
       // Ni guillemet échappé ni barre oblique inverse, et une virgule après le titre :
       // le nom doit se lire tel qu'il s'affichera.
-      const m = /^(regression|regressionCorrigee|couverture)\("([^"\\]+)", "([^"\\]+)", /.exec(ligne);
+      const m = /^(regression|regressionCorrigee|couverture|preservation)\("([^"\\]+)", "([^"\\]+)", /.exec(ligne);
       if (!m) {
         anomalies.push(`déclaration illisible : ${fichier}:${i + 1}`);
         return;
       }
-      const espece = m[1] === "couverture" ? "COUV" : "REG";
+      const espece = m[1] === "couverture" ? "COUV" : m[1] === "preservation" ? "PRES" : "REG";
       liste.push({
         espece, corrigee: m[1] === "regressionCorrigee", id: m[2], titre: m[3],
         nom: `L0 ${espece} ${m[2]} — ${m[3]}`, fichier,
@@ -100,7 +100,7 @@ export function lireTap(tap: string): Map<string, Resultat[]> {
   const resultats = new Map<string, Resultat[]>();
   const lignes = tap.split("\n");
   for (let i = 0; i < lignes.length; i++) {
-    const m = /^(not ok|ok) \d+ - (L0 (?:REG|COUV) .+?)(?: # (TODO|SKIP)\b.*)?$/.exec(lignes[i]);
+    const m = /^(not ok|ok) \d+ - (L0 (?:REG|COUV|PRES) .+?)(?: # (TODO|SKIP)\b.*)?$/.exec(lignes[i]);
     if (!m) continue;
     const bloc: string[] = [];
     if (lignes[i + 1]?.trim() === "---") {
@@ -115,7 +115,7 @@ export function lireTap(tap: string): Map<string, Resultat[]> {
 export const echapper = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Les fichiers L0 pas encore commités, seuls fichiers non suivis admis dans une copie. */
-const L0_NON_SUIVI = /^tests\/(l0-[^/]+|tools\/l0-[^/]+)$/;
+const L0_NON_SUIVI = /^tests\/(l0-[^/]+|tools\/l0-[^/]+)$/;   // préfixes réservés à L0 (Sol, CP2)
 
 /**
  * Une copie jetable : les fichiers suivis, plus les fichiers L0 non suivis.

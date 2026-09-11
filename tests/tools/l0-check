@@ -7,6 +7,9 @@
  *   regression(…)           rouge, sur une assertion PROPRIÉTÉ, sous todo
  *   regressionCorrigee(…)   verte, sans todo — son mutant, c'est l0-mutants
  *   couverture(…)           verte, sans todo — son mutant, c'est l0-mutants
+ *   preservation(…)         verte, sans todo — comportement juste aujourd'hui, qu'une
+ *                           correction ne doit pas emporter ; pas de mutant tant que le
+ *                           code qui pourrait l'emporter n'existe pas
  *
  * Une régression ouverte qui passe est une anomalie, pas une bonne nouvelle :
  * soit le test ne voit pas le défaut, soit un lot l'a corrigé sans la déclarer
@@ -36,7 +39,7 @@ for (const nom of resultats.keys()) {
   if (!declares.has(nom)) anomalies.push(`${nom} : rapportée par le TAP mais absente des déclarations lisibles`);
 }
 
-let ouvertes = 0, corrigees = 0, couvertes = 0;
+let ouvertes = 0, corrigees = 0, couvertes = 0, preservees = 0;
 for (const d of liste) {
   const r = resultats.get(d.nom);
   if (!r || r.length !== 1) {
@@ -51,13 +54,18 @@ for (const d of liste) {
     else if (!x.bloc.includes(MARQUE)) anomalies.push(`${d.nom} : rouge SANS assertion ${MARQUE} — rouge pour une autre raison :\n${x.bloc.split("\n").slice(0, 6).join("\n")}`);
     else { ouvertes++; console.log(`  rouge   ${d.nom}`); }
   } else {
-    const espece = d.espece === "REG" ? "régression corrigée" : "couverture";
+    const espece = d.espece === "REG" ? "régression corrigée" : d.espece === "PRES" ? "préservation" : "couverture";
     if (x.directive === "TODO") anomalies.push(`${d.nom} : ${espece} exécutée sous todo`);
     else if (!x.ok) anomalies.push(`${d.nom} : ${espece} ROUGE`);
-    else { if (d.espece === "REG") corrigees++; else couvertes++; console.log(`  verte   ${d.nom}`); }
+    else {
+      if (d.espece === "REG") corrigees++;
+      else if (d.espece === "PRES") preservees++;
+      else couvertes++;
+      console.log(`  verte   ${d.nom}`);
+    }
   }
 }
 
-console.log(`\nL0 · ${liste.length} déclarées · régressions ouvertes ${ouvertes} · corrigées ${corrigees} · couvertures ${couvertes} · anomalies ${anomalies.length}`);
+console.log(`\nL0 · ${liste.length} déclarées · régressions ouvertes ${ouvertes} · corrigées ${corrigees} · couvertures ${couvertes} · préservations ${preservees} · anomalies ${anomalies.length}`);
 for (const a of anomalies) console.log(`ANOMALIE  ${a}`);
 process.exit(anomalies.length === 0 ? 0 : 1);
