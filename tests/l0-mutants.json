@@ -34,5 +34,29 @@
     "file": "subagent-only/spawn-args.ts",
     "find": "  const extensions = declared.includes(\"role-guard\") ? declared : [...declared, \"role-guard\"];",
     "replace": "  // mutant A-P1-F07a : le motif textuel `declared.includes(\"role-guard\")` survit, l'injection non.\n  const extensions = declared;"
+  },
+  {
+    "test": "L0 COUV C4-demarrage — aucun registre n'est créé au simple démarrage d'un run",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "export function createRunExclusive(dir: string, manifest: RunManifest): OpenRun {\n  mkdirSync(dir, { recursive: true });",
+    "replace": "export function createRunExclusive(dir: string, manifest: RunManifest): OpenRun {\n  mkdirSync(dir, { recursive: true });\n  // mutant C4-demarrage : initialisation empressée des registres\n  writeFileSync(laneLedgerPath(dir, manifest.runId), `${JSON.stringify({ ledger: LANE_LEDGER_VERSION })}\\n`);"
+  },
+  {
+    "test": "L0 PRES C1.8-trace — un verbe inconnu refuse proprement, sans trace brute",
+    "file": "bin/subagent-recover",
+    "find": "const ACTIONS = new Set([\"adopt\", \"integrated\", \"abandoned\", \"discard\"]);",
+    "replace": "const ACTIONS = new Set([\"adopt\", \"integrated\", \"abandoned\", \"discard\"]);\nif (action && !ACTIONS.has(action)) throw new Error(`mutant C1.8-trace : verbe inconnu ${action}`);"
+  },
+  {
+    "test": "L0 COUV F-version-inconnue — une version de registre inconnue ferme la lecture",
+    "file": "subagent-only/lane-observe.ts",
+    "find": "  if (laneRead.version !== LANE_LEDGER_VERSION || laneRead.malformedLines.length > 0) {",
+    "replace": "  if (laneRead.malformedLines.length > 0) {   // mutant F-version-inconnue : plus de contrôle de version"
+  },
+  {
+    "test": "L0 PRES F-generation-idempotente — rouvrir une lane existante la rend au lieu de la recréer",
+    "file": "subagent-only/worktree.ts",
+    "find": "  if (existsSync(cwd)) return { cwd, branch, created: false };",
+    "replace": "  // mutant F-generation-idempotente : le worktree existant n'arrête plus l'ouverture"
   }
 ]

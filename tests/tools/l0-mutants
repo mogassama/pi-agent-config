@@ -34,6 +34,16 @@ const { liste, anomalies } = declarations(root);
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 if (mutants.length === 0) anomalies.push("tests/l0-mutants.json est vide");
 
+// Deux déclarations rigoureusement identiques comptent la même expérience deux fois, et
+// gonflent un total sans rien éprouver de plus. Plusieurs mutants distincts visant une même
+// preuve composée restent légitimes : c'est une branche chacun.
+const vues = new Map();
+for (const m of mutants) {
+  const cle = JSON.stringify([m.test, m.file, m.find, m.replace]);
+  if (vues.has(cle)) anomalies.push(`mutant déclaré deux fois à l'identique : ${m.test} sur ${m.file}`);
+  vues.set(cle, true);
+}
+
 const aMutant = (d) => mutants.some((m) => m.test === d.nom);
 // Obligatoire : ce qui prétend tenir une porte. Une préservation n'en exige pas encore ;
 // quand elle en a un, elle compte parmi les preuves éprouvées comme les autres.
