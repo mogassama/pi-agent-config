@@ -58,5 +58,17 @@
     "file": "subagent-only/worktree.ts",
     "find": "  if (existsSync(cwd)) return { cwd, branch, created: false };",
     "replace": "  // mutant F-generation-idempotente : le worktree existant n'arrête plus l'ouverture"
+  },
+  {
+    "test": "L0 PRES B2-scope-breach-etat — un rework qui répare le scope rend la lane intégrable",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push(\"scope-breach\");",
+    "replace": "          // mutant B2-scope-breach-etat : le dépassement devient historique\n          if (scopeBreach(unitDef, finalFiles).length > 0) LANE_BLOCKS.set(lane.laneId, new Set([...(LANE_BLOCKS.get(lane.laneId) ?? []), \"scope-breach\"]));\n          if ((LANE_BLOCKS.get(lane.laneId) ?? new Set()).has(\"scope-breach\")) blocks.push(\"scope-breach\");"
+  },
+  {
+    "test": "L0 PRES B2-journal-non-autoritaire — le journal des délégations ne décide dans aucun sens",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (results[0]?.verdict !== \"approved\") blocks.push(\"not-approved\");",
+    "replace": "          if (results[0]?.verdict !== \"approved\") blocks.push(\"not-approved\");\n          // mutant B2-journal-non-autoritaire : le journal best-effort décide\n          try {\n            const journal = readFileSync(\n              join(process.cwd(), RUNS_DIR, `${RUN_ID}-delegations.jsonl`),\n              \"utf-8\",\n            );\n            if (journal.includes(\"DESIGN.md\")) blocks.push(\"reserved-violation\");\n          } catch {\n            /* journal absent : rien */\n          }"
   }
 ]
