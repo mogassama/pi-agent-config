@@ -151,11 +151,22 @@ function writeAtomic(path: string, text: string): void {
  * ramener à l'une des deux versions inventerait ce qu'on ne sait pas. Refus nommé,
  * et aucune conversion implicite — ni ici, ni ailleurs.
  *
- * Ce que ce contrôle ne fait PAS : exiger `ended` dès que le statut est terminal.
- * Ce sens-là de l'équivalence se ferme quand la primitive de transition devient le
- * seul chemin vers un statut terminal (étapes 3 à 5). L'exiger maintenant ferait
- * refuser des écritures que le runtime pratique encore, et la suite doit rester
- * verte à chaque étape.
+ * TOLÉRANCE TRANSITOIRE, NON CANONIQUE (Sol, adjudication de l'étape 1).
+ *
+ * À cette étape intermédiaire seulement, le lecteur et l'écrivain v2 vérifient
+ * `ended présent → status terminal concordant`, mais tolèrent encore
+ * `status terminal sans ended`, parce que le setter général historique peut
+ * toujours produire cet état.
+ *
+ * Cette tolérance n'est pas canonique et ne survivra pas au lot 1. À l'étape 4,
+ * dans le MÊME changement que l'interdiction des états terminaux dans setStatus,
+ * `readManifest` et `writeManifest` imposeront pour tout manifeste v2 :
+ *
+ *     status ∈ {completed, abandoned} ⇔ ended est présent
+ *
+ * Un manifeste v2 terminal sans `ended` deviendra alors illisible et non
+ * réinscriptible. Un manifeste v1 reste soumis à C4.7 : aucun champ v2 ne lui est
+ * ajouté, et son éventuelle migration opérateur reste hors de ce lot.
  */
 function assertVersionedFields(m: Partial<RunManifest>, quoi: string): void {
   const champsV2 = ["ledgers", "ended", "continuation_block"].filter(
