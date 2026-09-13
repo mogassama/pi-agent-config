@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { acquireRunOwnership } from "../subagent-only/run-manifest.ts";
+import { acquireRunOwnership, setStatus } from "../subagent-only/run-manifest.ts";
 import { openLanes } from "../subagent-only/worktree.ts";
 import {
   aJeter, AT, cheminIntegrations, cheminLanes, GUARD_STALE_MS, manifeste, RUN, runEcrit,
@@ -574,5 +574,81 @@ preservation("C1.8-trace", "un verbe inconnu refuse proprement, sans trace brute
     aRefuse(sortieDe(i)) && !traceBrute(sortieDe(i)),
     `un verbe inconnu se refuse, il ne plante pas ; code ${sortieDe(i).status}, trace brute ` +
       `${traceBrute(sortieDe(i))}`,
+  );
+});
+
+// ================================================================== C1.8 — un seul chemin terminal
+
+/*
+ * Le setter général ne doit pas pouvoir terminer un run.
+ *
+ * C1.8 dit que la fin de run passe par un verbe opérateur explicite, et par lui seul.
+ * Tant que `setStatus` accepte `completed` et `abandoned`, il existe DEUX chemins de
+ * terminaison : celui du dispatcher, qui acquiert l'exclusion de N, contrôle les
+ * préconditions, archive et libère — et celui-ci, qui écrit un statut terminal sous le
+ * seul verrou du run, sans archive, sans `ended`, sans rien.
+ *
+ * Le témoin positif est indispensable : un `setStatus` qui refuserait TOUT serait vrai
+ * de cette preuve sans rien dire du contrat. La preuve monte donc à côté le cas où le
+ * setter doit aboutir — un état non terminal, sous le même bail, sur le même montage.
+ *
+ * Manifeste v1, et ce n'est pas un détail. Monté en v2, le premier montage rougissait sur
+ * l'objet gelé par PRÉCONDITION : le lecteur de `f9791bd` refuse toute version autre que 1,
+ * donc `setStatus` levait avant d'avoir rien décidé et le refus venait de la version, pas
+ * de la terminalité. Cette preuve ne porte pas sur le format : elle porte sur le fait qu'un
+ * setter général ne termine pas un run, ce qui est vrai des deux versions.
+ */
+regression("C1.8-setStatus-terminal-interdit", "le setter général ne termine pas un run, le verbe opérateur seul le fait", () => {
+    const vivant = runEcrit("l0-b1-set-actif-", [{ unite: "W03", ouverte: true }], { manifesteV1: true });
+    const bailVivant = acquireRunOwnership(vivant.dir, RUN, "session-setter");
+    precondition(bailVivant.ok, "le bail du témoin positif doit être détenu");
+    const capaciteVivante = bailVivant.ok ? bailVivant.lease : undefined;
+    const iActif = issue(() => setStatus(vivant.dir, "active", capaciteVivante!));
+    precondition(
+      iActif.kind === "returned",
+      `le setter doit aboutir sur un état non terminal, sinon le refus ne prouve rien ; ${montrer(iActif)}`,
+    );
+    const temoinPositif = lireJson(join(vivant.dir, "active-run.json"))?.status === "active";
+
+    const cas = (["completed", "abandoned"] as const).map((etat) => {
+      const r = runEcrit(`l0-b1-set-${etat}-`, [{ unite: "W03", ouverte: true }], { manifesteV1: true });
+      const bail = acquireRunOwnership(r.dir, RUN, "session-setter");
+      precondition(bail.ok, `le bail doit être détenu pour tenter ${etat}`);
+      const capacite = bail.ok ? bail.lease : undefined;
+
+      const actif = join(r.dir, "active-run.json");
+      const avantManifeste = readFileSync(actif, "utf-8");
+      const lire = (p: string): string => (existsSync(p) ? readFileSync(p, "utf-8") : "(absent)");
+      const avantLanes = lire(cheminLanes(r.dir));
+      const avantIntegrations = lire(cheminIntegrations(r.dir));
+
+      const i = issue(() => setStatus(r.dir, etat, capacite!));
+      return {
+        etat,
+        refuse: i.kind === "threw",
+        actifConserve: existsSync(actif),
+        manifesteInchange: existsSync(actif) && readFileSync(actif, "utf-8") === avantManifeste,
+        sansArchive: archives(r.dir).length === 0,
+        registresInchanges:
+          lire(cheminLanes(r.dir)) === avantLanes &&
+          lire(cheminIntegrations(r.dir)) === avantIntegrations,
+        vu: montrer(i),
+      };
+    });
+
+    const manques = cas
+      .filter((c) => !(c.refuse && c.actifConserve && c.manifesteInchange && c.sansArchive && c.registresInchanges))
+      .map(
+        (c) =>
+          `${c.etat} : refus ${c.refuse}, actif conservé ${c.actifConserve}, manifeste inchangé ` +
+          `${c.manifesteInchange}, sans archive ${c.sansArchive}, registres inchangés ` +
+          `${c.registresInchanges} — ${c.vu}`,
+      );
+
+    propriete(
+      temoinPositif && manques.length === 0,
+      `le setter doit refuser les deux états terminaux sans rien muter, tout en restant le chemin ` +
+        `des états non terminaux ; témoin positif ${temoinPositif}` +
+      (manques.length ? ` ; ${manques.join(" | ")}` : ""),
   );
 });
