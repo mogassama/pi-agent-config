@@ -50,8 +50,43 @@ export class RunBusyError extends Error {}
 
 export type RunStatus = "planning" | "active" | "completed" | "abandoned";
 
+/**
+ * Les deux versions que ce module distingue.
+ *
+ * Il les distingue plutôt qu'il ne les confond. Un manifeste v1 se lit tel qu'il
+ * est écrit et n'est jamais réécrit à l'ouverture : ses registres restent sans
+ * témoin possible (C4.7), ce qui est une information et non une lacune à corriger
+ * en silence. Convertir v1 en v2 inventerait une provenance que personne n'a.
+ */
+export const MANIFEST_VERSIONS = [1, 2] as const;
+export type ManifestVersion = (typeof MANIFEST_VERSIONS)[number];
+
+/** La version dans laquelle les nouveaux runs naissent. */
+export const MANIFEST_VERSION_COURANTE: ManifestVersion = 2;
+
+/** Le jeton d'un blocage durable après contournement de la garde inline (C6.6). */
+export const RUN_CONTINUATION_BLOCKED = "RUN_CONTINUATION_BLOCKED";
+
+/**
+ * Les seuls registres qui peuvent porter un témoin (C4.5).
+ *
+ * La table `ledgers` est PARTIELLE : une clé n'apparaît qu'une fois son registre
+ * écrit. Un témoin pour autre chose que ces deux-là ne désigne rien d'autoritaire.
+ */
+const REGISTRES_ATTENDUS = ["lanes", "integrations"];
+
+/** La fin du run, posée par le verbe opérateur et par lui seul (C1.8). */
+export interface RunEnd {
+  at: string;
+  /** Une identité ou une provenance locale de commande, à défaut le littéral "operator". */
+  by: string;
+  outcome: "completed" | "abandoned";
+  /** Obligatoire pour `abandoned`, qui ne s'accorde pas sans raison. */
+  reason?: string;
+}
+
 export interface RunManifest {
-  version: 1;
+  version: ManifestVersion;
   runId: string;
   status: RunStatus;
   /** Le fichier du plan gelé, une fois attaché. */
@@ -70,6 +105,23 @@ export interface RunManifest {
    * ne coûte rien ; une réutilisation coûte la provenance.
    */
   nextSeq: number;
+  /**
+   * Les registres dont l'existence est attestée, et leur version (§ F, C4.1).
+   *
+   * Table partielle, et v2 seulement. Écrire les deux clés d'office créerait un
+   * témoin en avance : un registre attendu mais absent se lit PERDU alors qu'il
+   * n'a jamais existé.
+   */
+  ledgers?: Record<string, number>;
+  /** Présente si et seulement si le run est terminal, et `ended.outcome = status`. */
+  ended?: RunEnd;
+  /**
+   * Un contournement de la garde d'écriture inline a été constaté (C6.6).
+   *
+   * Ce lot ne le produit jamais : il le lit, le préserve, et le verbe `completed`
+   * refusera tant qu'il est là. Le produire appartient au lot qui implémente C6.
+   */
+  continuation_block?: { at: string; code: typeof RUN_CONTINUATION_BLOCKED };
 }
 
 const MANIFEST = "active-run.json";
@@ -91,6 +143,98 @@ function writeAtomic(path: string, text: string): void {
   renameSync(tmp, path);
 }
 
+/**
+ * Les champs de version 2, contrôlés sans jamais être normalisés.
+ *
+ * Un manifeste v1 qui porterait `ended`, `ledgers` ou `continuation_block` n'est
+ * pas un v2 mal étiqueté : c'est un document dont la provenance est inconnue. Le
+ * ramener à l'une des deux versions inventerait ce qu'on ne sait pas. Refus nommé,
+ * et aucune conversion implicite — ni ici, ni ailleurs.
+ *
+ * Ce que ce contrôle ne fait PAS : exiger `ended` dès que le statut est terminal.
+ * Ce sens-là de l'équivalence se ferme quand la primitive de transition devient le
+ * seul chemin vers un statut terminal (étapes 3 à 5). L'exiger maintenant ferait
+ * refuser des écritures que le runtime pratique encore, et la suite doit rester
+ * verte à chaque étape.
+ */
+function assertVersionedFields(m: Partial<RunManifest>, quoi: string): void {
+  const champsV2 = ["ledgers", "ended", "continuation_block"].filter(
+    (cle) => (m as Record<string, unknown>)[cle] !== undefined,
+  );
+  if (m.version === 1) {
+    if (champsV2.length === 0) return;
+    throw new RecoveryError(
+      `${quoi} : manifeste de version 1 portant ${champsV2.sort().join(", ")} — ` +
+        `champ de version 2, et aucune conversion n'est implicite`,
+    );
+  }
+
+  if (m.ledgers !== undefined) {
+    const table: unknown = m.ledgers;
+    if (typeof table !== "object" || table === null || Array.isArray(table)) {
+      throw new RecoveryError(`${quoi} : ledgers n'est pas une table`);
+    }
+    for (const [cle, valeur] of Object.entries(table as Record<string, unknown>)) {
+      if (!REGISTRES_ATTENDUS.includes(cle)) {
+        throw new RecoveryError(
+          `${quoi} : ledgers atteste « ${cle} », qui n'est pas un registre autoritaire ` +
+            `(${REGISTRES_ATTENDUS.join(", ")})`,
+        );
+      }
+      if (typeof valeur !== "number" || !Number.isInteger(valeur) || valeur < 1) {
+        throw new RecoveryError(
+          `${quoi} : ledgers.${cle} ne porte pas une version de registre (${String(valeur)})`,
+        );
+      }
+    }
+  }
+
+  const fin: unknown = m.ended;
+  if (fin !== undefined) {
+    if (typeof fin !== "object" || fin === null || Array.isArray(fin)) {
+      throw new RecoveryError(`${quoi} : ended n'est pas un objet`);
+    }
+    const f = fin as Partial<RunEnd>;
+    if (typeof f.at !== "string" || !f.at) {
+      throw new RecoveryError(`${quoi} : ended.at absent ou vide`);
+    }
+    if (typeof f.by !== "string" || !f.by) {
+      throw new RecoveryError(`${quoi} : ended.by absent ou vide`);
+    }
+    if (f.outcome !== "completed" && f.outcome !== "abandoned") {
+      throw new RecoveryError(`${quoi} : ended.outcome invalide (${String(f.outcome)})`);
+    }
+    if (f.outcome !== m.status) {
+      throw new RecoveryError(
+        `${quoi} : ended.outcome (${f.outcome}) et status (${String(m.status)}) se contredisent`,
+      );
+    }
+    if (f.outcome === "abandoned" && (typeof f.reason !== "string" || !f.reason)) {
+      throw new RecoveryError(`${quoi} : abandoned sans raison opérateur`);
+    }
+    if (f.reason !== undefined && typeof f.reason !== "string") {
+      throw new RecoveryError(`${quoi} : ended.reason n'est pas du texte`);
+    }
+  }
+
+  const bloc: unknown = m.continuation_block;
+  if (bloc !== undefined) {
+    if (typeof bloc !== "object" || bloc === null || Array.isArray(bloc)) {
+      throw new RecoveryError(`${quoi} : continuation_block n'est pas un objet`);
+    }
+    const b = bloc as { at?: unknown; code?: unknown };
+    if (typeof b.at !== "string" || !b.at) {
+      throw new RecoveryError(`${quoi} : continuation_block.at absent ou vide`);
+    }
+    if (b.code !== RUN_CONTINUATION_BLOCKED) {
+      throw new RecoveryError(
+        `${quoi} : continuation_block.code invalide (${String(b.code)}), ` +
+          `attendu ${RUN_CONTINUATION_BLOCKED}`,
+      );
+    }
+  }
+}
+
 export function readManifest(dir: string): RunManifest | undefined {
   const path = manifestPath(dir);
   if (!existsSync(path)) return undefined;
@@ -103,8 +247,15 @@ export function readManifest(dir: string): RunManifest | undefined {
     );
   }
   const m = doc as Partial<RunManifest>;
-  if (m?.version !== 1 || typeof m.runId !== "string" || !m.runId) {
-    throw new RecoveryError(`${MANIFEST} ne porte pas de run exploitable`);
+  if (
+    !MANIFEST_VERSIONS.includes(m?.version as ManifestVersion) ||
+    typeof m.runId !== "string" ||
+    !m.runId
+  ) {
+    throw new RecoveryError(
+      `${MANIFEST} ne porte pas de run exploitable ` +
+        `(version ${String(m?.version)}, attendue ${MANIFEST_VERSIONS.join(" ou ")})`,
+    );
   }
   if (!["planning", "active", "completed", "abandoned"].includes(String(m.status))) {
     throw new RecoveryError(`${MANIFEST} : statut invalide (${String(m.status)})`);
@@ -112,10 +263,20 @@ export function readManifest(dir: string): RunManifest | undefined {
   if (typeof m.nextSeq !== "number" || !Number.isInteger(m.nextSeq) || m.nextSeq < 1) {
     throw new RecoveryError(`${MANIFEST} : nextSeq invalide (${String(m.nextSeq)})`);
   }
+  assertVersionedFields(m, MANIFEST);
   return m as RunManifest;
 }
 
+/**
+ * L'écrivain est discriminé comme le lecteur.
+ *
+ * Le contrôle a lieu AVANT le renommage atomique : un manifeste incohérent refusé
+ * en mémoire est une panne, le même posé sur le disque est un run irrécupérable.
+ * Et la version n'est jamais relevée au passage — les mutateurs recopient le
+ * document relu, donc un run v1 reste un run v1 quoi qu'on y change.
+ */
 function writeManifest(dir: string, manifest: RunManifest): void {
+  assertVersionedFields(manifest, `écriture de ${MANIFEST}`);
   mkdirSync(dir, { recursive: true });
   writeAtomic(manifestPath(dir), `${JSON.stringify(manifest, null, 2)}\n`);
 }
@@ -139,7 +300,7 @@ export function openRun(dir: string, baseCommit?: string): OpenRun {
     return { manifest: existing, resumed: true };
   }
   const manifest: RunManifest = {
-    version: 1,
+    version: MANIFEST_VERSION_COURANTE,
     /*
      * Huit octets, pas trois.
      *
