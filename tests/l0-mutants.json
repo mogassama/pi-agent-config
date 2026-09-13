@@ -70,5 +70,11 @@
     "file": "extensions/subagent/index.ts",
     "find": "          if (results[0]?.verdict !== \"approved\") blocks.push(\"not-approved\");",
     "replace": "          if (results[0]?.verdict !== \"approved\") blocks.push(\"not-approved\");\n          // mutant B2-journal-non-autoritaire : le journal best-effort décide\n          try {\n            const journal = readFileSync(\n              join(process.cwd(), RUNS_DIR, `${RUN_ID}-delegations.jsonl`),\n              \"utf-8\",\n            );\n            if (journal.includes(\"DESIGN.md\")) blocks.push(\"reserved-violation\");\n          } catch {\n            /* journal absent : rien */\n          }"
+  },
+  {
+    "test": "L0 PRES B3-racine-propre — une racine propre sans Statut à écrire reste intégrable",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push(\"scope-breach\");",
+    "replace": "          // mutant B3-racine-propre : plus rien n'est intégrable\n          void unitDef; void finalFiles;\n          blocks.push(\"scope-breach\");"
   }
 ]

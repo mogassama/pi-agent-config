@@ -28,7 +28,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
-import { readManifest, releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
+import { releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
 import { openLanes } from "../subagent-only/worktree.ts";
 
 export const RUNS = ".pi-subagent-runs";
@@ -86,6 +86,26 @@ export interface Harnais {
   outil: { execute: (id: string, params: unknown, ctx?: unknown) => Promise<unknown> };
   /** Une session neuve sur le même dépôt : rien de la mémoire précédente ne traverse. */
   recharger: () => Promise<Harnais>;
+  /**
+   * Émettre un événement pi vers le callback que l'extension a enregistré.
+   *
+   * C6.4 a deux niveaux — refus avant l'appel, vérification après. Les éprouver demande
+   * d'appeler les callbacks `tool_call` et `tool_result` comme pi le ferait, et non
+   * d'écrire un fichier en espérant que quelqu'un le remarque.
+   */
+  emettre: (nom: string, ...args: unknown[]) => Promise<unknown>;
+  /** Les noms d'événements auxquels l'extension s'est abonnée. */
+  abonnements: () => string[];
+  /**
+   * Ce que le chargement de la session a donné.
+   *
+   * Un manifeste v2 conforme rend l'extension inchargeable aujourd'hui : `openRun`
+   * s'exécute à l'import et `readManifest` refuse toute version autre que 1. Si le
+   * montage en faisait une précondition, la preuve rougirait à l'import et non sur sa
+   * propriété. Le chargement est donc rendu observable, et les preuves canoniques
+   * l'affirment elles-mêmes.
+   */
+  chargement: { ok: true } | { ok: false; erreur: string };
   evenements: () => Array<Record<string, unknown>>;
   journal: () => Array<Record<string, unknown>>;
   fin: () => void;
@@ -100,18 +120,34 @@ async function instancier(root: string): Promise<Harnais> {
   process.chdir(root);
   reinitialiser();
   generation += 1;
-  const module = await import(`../extensions/subagent/index.ts?l0b2=${generation}`);
   let outil: Harnais["outil"] | undefined;
-  module.default({
-    on: () => {},
-    registerTool: (t: unknown) => { outil = t as Harnais["outil"]; },
-    registerCommand: () => {},
-    ui: { setStatus: () => {}, setFooter: () => {} },
-  });
-  const manifeste = readManifest(join(root, RUNS));
-  precondition(manifeste !== undefined && outil !== undefined, "le run et l'outil doivent exister");
+  const callbacks = new Map<string, (...a: unknown[]) => unknown>();
+  let chargement: Harnais["chargement"] = { ok: true };
+  try {
+    const module = await import(`../extensions/subagent/index.ts?l0b2=${generation}`);
+    module.default({
+      on: (nom: string, cb: (...a: unknown[]) => unknown) => { callbacks.set(nom, cb); },
+      registerTool: (t: unknown) => { outil = t as Harnais["outil"]; },
+      registerCommand: () => {},
+      ui: { setStatus: () => {}, setFooter: () => {} },
+    });
+    if (outil === undefined) chargement = { ok: false, erreur: "aucun outil enregistré" };
+  } catch (e) {
+    chargement = { ok: false, erreur: `${(e as Error).constructor.name}: ${(e as Error).message}` };
+  }
   const runDir = join(root, RUNS);
-  const runId = manifeste!.runId;
+  /*
+   * Le runId se lit dans le fichier, pas par `readManifest` : ce lecteur refuse les
+   * manifestes v2, et le montage n'a pas à dépendre de ce qu'il éprouve.
+   */
+  const brut = existsSync(join(runDir, "active-run.json"))
+    ? (JSON.parse(readFileSync(join(runDir, "active-run.json"), "utf-8")) as { runId?: string })
+    : {};
+  const runId = brut.runId ?? "";
+  precondition(runId !== "", "le manifeste publié doit porter un runId");
+  const refuser = async (): Promise<never> => {
+    throw new Error(`session non ouverte — ${(chargement as { erreur?: string }).erreur}`);
+  };
   const lignes = (nom: string): Array<Record<string, unknown>> => {
     const p = join(runDir, `${runId}-${nom}.jsonl`);
     return existsSync(p)
@@ -121,7 +157,8 @@ async function instancier(root: string): Promise<Harnais> {
       : [];
   };
   return {
-    root, runDir, runId, outil: outil!,
+    root, runDir, runId, chargement,
+    outil: outil ?? { execute: refuser },
     /*
      * Une session neuve suit la mort de la précédente, qui rend son bail.
      *
@@ -130,6 +167,12 @@ async function instancier(root: string): Promise<Harnais> {
      * aucune lane » — et toute preuve « après rechargement » mesurerait ce refus-là au
      * lieu de ce qui survit.
      */
+    emettre: async (nom: string, ...args: unknown[]) => {
+      const cb = callbacks.get(nom);
+      precondition(cb !== undefined, `l'extension doit s'abonner à ${nom}`);
+      return cb!(...args);
+    },
+    abonnements: () => [...callbacks.keys()],
     recharger: async () => {
       const owner = join(runDir, `${runId}.lease`, "owner.json");
       if (existsSync(owner)) {
@@ -143,8 +186,17 @@ async function instancier(root: string): Promise<Harnais> {
   };
 }
 
-/** Un dépôt, son plan gelé, et une première session. `bundle` pose les quatre fichiers gelés. */
-export async function monter(options: { bundle?: boolean } = {}): Promise<Harnais> {
+/**
+ * Un dépôt, son plan gelé, et une première session.
+ *
+ * `bundle` pose les quatre fichiers gelés ; `design` remplace le DESIGN.md par défaut, et
+ * `plan` le plan — B3 en a besoin pour porter `design_update` (C6.1).
+ */
+export async function monter(options: {
+  bundle?: boolean;
+  design?: string;
+  plan?: unknown;
+} = {}): Promise<Harnais> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-l0b2-")));
   jetables.push(root);
   git(root, "init", "-q");
@@ -158,11 +210,12 @@ export async function monter(options: { bundle?: boolean } = {}): Promise<Harnai
     for (const f of ["INSTRUCTIONS.md", "ARCHITECTURE.md", "DESIGN.md", "CONVENTIONS.md"]) {
       writeFileSync(join(root, f), `# ${f}\n`);
     }
+    if (options.design !== undefined) writeFileSync(join(root, "DESIGN.md"), options.design);
   }
   git(root, "add", "-A");
   git(root, "commit", "-qm", "base");
   const h = await instancier(root);
-  writeFileSync(join(h.runDir, `${h.runId}-plan.json`), JSON.stringify(PLAN_B2));
+  writeFileSync(join(h.runDir, `${h.runId}-plan.json`), JSON.stringify(options.plan ?? PLAN_B2));
   return h;
 }
 
