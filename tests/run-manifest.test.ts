@@ -9,11 +9,12 @@
  * identifiant.
  */
 import assert from "node:assert/strict";
+import { copieJetable } from "./l0-lib.ts";
 import { test } from "node:test";
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync,
 } from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1761,4 +1762,135 @@ test("le bail est rendu sur un refus comme sur une panne", () => {
     release: () => { rendus += 1; },
   }), /disque plein/);
   assert.equal(rendus, 2);
+});
+
+/*
+ * La sortie de garde : ce qu'un `finally` a le droit d'écraser, et ce qu'il n'a pas.
+ *
+ * `sousGuardAcquis` porte la sortie des DEUX exclusions. Un `finally` qui lève
+ * substitue silencieusement l'erreur de nettoyage à celle du corps : la panne réelle
+ * disparaît derrière un incident de libération, et le diagnostic porte sur le mauvais
+ * objet. Les deux cas ci-dessous fixent la priorité.
+ *
+ * Le retrait est rendu impossible par INJECTION dans une copie jetable du module, selon
+ * le mécanisme des mutants, et non par une permission refusée : une permission ne refuse
+ * rien à un utilisateur privilégié, et la preuve serait alors verte en conteneur pour
+ * aucune raison. L'injection échoue partout de la même manière.
+ *
+ * Aucune surface d'injection n'est ajoutée à la production : l'original n'est jamais
+ * touché, seule la copie l'est.
+ */
+const ANCRE_RETRAIT = "rmSync(path, { recursive: true, force: true });";
+const RETRAIT_INJECTE = `throw Object.assign(new Error("L0_RETRAIT_INJECTE"), {
+      code: "L0_RETRAIT_INJECTE",
+    });`;
+
+/** Une copie jetable du dépôt dont le retrait de verrou lève, et le chemin du module muté. */
+function copieAuRetraitImpossible(): { copie: string } {
+  const copie = copieJetable(join(import.meta.dirname, ".."));
+  const cible = join(copie, "subagent-only", "run-manifest.ts");
+  const source = readFileSync(cible, "utf-8");
+  const occurrences = source.split(ANCRE_RETRAIT).length - 1;
+  assert.equal(
+    occurrences,
+    1,
+    `PRÉCONDITION — l'ancre d'injection doit apparaître exactement une fois dans ` +
+      `subagent-only/run-manifest.ts, trouvée ${occurrences} fois. Sans elle, ` +
+      `l'injection ne porte sur rien et la propriété serait satisfaite par un ` +
+      `chargement qui échoue ailleurs.`,
+  );
+  const mute = source.replace(ANCRE_RETRAIT, RETRAIT_INJECTE);
+  assert.notEqual(mute, source, "PRÉCONDITION — le module muté doit différer de l'original");
+  writeFileSync(cible, mute);
+  return { copie };
+}
+
+/**
+ * Exerce `withSpaceGuard` dans un enfant frais, sur la copie mutée.
+ *
+ * L'enfant rend un relevé structuré : le rappel a-t-il été atteint, qu'est-ce qui est
+ * sorti, et le verrou est-il resté sur le disque. Le parent n'interprète aucun message.
+ */
+function exercerGardeEspace(copie: string, corps: "abouti" | "en-echec"): {
+  atteint: boolean;
+  sortie: { name: string; message: string; code?: string } | null;
+  valeur?: unknown;
+  verrouRestant: boolean;
+} {
+  const enfant = join(copie, "s4-sortie-de-garde.ts");
+  writeFileSync(
+    enfant,
+    `import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { withSpaceGuard } from "./subagent-only/run-manifest.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "pi-sortie-garde-"));
+const releve = { atteint: false, sortie: null, valeur: undefined, verrouRestant: false };
+try {
+  releve.valeur = withSpaceGuard(dir, () => {
+    releve.atteint = true;
+    ${corps === "en-echec" ? 'throw Object.assign(new Error("ERREUR_CORPS"), { code: "ERREUR_CORPS" });' : 'return "corps-abouti";'}
+  });
+} catch (err) {
+  releve.sortie = { name: err?.constructor?.name, message: String(err?.message), code: err?.code };
+}
+releve.verrouRestant = existsSync(join(dir, ".espace.guard"));
+process.stdout.write(JSON.stringify(releve));
+`,
+  );
+  const p = spawnSync(process.execPath, ["--experimental-strip-types", enfant], {
+    cwd: copie,
+    encoding: "utf-8",
+  });
+  assert.equal(
+    p.status,
+    0,
+    `PRÉCONDITION — l'enfant doit sortir avec le code 0 ; ` +
+      `statut ${String(p.status)}, signal ${String(p.signal)}, ` +
+      `stdout « ${p.stdout.trim().slice(0, 200) || "(vide)"} », ` +
+      `stderr « ${p.stderr.trim().slice(0, 400) || "(vide)"} »`,
+  );
+  assert.ok(
+    p.stdout.trim().startsWith("{"),
+    `PRÉCONDITION — l'enfant doit charger le module muté et rendre un relevé ; ` +
+      `sortie ${p.status}, stdout « ${p.stdout.trim().slice(0, 200) || "(vide)"} », ` +
+      `stderr « ${p.stderr.trim().slice(0, 400)} »`,
+  );
+  return JSON.parse(p.stdout.trim());
+}
+
+test("sousGuardAcquis — corps abouti et retrait impossible : l'échec de libération est explicite", () => {
+  const { copie } = copieAuRetraitImpossible();
+  try {
+    const r = exercerGardeEspace(copie, "abouti");
+
+    assert.ok(r.atteint, "PRÉCONDITION — le rappel doit avoir été atteint, sinon rien n'est éprouvé");
+    assert.ok(r.verrouRestant, "PRÉCONDITION — le verrou doit être resté : c'est ce qui rend le retrait impossible observable");
+
+    assert.ok(r.sortie, "un retrait impossible après un corps abouti doit lever, pas passer en silence");
+    assert.equal(r.sortie.name, "RecoveryError");
+    assert.match(r.sortie.message, /verrou d'espace/);
+    assert.match(r.sortie.message, /L0_RETRAIT_INJECTE/);
+    assert.match(r.sortie.message, /\.espace\.guard/);
+  } finally {
+    rmSync(copie, { recursive: true, force: true });
+  }
+});
+
+test("sousGuardAcquis — corps en échec et retrait impossible : l'erreur du corps reste prioritaire", () => {
+  const { copie } = copieAuRetraitImpossible();
+  try {
+    const r = exercerGardeEspace(copie, "en-echec");
+
+    assert.ok(r.atteint, "PRÉCONDITION — le rappel doit avoir été atteint, sinon rien n'est éprouvé");
+    assert.ok(r.verrouRestant, "PRÉCONDITION — le verrou doit être resté sur le disque");
+    assert.ok(r.sortie, "PRÉCONDITION — quelque chose doit être sorti de la garde");
+
+    assert.equal(r.sortie.code, "ERREUR_CORPS", "l'erreur du corps doit rester l'issue primaire");
+    assert.notEqual(r.sortie.code, "L0_RETRAIT_INJECTE", "le nettoyage ne doit jamais se substituer au corps");
+    assert.doesNotMatch(r.sortie.message, /verrou d'espace non libéré/);
+  } finally {
+    rmSync(copie, { recursive: true, force: true });
+  }
 });

@@ -48,6 +48,38 @@ export class RecoveryError extends Error {}
  */
 export class RunBusyError extends Error {}
 
+/**
+ * Le jeton d'un vestige de transition (C1.10).
+ *
+ * Un verrou dont l'âge dépasse `GUARD_STALE_MS` est un obstacle NOMMÉ, jamais une
+ * autorisation : l'ancienneté seule ne prouve pas l'absence d'un propriétaire
+ * vivant (C1.4). Le refus porte ce code pour qu'un opérateur ET un script le
+ * reconnaissent sans lire une phrase, et la levée appartient à un verbe dédié,
+ * après réconciliation et consentement explicite.
+ */
+export const RUN_TRANSITION_LOCKED = "RUN_TRANSITION_LOCKED";
+
+/**
+ * Un vestige de transition, nommé par son code, et que ce refus ne lève jamais.
+ *
+ * Elle hérite de `RecoveryError` : une réconciliation est due, ce n'est pas une
+ * contention qu'il suffirait de réessayer. `details` porte de quoi décider sans
+ * analyser un message — le verrou, son âge, et le jeton.
+ */
+export class TransitionLockedError extends RecoveryError {
+  /*
+   * Champs déclarés puis assignés, jamais paramètres-propriété : pi lit ce code en
+   * strip-only, où `constructor(readonly x)` n'existe pas.
+   */
+  readonly code: typeof RUN_TRANSITION_LOCKED;
+  readonly details: { code: typeof RUN_TRANSITION_LOCKED; path: string; ageMs: number };
+  constructor(message: string, details: { path: string; ageMs: number }) {
+    super(message);
+    this.code = RUN_TRANSITION_LOCKED;
+    this.details = { code: RUN_TRANSITION_LOCKED, path: details.path, ageMs: details.ageMs };
+  }
+}
+
 export type RunStatus = "planning" | "active" | "completed" | "abandoned";
 
 /**
@@ -1000,6 +1032,103 @@ function pause(ms: number): void {
  * il ne confère aucune propriété. Un vestige de crash devient une reprise à
  * faire, jamais une prise de force — c'est la règle de tout ce chantier.
  */
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * La sortie de garde, commune aux deux exclusions.
+ *
+ * Un `finally` qui lève écrase silencieusement l'erreur du corps : la panne réelle
+ * disparaît derrière un incident de nettoyage, et le diagnostic porte sur le mauvais
+ * objet. La priorité est donc explicite.
+ *
+ * corps abouti, retrait impossible    échec explicite — un faux vestige derrière un
+ *                                     travail abouti ferait refuser la transition
+ *                                     suivante pour une raison qui n'existe pas
+ * corps en échec, retrait impossible  l'erreur du corps demeure prioritaire, et le
+ *                                     verrou resté sur disque rend l'échec de
+ *                                     libération durablement observable
+ */
+function sousGuardAcquis<T>(path: string, label: string, fn: () => T): T {
+  let sortieNormale = false;
+  try {
+    const resultat = fn();
+    sortieNormale = true;
+    return resultat;
+  } finally {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch (err) {
+      if (sortieNormale) {
+        throw new RecoveryError(`${label} non libéré (${path}) : ${messageOf(err)}`);
+      }
+      /*
+       * Rien ici, et c'est délibéré : l'erreur du corps continue de se propager.
+       */
+    }
+  }
+}
+
+/**
+ * L'exclusion de l'espace de runs — clé N, et non R.
+ *
+ * Une succession met en jeu DEUX runs : celui qui finit et celui qui naît. Un verrou
+ * nommé par l'un d'eux ne les exclut pas l'un de l'autre, et c'est exactement
+ * A-P1-F01. Le verrou porte donc l'espace, pas le run, et toute transition terminale
+ * passera par lui.
+ *
+ * Le vestige s'y reconnaît comme ailleurs : nommé, jamais levé.
+ */
+const N_GUARD = ".espace.guard";
+
+/*
+ * C1.2 — « l'exclusion de N englobe celle de R, jamais l'inverse » — n'est PAS gardée
+ * par un mécanisme ici.
+ *
+ * Un compteur global de profondeur rendrait l'inversion impossible, mais `withRunGuard`
+ * est privé : aucune preuve publique ne pourrait l'atteindre, et une garde qu'aucune
+ * preuve n'atteint est décorative. Un compteur global mesurerait par ailleurs une
+ * profondeur d'appel interne, pas l'ordre effectivement tenu entre deux processus ; il
+ * ne prouverait donc pas C1.2 et pourrait créer des refus sans rapport avec la
+ * possession réelle des verrous.
+ *
+ * L'ordre est imposé là où il se joue — la primitive terminale de l'étape 3 écrit
+ * `withSpaceGuard(dir, () => withRunGuard(dir, runId, …))` — et il est ÉPROUVÉ par la
+ * concurrence publique `A-P1-F01-concurrence`, dont le mutant inverse les deux gardes.
+ * L'invariant se mesure ainsi au lieu de se décréter.
+ */
+export function withSpaceGuard<T>(dir: string, fn: () => T): T {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, N_GUARD);
+  const limite = Date.now() + GUARD_WAIT_MS;
+  for (;;) {
+    try {
+      mkdirSync(path);
+      break;
+    } catch (err) {
+      if ((err as { code?: string })?.code !== "EEXIST") throw err;
+      const depuis = ageOf(path);
+      if (depuis > GUARD_STALE_MS) {
+        throw new TransitionLockedError(
+          `${RUN_TRANSITION_LOCKED} : une transition de l'espace de runs est restée ` +
+            `inachevée (${path}, ${Math.round(depuis / 1000)} s) : réconcilier avant de ` +
+            `reprendre. Ce refus ne lève rien — ni le verrou, ni une lane, ni un registre.`,
+          { path, ageMs: Math.round(depuis) },
+        );
+      }
+      if (Date.now() > limite) {
+        throw new RunBusyError(
+          `une transition de l'espace de runs est en cours depuis ${Math.round(depuis)} ms : ` +
+            `réessayer`,
+        );
+      }
+      pause(2);
+    }
+  }
+  return sousGuardAcquis(path, "verrou d'espace", fn);
+}
+
 function withRunGuard<T>(dir: string, runId: string, fn: () => T): T {
   mkdirSync(dir, { recursive: true });
   const path = guardPath(dir, runId);
@@ -1020,9 +1149,11 @@ function withRunGuard<T>(dir: string, runId: string, fn: () => T): T {
        */
       const depuis = ageOf(path);
       if (depuis > GUARD_STALE_MS) {
-        throw new RecoveryError(
-          `une transition de ${runId} est restée inachevée (${path}, ` +
-            `${Math.round(depuis / 1000)} s) : réconcilier avant de reprendre`,
+        throw new TransitionLockedError(
+          `${RUN_TRANSITION_LOCKED} : une transition de ${runId} est restée inachevée ` +
+            `(${path}, ${Math.round(depuis / 1000)} s) : réconcilier avant de reprendre. ` +
+            `Ce refus ne lève rien — ni le verrou, ni une lane, ni un registre.`,
+          { path, ageMs: Math.round(depuis) },
         );
       }
       if (Date.now() > limite) {
@@ -1033,11 +1164,7 @@ function withRunGuard<T>(dir: string, runId: string, fn: () => T): T {
       pause(2);
     }
   }
-  try {
-    return fn();
-  } finally {
-    rmSync(path, { recursive: true, force: true });
-  }
+  return sousGuardAcquis(path, "verrou de run", fn);
 }
 
 function leaseDir(dir: string, runId: string): string {
