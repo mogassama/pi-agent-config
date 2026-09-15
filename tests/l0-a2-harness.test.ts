@@ -30,6 +30,13 @@ const REPO = join(import.meta.dirname, "..");
 function regression(id: string, titre: string, fn: () => Promise<void> | void): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`.
+ * Elle est verte sur l'objet corrigé, et elle porte un mutant qui réintroduit le défaut.
+ */
+function regressionCorrigee(id: string, titre: string, fn: () => Promise<void> | void): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function couverture(id: string, titre: string, fn: () => Promise<void> | void): void {
   test(`L0 COUV ${id} — ${titre}`, fn);
 }
@@ -161,7 +168,7 @@ const registreBrut = (h: { runDir: string; runId: string }): string => {
 const branches = (root: string): string[] =>
   git(root, "branch", "--format=%(refname:short)").split("\n").filter(Boolean).sort();
 
-regression("C-P1-F10", "un verrou de transition périmé produit un refus nommé, sans rien muter", async () => {
+regressionCorrigee("C-P1-F10", "un verrou de transition périmé produit un refus nommé, sans rien muter", async () => {
   const h = await vestige(false);
   try {
     const avant = APPELS.length;
@@ -188,7 +195,7 @@ regression("C-P1-F10", "un verrou de transition périmé produit un refus nommé
   } finally { h.fin(); }
 });
 
-regression("C-P1-F10", "subagent-recover cleanup --apply refuse le même vestige sans rien nettoyer", async () => {
+regressionCorrigee("C-P1-F10", "subagent-recover cleanup --apply refuse le même vestige sans rien nettoyer", async () => {
   const h = await vestige(true);
   try {
     const brancheAvant = branches(h.root);

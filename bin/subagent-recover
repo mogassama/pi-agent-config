@@ -48,6 +48,7 @@ import {
   terminerRun,
   releaseRunOwnership,
   takeOverRun,
+  TransitionLockedError,
 } from "../subagent-only/run-manifest.ts";
 import { describeConflicts } from "../subagent-only/lane-ledger.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
@@ -478,16 +479,40 @@ if (args[0] === "cleanup") {
   const sessionCleanup = `recover-${process.pid}`;
   let leaseC;
   let bilanCleanup;
+  /*
+   * Un vestige de transition doit se LIRE, pas se décortiquer.
+   *
+   * Laissé remonter, il tue le processus sur une exception nue : l'opérateur reçoit une
+   * pile de frames, où le jeton se noie et où rien ne dit quoi faire. Le refus porte donc
+   * le message seul, et le code de sortie dit l'échec. Rien n'est nettoyé — c'est l'objet
+   * même de ce refus (C1.10).
+   */
   const resultatCleanup = decideUnderLease({
     acquire: () => {
-      const pris = acquireRunOwnership(dir, runId, sessionCleanup);
-      if (pris.ok) leaseC = pris.lease;
-      else if (pris.kind === "recovery-required") {
-        console.log("  bail périmé : reprise explicite");
-        leaseC = takeOverRun(dir, runId, sessionCleanup);
-      } else {
-        console.error("  le run est tenu par une autre session ; réessayer plus tard.");
-        process.exit(1);
+      try {
+        const pris = acquireRunOwnership(dir, runId, sessionCleanup);
+        if (pris.ok) leaseC = pris.lease;
+        else if (pris.kind === "recovery-required") {
+          console.log("  bail périmé : reprise explicite");
+          leaseC = takeOverRun(dir, runId, sessionCleanup);
+        } else {
+          console.error("  le run est tenu par une autre session ; réessayer plus tard.");
+          process.exit(1);
+        }
+      } catch (err) {
+        /*
+         * Cette affirmation ne vaut que dans le rappel d'acquisition : ni la prise
+         * ordinaire ni une reprise de bail n'a permis d'entrer dans la phase d'action,
+         * donc aucun plan de nettoyage n'a pu être appliqué. Capturer autour de tout
+         * `decideUnderLease` pourrait transformer en « rien n'a été nettoyé » un vestige
+         * levé après une action partielle ou pendant la libération.
+         */
+        if (err instanceof TransitionLockedError) {
+          console.error(err.message);
+          console.error("  aucun nettoyage n'a été appliqué, et le vestige n'a pas été levé.");
+          process.exit(1);
+        }
+        throw err;
       }
     },
     reread: () => planDeNettoyage(),

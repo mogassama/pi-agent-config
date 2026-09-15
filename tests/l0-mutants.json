@@ -106,5 +106,17 @@
     "file": "subagent-only/run-manifest.ts",
     "find": "  if (courant.status === \"completed\" || courant.status === \"abandoned\") {\n    throw new RecoveryError(\n      `${quoi} : le run ${lease.runId} est terminal (${courant.status}) ; ` +\n        `C4.6 interdit toute mutation de registre après terminaison.`,\n    );\n  }",
     "replace": "  if (false) {\n    throw new RecoveryError(\n      `${quoi} : le run ${lease.runId} est terminal (${courant.status}) ; ` +\n        `C4.6 interdit toute mutation de registre après terminaison.`,\n    );\n  }"
+  },
+  {
+    "test": "L0 REG C-P1-F10 — un verrou de transition périmé produit un refus nommé, sans rien muter",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (err instanceof TransitionLockedError) {\n      LEASE = undefined;\n      publishRun();",
+    "replace": "    if (false) {\n      LEASE = undefined;\n      publishRun();"
+  },
+  {
+    "test": "L0 REG C-P1-F10 — subagent-recover cleanup --apply refuse le même vestige sans rien nettoyer",
+    "file": "bin/subagent-recover",
+    "find": "        if (err instanceof TransitionLockedError) {\n          console.error(err.message);",
+    "replace": "        if (false) {\n          console.error(err.message);"
   }
 ]

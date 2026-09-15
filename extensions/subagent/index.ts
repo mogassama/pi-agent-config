@@ -31,6 +31,7 @@ import { anySignal } from "../../subagent-only/signals.js";
 import { RUN_STATUS_KEY, type RunSnapshot } from "../../subagent-only/run-state.js";
 import {
   RecoveryError,
+  TransitionLockedError,
   RunBusyError,
   LANE_LEDGER_VERSION,
   acquireRunOwnership,
@@ -202,7 +203,29 @@ function baseCommit(): string | undefined {
  */
 function ensureOwnership(): { lease: Lease } | { refus: string } {
   if (LEASE && ownsRun(RUN_DIR, LEASE)) return { lease: LEASE };
-  const pris = acquireRunOwnership(RUN_DIR, RUN_ID, SESSION_ID);
+  /*
+   * Un vestige de transition sort d'ici en EXCEPTION, et une exception nue traverse
+   * l'outil : l'orchestrateur reçoit une pile au lieu d'un refus, et ne sait pas quoi
+   * faire. Le jeton est pourtant ce qui permet à un humain ET à un script de décider.
+   *
+   * Le refus est donc structuré comme les autres, et il ne lève rien — le vestige reste
+   * sur le disque, et sa levée appartient à une réconciliation explicite (C1.10).
+   */
+  let pris;
+  try {
+    pris = acquireRunOwnership(RUN_DIR, RUN_ID, SESSION_ID);
+  } catch (err) {
+    if (err instanceof TransitionLockedError) {
+      LEASE = undefined;
+      publishRun();
+      return {
+        refus:
+          `[run: réconciliation requise] ${err.message}\n` +
+          `Rien n'a été réservé, ouvert ni lancé, et le vestige n'a pas été levé.`,
+      };
+    }
+    throw err;
+  }
   if (!pris.ok) {
     LEASE = undefined;
     publishRun();
