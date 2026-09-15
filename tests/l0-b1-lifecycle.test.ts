@@ -5,9 +5,11 @@
  * `l0-b1-registres.test.ts`, et suivent donc dans l'ordre interne du lot.
  *
  * La surface publique du verbe de fin est le dispatcher existant,
- * `bin/subagent-recover`, appelé avec le nouveau verbe. Pas d'import d'un symbole
- * futur : un import manquant rougirait au chargement, et le rouge ne dirait plus
- * rien sur le comportement. `issue()` n'entoure que cet appel.
+ * `bin/subagent-recover`, appelé avec le nouveau verbe. C4.6 vise toutefois les
+ * écrivains autoritaires exportés eux-mêmes : une garde limitée au dispatcher serait
+ * contournable par un nouvel appelant. Pas d'import d'un symbole futur : un import
+ * manquant rougirait au chargement, et le rouge ne dirait plus rien sur le comportement.
+ * `issue()` n'entoure que l'appel éprouvé.
  *
  * Les fixtures viennent de `l0-b1-fixtures.ts` : manifeste v2, registre v2, unités
  * intégrées réellement mergées dans git et privées de leur worktree.
@@ -20,7 +22,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { acquireRunOwnership, setStatus } from "../subagent-only/run-manifest.ts";
+import {
+  acquireRunOwnership, appendIntegrationEvent, appendLaneEvent, setStatus,
+} from "../subagent-only/run-manifest.ts";
 import { openLanes } from "../subagent-only/worktree.ts";
 import {
   aJeter, AT, cheminIntegrations, cheminLanes, GUARD_STALE_MS, manifeste, RUN, runEcrit,
@@ -279,7 +283,7 @@ regression("C1.8-preconditions", "chaque précondition manquante refuse la fin, 
   );
 });
 
-regression("C1.8-abandoned", "abandoned exige une raison, aucun propriétaire vivant, et dit ce qu'il conserve", () => {
+regressionCorrigee("C1.8-abandoned", "abandoned exige une raison, aucun propriétaire vivant, et dit ce qu'il conserve", () => {
   const sansRaison = runEcrit("l0-b1-ab-sans-", [{ unite: "W03", ouverte: true }]);
   const i1 = issue(() => recover(sansRaison.root, "run", "abandoned"));
   precondition(i1.kind === "returned", "le dispatcher doit répondre sans raison");
@@ -325,7 +329,7 @@ regression("C1.8-abandoned", "abandoned exige une raison, aucun propriétaire vi
   );
 });
 
-regression("C1.8-idempotence", "une fin rejouée sur une archive identique aboutit sans la réécrire", () => {
+regressionCorrigee("C1.8-idempotence", "une fin rejouée sur une archive identique aboutit sans la réécrire", () => {
   const r = runEcrit("l0-b1-idem-fin-", [{ unite: "W03", integree: true }]);
   const avant = lireJson(join(r.dir, "active-run.json"))!;
   /*
@@ -356,7 +360,7 @@ regression("C1.8-idempotence", "une fin rejouée sur une archive identique about
 
 // ================================================================== A-P1-F01 — succession
 
-regression("A-P1-F01-reprise", "un manifeste terminal publié sans archive est repris et archivé", () => {
+regressionCorrigee("A-P1-F01-reprise", "un manifeste terminal publié sans archive est repris et archivé", () => {
   const r = runEcrit("l0-b1-succ-a-", [{ unite: "W03", integree: true }]);
   const avant = lireJson(join(r.dir, "active-run.json"))!;
   // Le crash de C1.9 : terminal publié, archive pas encore écrite. Tous les champs
@@ -505,28 +509,61 @@ regression("A-P1-F01-succession", "le successeur ne devient courant qu'après l'
   );
 });
 
-regression("C4.6", "un run terminé n'accepte plus aucune mutation de registre", () => {
-  const r = runEcrit("l0-b1-fige-", [{ unite: "W03", integree: true }, { unite: "W09", ouverte: true }]);
-  const fin = issue(() => recover(r.root, "run", "abandoned", "--reason", "gel"));
-  precondition(fin.kind === "returned", "la fin doit rendre une sortie");
-  const terminee = aAbouti(sortieDe(fin)) && archives(r.dir).length === 1 && !actif(r.dir);
-  const archive = terminee ? join(r.dir, archives(r.dir)[0]) : undefined;
-  const marqueArchive = archive ? empreinte(archive) : "—";
-  const registreAvant = readFileSync(cheminLanes(r.dir), "utf-8");
-  const seqAvant = (lireJson(archive ?? join(r.dir, "active-run.json")) ?? {}).nextSeq;
+regressionCorrigee("C4.6", "un run terminé n'accepte plus aucune mutation de registre", () => {
+  /*
+   * Manifeste et registre v1, délibérément : C4.6 est indépendant de leur version.
+   * Le montage atteint ainsi les écrivains autoritaires sans que le refus du lecteur v2
+   * puisse masquer la garde terminale. Un terminal v1 encore actif est un état historique
+   * réel : avant la fermeture du setter, `setStatus` pouvait le produire sans `ended`.
+   */
+  const r = runEcrit(
+    "l0-b1-fige-",
+    [{ unite: "W03", integree: true }, { unite: "W09", ouverte: true }],
+    { ledger: 1, manifesteV1: true },
+  );
+  const actif = join(r.dir, "active-run.json");
+  const courant = lireJson(actif)!;
+  writeFileSync(actif, `${JSON.stringify({ ...courant, status: "abandoned" }, null, 2)}\n`);
+  precondition(
+    lireJson(actif)?.status === "abandoned",
+    "le manifeste v1 doit être terminal et encore actif avant les deux écritures éprouvées",
+  );
 
-  const apresCoup = issue(() => recover(r.root, "W09", "abandoned"));
-  precondition(apresCoup.kind === "returned", "la tentative de mutation doit rendre une sortie");
-  const seqApres = (lireJson(archive ?? join(r.dir, "active-run.json")) ?? {}).nextSeq;
+  const pris = acquireRunOwnership(r.dir, RUN, "session-apres-fin");
+  precondition(pris.ok, "une capacité doit être obtenue : C4.6 doit refuser malgré elle");
+  const bail = pris.ok ? pris.lease : undefined;
+
+  const manifesteAvant = readFileSync(actif, "utf-8");
+  const registreAvant = readFileSync(cheminLanes(r.dir), "utf-8");
+  const integrationAvant = existsSync(cheminIntegrations(r.dir))
+    ? readFileSync(cheminIntegrations(r.dir), "utf-8")
+    : "(absent)";
+
+  const lane = issue(() => appendLaneEvent(
+    r.dir,
+    { event: "ABANDONED", work_unit: "W09", at: AT, reason: "après terminaison" },
+    bail!,
+  ));
+  const integration = issue(() => appendIntegrationEvent(
+    r.dir,
+    {
+      event: "ATTEMPT_OPENED", id: `${RUN}-W09-99`, work_unit: "W09", seq: 99,
+      p1: "a".repeat(40), p2: "b".repeat(40), conflicts: ["src/W09.py"], at: AT,
+    },
+    bail!,
+  ));
   const intact =
+    readFileSync(actif, "utf-8") === manifesteAvant &&
     readFileSync(cheminLanes(r.dir), "utf-8") === registreAvant &&
-    (archive ? empreinte(archive) === marqueArchive : false) &&
-    seqApres === seqAvant;
+    (existsSync(cheminIntegrations(r.dir))
+      ? readFileSync(cheminIntegrations(r.dir), "utf-8")
+      : "(absent)") === integrationAvant;
 
   propriete(
-    terminee && aRefuse(sortieDe(apresCoup)) && intact,
-    `terminé ${terminee} · mutation refusée ${aRefuse(sortieDe(apresCoup))} · archive, registre ` +
-      `et séquence intacts ${intact}`,
+    lane.kind === "threw" && integration.kind === "threw" && intact,
+    `les deux registres autoritaires doivent refuser sous une capacité pourtant valide : ` +
+      `lanes ${montrer(lane)} · intégrations ${montrer(integration)} · manifeste et registres ` +
+      `intacts ${intact}`,
   );
 });
 

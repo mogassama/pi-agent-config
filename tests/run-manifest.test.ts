@@ -1975,16 +1975,18 @@ test("terminerRun — une fin explicite archive, libère active-run.json, et pr�
     assert.equal(m.version, 2, "PRÉCONDITION — le run doit naître en v2");
     assert.ok(existsSync(join(dir, "active-run.json")), "PRÉCONDITION — le manifeste actif doit être là");
 
-    const terminal = terminerRun(dir, m.runId, { by: "operator", outcome: "completed" });
+    const terminal = terminerRun(dir, m.runId, {
+      by: "operator", outcome: "abandoned", reason: "preuve de mécanique terminale",
+    });
 
-    assert.equal(terminal.status, "completed");
-    assert.equal(terminal.ended?.outcome, "completed");
+    assert.equal(terminal.status, "abandoned");
+    assert.equal(terminal.ended?.outcome, "abandoned");
     assert.equal(terminal.ended?.by, "operator");
     assert.deepEqual(terminal.ledgers, { lanes: 2 }, "les registres attestés doivent survivre à la fin");
     assert.equal(existsSync(join(dir, "active-run.json")), false, "active-run.json doit être libéré");
 
     const archive = JSON.parse(readFileSync(archivePath(dir, m.runId), "utf-8"));
-    assert.equal(archive.status, "completed");
+    assert.equal(archive.status, "abandoned");
     assert.equal(archive.ended.by, "operator");
     assert.deepEqual(archive.ledgers, { lanes: 2 });
   } finally {
@@ -2040,7 +2042,7 @@ test("terminerRun — un abandon exige sa raison, et l'abandon motivé aboutit",
   }
 });
 
-test("terminerRun — continuation_block interdit d'aboutir, jamais d'abandonner, et ne modifie rien", () => {
+test("terminerRun — continuation_block interdit d'aboutir, l'abandon reste ouvert, et completed demeure fail-closed", () => {
   const bloc = { at: "2026-09-14T08:00:00.000Z", code: "RUN_CONTINUATION_BLOCKED" } as const;
 
   const refus = runTerminable({ continuation_block: bloc });
@@ -2067,7 +2069,13 @@ test("terminerRun — continuation_block interdit d'aboutir, jamais d'abandonner
 
   const sansBloc = runTerminable();
   try {
-    assert.equal(terminerRun(sansBloc.dir, sansBloc.m.runId, { by: "operator", outcome: "completed" }).status, "completed");
+    const avant = actifBrut(sansBloc.dir);
+    assert.throws(
+      () => terminerRun(sansBloc.dir, sansBloc.m.runId, { by: "operator", outcome: "completed" }),
+      /vérification métier de completed indisponible.*registre des lanes v2/s,
+    );
+    assert.equal(actifBrut(sansBloc.dir), avant, "le refus transitoire ne modifie pas le manifeste");
+    assert.equal(existsSync(archivePath(sansBloc.dir, sansBloc.m.runId)), false, "le refus transitoire n'archive rien");
   } finally {
     sansBloc.done();
   }
@@ -2093,7 +2101,12 @@ test("terminerRun — un manifeste v1 n'est pas terminable, et le v2 équivalent
 
   const v2 = runTerminable();
   try {
-    assert.equal(terminerRun(v2.dir, v2.m.runId, { by: "operator", outcome: "completed" }).status, "completed");
+    assert.equal(
+      terminerRun(v2.dir, v2.m.runId, {
+        by: "operator", outcome: "abandoned", reason: "preuve de version",
+      }).status,
+      "abandoned",
+    );
   } finally {
     v2.done();
   }
@@ -2102,7 +2115,9 @@ test("terminerRun — un manifeste v1 n'est pas terminable, et le v2 équivalent
 test("publication exclusive — une archive contradictoire est refusée, une archive identique n'est pas réécrite", () => {
   const a = runTerminable();
   try {
-    const terminal = terminerRun(a.dir, a.m.runId, { by: "operator", outcome: "completed" });
+    const terminal = terminerRun(a.dir, a.m.runId, {
+      by: "operator", outcome: "abandoned", reason: "preuve de publication",
+    });
     const chemin = archivePath(a.dir, terminal.runId);
     const posee = readFileSync(chemin, "utf-8");
     const avantId = identite(chemin);
@@ -2120,7 +2135,9 @@ test("publication exclusive — une archive contradictoire est refusée, une arc
 
   const b = runTerminable();
   try {
-    const terminal = terminerRun(b.dir, b.m.runId, { by: "operator", outcome: "completed" });
+    const terminal = terminerRun(b.dir, b.m.runId, {
+      by: "operator", outcome: "abandoned", reason: "preuve de publication",
+    });
     const chemin = archivePath(b.dir, terminal.runId);
     const posee = readFileSync(chemin, "utf-8");
     const avantId = identite(chemin);
@@ -2200,7 +2217,9 @@ const releve = {
 };
 
 try {
-  terminerRun(dir, manifest.runId, { by: "operator", outcome: "completed" });
+  terminerRun(dir, manifest.runId, {
+    by: "operator", outcome: "abandoned", reason: "preuve de mécanique terminale",
+  });
 } catch (err) {
   releve.erreur = { name: err?.constructor?.name, message: String(err?.message), code: err?.code };
 }
@@ -2216,7 +2235,9 @@ releve.archive.existe = existsSync(arch);
 if (releve.archive.existe) releve.archive.contenu = readFileSync(arch, "utf-8");
 
 try {
-  terminerRun(dir, manifest.runId, { by: "operator", outcome: "completed" });
+  terminerRun(dir, manifest.runId, {
+    by: "operator", outcome: "abandoned", reason: "preuve de mécanique terminale",
+  });
 } catch (err) {
   releve.rejeu = { name: err?.constructor?.name, message: String(err?.message) };
 }
@@ -2254,7 +2275,7 @@ test("terminerRun — interrompu entre le terminal et l'archive : le terminal es
     assert.equal(r.erreur.code, "L0_CRASH_PUBLICATION", "et échouer là, pas ailleurs");
 
     assert.ok(r.actif.existe, "active-run.json doit être resté : c'est la fenêtre terminal → link → unlink");
-    assert.equal(r.actif.status, "completed", "et être durablement terminal");
+    assert.equal(r.actif.status, "abandoned", "et être durablement terminal");
     assert.equal(r.actif.aEnded, true, "avec sa fin posée");
     assert.equal(r.archive.existe, false, "aucune archive ne doit exister");
 
@@ -2282,7 +2303,7 @@ test("publication exclusive — sans lien physique, le repli copie et VÉRIFIE, 
     assert.equal(r.actif.existe, false, "active-run.json doit être libéré comme par le chemin nominal");
     assert.ok(r.archive.existe, "l'archive doit avoir été posée par le repli");
     const archive = JSON.parse(r.archive.contenu ?? "");
-    assert.equal(archive.status, "completed");
+    assert.equal(archive.status, "abandoned");
     assert.equal(archive.ended.by, "operator");
   } finally {
     rmSync(complet, { recursive: true, force: true });
@@ -2298,7 +2319,7 @@ test("publication exclusive — sans lien physique, le repli copie et VÉRIFIE, 
     assert.ok(r.erreur, "une copie partielle ne doit pas passer pour une archive");
     assert.match(r.erreur.message, /archive non vérifiée après copie exclusive/);
     assert.ok(r.actif.existe, "le manifeste terminal actif reste présent");
-    assert.equal(r.actif.status, "completed");
+    assert.equal(r.actif.status, "abandoned");
     assert.ok(r.archive.existe, "la destination incomplète n'est pas effacée : elle est un obstacle à réconcilier");
     assert.notEqual(r.archive.contenu, r.actif.brut, "et elle n'est ni acceptée ni complétée");
     assert.ok(r.rejeu, "la reprise doit refuser");
@@ -2389,7 +2410,9 @@ releaseRunOwnership(dir, pris.lease);
 
 const journal = join(dir, "journal.txt");
 process.env.L0_JOURNAL = journal;
-terminerRun(dir, manifest.runId, { by: "operator", outcome: "completed" });
+terminerRun(dir, manifest.runId, {
+  by: "operator", outcome: "abandoned", reason: "preuve d'ordre durable",
+});
 
 const lignes = readFileSync(journal, "utf-8").trim().split("\\n")
   .map((l) => l

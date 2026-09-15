@@ -45,6 +45,7 @@ import {
   migrateLaneLedger,
   readLaneEvents,
   readManifest,
+  terminerRun,
   releaseRunOwnership,
   takeOverRun,
 } from "../subagent-only/run-manifest.ts";
@@ -593,6 +594,67 @@ function refusDeVerbe(verbe, cible, snapshot, lanes) {
       "  trancher d'abord l'état de la lane : bin/subagent-recover";
   }
   return null;
+}
+
+/*
+ * Les verbes de fin de run, et rien de plus.
+ *
+ * ADAPTATEUR, PAS POLITIQUE. Ce bloc lit deux arguments, construit la demande, appelle la
+ * primitive et rend un code de sortie. Il n'observe NI les lanes, NI les intégrations, NI
+ * la racine : elles seront intégrées à la primitive avec le lecteur v2 des lanes, dans la
+ * section critique N → R. Les faire ici serait un TOCTOU — entre ce qu'on aurait vu et ce
+ * que la transition écrirait, une autre session peut tout changer.
+ *
+ * SANS ANNOTATION, et ce n'est pas une convention de style : node n'applique pas le retrait
+ * des types à un fichier SANS EXTENSION. Une annotation ici ne se compile pas — elle casse
+ * au chargement, même si le shim S4 l'accepte. Le binaire ne porte donc que l'adaptation de
+ * commande, en JavaScript ; toute politique métier vit dans un module .ts du canal principal.
+ *
+ * La primitive refuse elle-même toute PREMIÈRE fin `completed` tant que le lecteur v2 du
+ * registre des lanes n'est pas disponible. Ce refus ne dépend d'aucun argument ni callback
+ * fourni par l'appelant. La reprise d'une fin déjà durable reste ouverte ; `abandoned` est
+ * pleinement fonctionnel.
+ */
+if (args[0] === "run") {
+  const verbe = args[1];
+  const VERBES_DE_FIN = new Set(["completed", "abandoned"]);
+  if (!verbe || !VERBES_DE_FIN.has(verbe)) {
+    console.error("usage : bin/subagent-recover run completed | abandoned --reason <raison>");
+    process.exit(1);
+  }
+
+  const courant = readManifest(dir);
+  if (!courant) {
+    console.error("aucun run actif : il n'y a pas de fin à poser.");
+    process.exit(1);
+  }
+
+  try {
+    /*
+     * L'objet est construit DANS l'appel : en JavaScript, une variable intermédiaire ferait
+     * inférer `outcome: string` au shim S4, qui n'est pas assignable à l'union attendue —
+     * un diagnostic nouveau, donc un refus. Le typage contextuel de l'argument l'évite.
+     */
+    const terminal = terminerRun(dir, courant.runId, {
+      by: valeurOption("--by") ?? "operator",
+      outcome: verbe === "completed" ? "completed" : "abandoned",
+      reason: valeurOption("--reason"),
+    });
+    console.log(`run ${terminal.runId} : ${terminal.status}`);
+    console.log(`  posée le ${terminal.ended?.at} par ${terminal.ended?.by}`);
+    if (terminal.ended?.reason) console.log(`  raison : ${terminal.ended.reason}`);
+    console.log(`  archive : ${terminal.runId}-run.json`);
+    console.log("  active-run.json libéré : le run suivant peut naître.");
+    process.exit(0);
+  } catch (e) {
+    /*
+     * Le message seul, jamais la trace : C1.8-trace veut qu'un refus se lise, pas qu'il
+     * se décortique. La trace brute dirait où le code a échoué, pas ce que l'opérateur
+     * doit faire.
+     */
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  }
 }
 
 if (args[0] === "attempt") {

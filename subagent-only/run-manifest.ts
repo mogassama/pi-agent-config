@@ -706,8 +706,8 @@ export interface FinDemandee {
  * Quatre temps, dans cet ordre et sans entrelacement possible :
  *
  *   validation structurelle tout ce que cette étape contrôle est prouvé avant la
- *                           première écriture ; les préconditions métier de `completed`
- *                           viennent à l'étape 6, dans la même section critique
+ *                           première écriture ; une première fin `completed` reste
+ *                           fermée jusqu'au lecteur v2 du registre des lanes
  *   manifeste terminal      écrit durablement dans active-run.json, `ledgers` et
  *                           `continuation_block` préservés
  *   publication exclusive   l'archive est posée sans jamais remplacer
@@ -724,7 +724,11 @@ export interface FinDemandee {
  * Sur un run DÉJÀ terminal, la primitive ne termine pas une seconde fois : elle REPREND
  * la transition interrompue, sans réécrire la fin déjà posée. Voir la section Reprise.
  */
-export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunManifest {
+export function terminerRun(
+  dir: string,
+  runId: string,
+  fin: FinDemandee,
+): RunManifest {
   const quoi = `terminer ${runId} en ${fin.outcome}`;
   return withSpaceGuard(dir, () =>
     withRunGuard(dir, runId, () => {
@@ -733,9 +737,11 @@ export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunMa
        *
        * Identité du run, absence de propriétaire, version, raison et
        * `continuation_block` sont contrôlés avant toute écriture. Les préconditions
-       * MÉTIER de `completed` seront ajoutées à l'étape 6, dans cette même section
-       * critique N → R et avant `writeManifest` — jamais avant l'acquisition, jamais
-       * dans un préfiltre du dispatcher.
+       * MÉTIER de `completed` seront intégrées avec le lecteur v2 du registre des lanes,
+       * dans cette même section critique N → R et avant `writeManifest` — jamais avant
+       * l'acquisition, jamais dans un préfiltre du dispatcher. Jusque-là, une première
+       * transition `completed` refuse fail-closed ; seule la reprise d'une fin déjà
+       * durable peut conclure sa publication.
        */
       const courant = readManifest(dir);
       if (!courant || courant.runId !== runId) {
@@ -854,6 +860,23 @@ export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunMa
             `${courant.continuation_block.at} — un run dont la garde d'écriture a été ` +
             `contournée ne peut pas être déclaré abouti. L'abandon motivé reste ouvert. ` +
             `Ce refus ne modifie rien.`,
+        );
+      }
+
+      /*
+       * ---- 1 bis. première transition `completed` indisponible ----
+       *
+       * La politique métier ne peut être correctement intégrée avant que le registre
+       * autoritaire des lanes v2 soit reconstructible. Le refus vit DANS la primitive :
+       * aucun appelant ne peut le contourner en fournissant un faux vérificateur. Quand
+       * le lecteur v2 arrivera, ce bloc sera remplacé par les six contrôles, exécutés ici
+       * sous N → R et avant toute écriture. La reprise d'une fin déjà durable a rendu
+       * plus haut et ne recalcule pas ses préconditions historiques.
+       */
+      if (fin.outcome === "completed") {
+        throw new RecoveryError(
+          `${quoi} : vérification métier de completed indisponible tant que le registre ` +
+            `des lanes v2 n'est pas reconstructible. Ce refus ne modifie rien.`,
         );
       }
 
@@ -1752,6 +1775,31 @@ function assertOwner(dir: string, lease: Lease, quoi: string): void {
     throw new NotOwnerError(
       `${quoi} demande le bail courant de ${lease.runId} ; celui présenté ne l'est plus. ` +
         `Lire reste possible, muter non.`,
+    );
+  }
+
+  /*
+   * La capacité prouve QUI peut muter ; elle ne prouve pas que le run est encore
+   * mutable. Un terminal peut rester actif après une coupure entre sa publication et
+   * l'unlink, et un ancien manifeste v1 a pu être rendu terminal par le setter
+   * historique. Dans les deux cas, C4.6 interdit toute nouvelle écriture de registre.
+   *
+   * Cette garde vit au point commun des mutateurs autoritaires, pas dans un dispatcher :
+   * `appendLaneEvent`, `appendIntegrationEvent`, la migration et les mutateurs du
+   * manifeste passent tous par `assertOwner`. Un nouvel appelant ne peut donc pas la
+   * contourner en évitant `bin/subagent-recover`.
+   */
+  const courant = readManifest(dir);
+  if (!courant || courant.runId !== lease.runId) {
+    throw new RecoveryError(
+      `${quoi} : le manifeste courant de ${lease.runId} est absent ou différent. ` +
+        `L'état mutable n'est pas reconstructible ; aucune écriture n'est autorisée.`,
+    );
+  }
+  if (courant.status === "completed" || courant.status === "abandoned") {
+    throw new RecoveryError(
+      `${quoi} : le run ${lease.runId} est terminal (${courant.status}) ; ` +
+        `C4.6 interdit toute mutation de registre après terminaison.`,
     );
   }
 }

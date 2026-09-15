@@ -44,8 +44,8 @@
   {
     "test": "L0 PRES C1.8-trace — un verbe inconnu refuse proprement, sans trace brute",
     "file": "bin/subagent-recover",
-    "find": "const ACTIONS = new Set([\"adopt\", \"integrated\", \"abandoned\", \"discard\"]);",
-    "replace": "const ACTIONS = new Set([\"adopt\", \"integrated\", \"abandoned\", \"discard\"]);\nif (action && !ACTIONS.has(action)) throw new Error(`mutant C1.8-trace : verbe inconnu ${action}`);"
+    "find": "    console.error(\"usage : bin/subagent-recover run completed | abandoned --reason <raison>\");",
+    "replace": "    throw new Error(`mutant C1.8-trace : verbe de run inconnu ${verbe}`);"
   },
   {
     "test": "L0 COUV F-version-inconnue — une version de registre inconnue ferme la lecture",
@@ -82,5 +82,29 @@
     "file": "subagent-only/run-manifest.ts",
     "find": "  if (status === \"completed\" || status === \"abandoned\") {",
     "replace": "  if (false) {"
+  },
+  {
+    "test": "L0 REG C1.8-abandoned — abandoned exige une raison, aucun propriétaire vivant, et dit ce qu'il conserve",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "        statSync(ownerPath(dir, runId));",
+    "replace": "        throw Object.assign(new Error(\"mutant C1.8-abandoned : propriétaire masqué\"), { code: \"ENOENT\" });"
+  },
+  {
+    "test": "L0 REG C1.8-idempotence — une fin rejouée sur une archive identique aboutit sans la réécrire",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (readFileSync(destination, \"utf-8\") === contenu) return \"identique\";",
+    "replace": "    if (false) return \"identique\";"
+  },
+  {
+    "test": "L0 REG A-P1-F01-reprise — un manifeste terminal publié sans archive est repris et archivé",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "        archiveFinished(dir, courant);\n        return courant;",
+    "replace": "        return courant;"
+  },
+  {
+    "test": "L0 REG C4.6 — un run terminé n'accepte plus aucune mutation de registre",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  if (courant.status === \"completed\" || courant.status === \"abandoned\") {\n    throw new RecoveryError(\n      `${quoi} : le run ${lease.runId} est terminal (${courant.status}) ; ` +\n        `C4.6 interdit toute mutation de registre après terminaison.`,\n    );\n  }",
+    "replace": "  if (false) {\n    throw new RecoveryError(\n      `${quoi} : le run ${lease.runId} est terminal (${courant.status}) ; ` +\n        `C4.6 interdit toute mutation de registre après terminaison.`,\n    );\n  }"
   }
 ]
