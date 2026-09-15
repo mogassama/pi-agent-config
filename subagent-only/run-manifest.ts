@@ -28,8 +28,8 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import {
-  appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync,
-  writeFileSync,
+  appendFileSync, closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync,
+  readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
 import type { LaneEvent } from "./lane-ledger.js";
@@ -338,10 +338,55 @@ export interface OpenRun {
  * c'est précisément le cas du crash.
  */
 export function openRun(dir: string, baseCommit?: string): OpenRun {
-  const existing = readManifest(dir);
-  if (existing && (existing.status === "planning" || existing.status === "active")) {
-    return { manifest: existing, resumed: true };
+  /*
+   * L'ouverture participe à l'exclusion de N, et ce n'est pas une précaution.
+   *
+   * Sans elle, deux ouvertures concurrentes lisent le MÊME manifeste terminal : la
+   * première archive et fait naître un successeur, la seconde supprime ensuite
+   * l'`active-run.json` de ce successeur en croyant finir son propre archivage. Le
+   * successeur existe et n'est plus courant.
+   *
+   * Archivage, publication, unlink et création exclusive du successeur restent donc
+   * tous dans la MÊME garde de N.
+   */
+  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));
+}
+
+function openRunSousGuard(dir: string, baseCommit?: string): OpenRun {
+  /*
+   * La première lecture ne décide de rien : elle sert à connaître R.
+   *
+   * L'exclusion de N empêche deux ouvertures de se marcher dessus, mais pas une
+   * mutation ORDINAIRE du run de détenir R en même temps. Archiver un manifeste lu
+   * hors de R, c'est archiver un état qu'une autre session est peut-être en train de
+   * changer. C1.9 demande la reprise de la transition COMPLÈTE : l'ordre est donc
+   * N → R ici aussi, et la décision se prend sur la relecture protégée.
+   */
+  const observe = readManifest(dir);
+  if (observe) {
+    const decision = withRunGuard(dir, observe.runId, () => {
+      const stable = readManifest(dir);
+      if (!stable || stable.runId !== observe.runId) {
+        throw new RecoveryError(
+          `openRun : le run courant a changé pendant l'acquisition de son exclusion`,
+        );
+      }
+      if (stable.status === "planning" || stable.status === "active") {
+        return { kind: "resume" as const, manifest: stable };
+      }
+      /*
+       * Le run précédent est terminé : archivage, publication et unlink ont lieu ici,
+       * sous N ET sous R. La création du successeur, elle, attend la libération de R —
+       * elle porte une autre identité, et son exclusion est celle de N.
+       */
+      archiveFinished(dir, stable);
+      return { kind: "archived" as const };
+    });
+    if (decision.kind === "resume") {
+      return { manifest: decision.manifest, resumed: true };
+    }
   }
+
   const manifest: RunManifest = {
     version: MANIFEST_VERSION_COURANTE,
     /*
@@ -377,45 +422,148 @@ export function openRun(dir: string, baseCommit?: string): OpenRun {
    */
   mkdirSync(dir, { recursive: true });
 
-  if (!existing) return createRunExclusive(dir, manifest);
-
   /*
-   * Le run précédent est terminé : celui-ci le remplace, et le remplacement doit
-   * être aussi exclusif que la création.
+   * Création exclusive, toujours sous N mais après libération de R.
    *
-   * La première version écrivait puis relisait pour adopter ce qu'elle trouvait.
-   * Ça ne converge que si les écritures s'entrelacent : A qui écrit puis relit
-   * avant que B n'écrive repart sur une identité que le disque remplace ensuite.
-   * C'est exactement le défaut que la création exclusive supprime sur dépôt
-   * vierge, déplacé d'un chemin à l'autre.
+   * Elle ne peut pas demander de bail : le bail se prend sur un `runId`, qui n'existe
+   * pas encore. Elle porte donc sa propre exclusion — sinon deux sessions démarrant
+   * ensemble sur un dépôt vierge créeraient chacune un run, la seconde écraserait la
+   * première, et toutes deux prendraient un bail sur deux identités différentes dont
+   * une seule serait sur le disque. Chacune se croirait propriétaire, écrirait ses
+   * artefacts sous son propre préfixe, et ouvrirait ses propres worktrees.
    *
-   * Le manifeste terminé est donc d'abord **archivé**, et `rename` tranche : le
-   * premier réussit, le second échoue avec ENOENT parce que le fichier n'est
-   * plus là. Les deux se retrouvent ensuite devant un dépôt sans manifeste, où
-   * la création exclusive décide. Un seul run naît.
-   *
-   * L'archive n'est pas un effet secondaire : elle garde la trace du run
-   * précédent, dont la réconciliation durable a besoin.
+   * Le perdant relit et rejoint le run du gagnant : il n'y a qu'un run actif par dépôt.
    */
-  archiveFinished(dir, existing);
   return createRunExclusive(dir, manifest);
 }
 
+/** Le nom sous lequel le manifeste d'un run terminé est publié, une fois pour toutes. */
+export function archivePath(dir: string, runId: string): string {
+  return join(dir, `${runId}-run.json`);
+}
+
 /**
- * Met de côté le manifeste d'un run terminé, une seule fois.
- *
- * `rename` est l'arbitre : deux sessions qui archivent ensemble, une seule
- * réussit. Celle qui échoue trouve simplement un dépôt sans manifeste, ce qui
- * est le bon état pour la suite.
+ * Ce qu'une publication a trouvé : elle a posé l'archive, ou elle était déjà là,
+ * identique. Il n'y a pas de troisième issue qui n'échoue pas.
  */
-function archiveFinished(dir: string, finished: RunManifest): boolean {
+export type Publication = "publiee" | "identique";
+
+/**
+ * Publie un fichier existant sous un nom d'archive, SANS JAMAIS REMPLACER.
+ *
+ * `rename` ne convient pas : sous POSIX il écrase silencieusement une destination
+ * existante. Une archive écrasée est une histoire réécrite, et A-P1-F01-archive dit
+ * exactement cela — une archive contradictoire se refuse, elle ne se remplace pas.
+ *
+ * Le chemin canonique est le LIEN du manifeste terminal lui-même, puis son unlink :
+ * pas de fichier temporaire, pas de second contenu qui pourrait diverger. `link`
+ * échoue si la destination existe, et rend visible un fichier déjà complet — le
+ * perdant ne lit jamais un JSON tronqué.
+ *
+ * Le repli sert les systèmes de fichiers sans lien physique : création exclusive par
+ * `wx`, puis RELECTURE. Une copie partielle ne s'efface pas — elle devient un obstacle
+ * durable à réconcilier, parce qu'effacer une destination qu'on ne sait pas décrire
+ * serait choisir à la place de l'opérateur.
+ */
+function publierSansRemplacer(
+  source: string,
+  destination: string,
+  contenu: string,
+): Publication {
+  const confronter = (): Publication => {
+    if (readFileSync(destination, "utf-8") === contenu) return "identique";
+    throw new RecoveryError(
+      `archive contradictoire : ${destination} existe déjà avec un contenu différent. ` +
+        `Une archive n'est jamais remplacée — réconcilier avant de reprendre.`,
+    );
+  };
+
+  if (readFileSync(source, "utf-8") !== contenu) {
+    throw new RecoveryError(`source de publication incohérente : ${source}`);
+  }
+
   try {
-    renameSync(manifestPath(dir), join(dir, `${finished.runId}-run.json`));
-    return true;
+    linkSync(source, destination);
+    return "publiee";
   } catch (err) {
-    if ((err as { code?: string })?.code === "ENOENT") return false;
+    const code = (err as { code?: string })?.code;
+    if (code === "EEXIST") return confronter();
+    if (code !== "EPERM" && code !== "ENOSYS" && code !== "EXDEV" && code !== "EOPNOTSUPP") {
+      throw err;
+    }
+  }
+
+  try {
+    writeFileSync(destination, contenu, { encoding: "utf-8", flag: "wx" });
+  } catch (err) {
+    if ((err as { code?: string })?.code === "EEXIST") return confronter();
     throw err;
   }
+  if (readFileSync(destination, "utf-8") !== contenu) {
+    throw new RecoveryError(`archive non vérifiée après copie exclusive : ${destination}`);
+  }
+  return "publiee";
+}
+
+/**
+ * Force un chemin sur le disque — fichier ou répertoire.
+ *
+ * Une écriture rendue par le noyau n'est pas une écriture durable. Sans `fsync`, une
+ * coupure d'alimentation peut laisser l'archive visible et son contenu absent, ou
+ * l'`unlink` propagé sans le lien qui le précède : l'ordre observé par un lecteur après
+ * redémarrage n'est plus celui que le code a écrit. C0 impose donc la séquence, et le
+ * répertoire se synchronise lui aussi — c'est lui qui porte les entrées de nom.
+ */
+function synchroniserChemin(path: string): void {
+  const fd = openSync(path, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Publie durablement le manifeste terminal, et libère `active-run.json`.
+ *
+ * Chemin UNIQUE : la succession et le verbe opérateur passent tous deux par ici, sans
+ * quoi deux séquences de durabilité divergeraient au premier correctif appliqué à une
+ * seule d'entre elles.
+ *
+ * L'ordre est celui de C0, et il n'est pas décoratif :
+ *
+ *   fsync source · fsync N · link ou wx · fsync destination · fsync N · unlink · fsync N
+ *
+ * Aucune tolérance à la disparition de la source. L'ancien `ENOENT → false` venait de
+ * l'arbitrage par `rename`, où le perdant trouvait légitimement un dépôt sans manifeste.
+ * Sous N → R, après une relecture stable, une source disparue est un état que personne ne
+ * sait reconstruire : elle refuse (T2). La confondre avec une transition correctement
+ * achevée ferait naître un successeur sur une histoire jamais publiée.
+ */
+function archiveFinished(dir: string, finished: RunManifest): void {
+  const source = manifestPath(dir);
+  const destination = archivePath(dir, finished.runId);
+
+  let contenu: string;
+  try {
+    contenu = readFileSync(source, "utf-8");
+  } catch (err) {
+    throw new RecoveryError(
+      `archivage de ${finished.runId} : manifeste terminal impossible à relire : ${messageOf(err)}`,
+    );
+  }
+
+  synchroniserChemin(source);
+  synchroniserChemin(dir);
+
+  publierSansRemplacer(source, destination, contenu);
+
+  // Nécessaire aussi pour le repli O_EXCL, dont la destination est un autre inode.
+  synchroniserChemin(destination);
+  synchroniserChemin(dir);
+
+  unlinkSync(source);
+  synchroniserChemin(dir);
 }
 
 /**
@@ -534,6 +682,153 @@ export function allocateSeq(dir: string, lease: Lease): { seq: number; manifest:
     writeManifest(dir, next);
     return { seq: manifest.nextSeq, manifest: next };
   });
+}
+
+/** Ce qu'un verbe opérateur apporte pour terminer un run. */
+export interface FinDemandee {
+  /** Une identité ou une provenance locale de commande, à défaut le littéral "operator". */
+  by: string;
+  outcome: "completed" | "abandoned";
+  /** Obligatoire pour `abandoned`, qui ne s'accorde pas sans raison. */
+  reason?: string;
+  /** Horodatage imposé — pour rejouer une reprise à l'identique. Sinon, maintenant. */
+  at?: string;
+}
+
+/**
+ * LA primitive de transition terminale. Il n'y en a pas d'autre.
+ *
+ * Quatre temps, dans cet ordre et sans entrelacement possible :
+ *
+ *   validation structurelle tout ce que cette étape contrôle est prouvé avant la
+ *                           première écriture ; les préconditions métier de `completed`
+ *                           viennent à l'étape 6, dans la même section critique
+ *   manifeste terminal      écrit durablement dans active-run.json, `ledgers` et
+ *                           `continuation_block` préservés
+ *   publication exclusive   l'archive est posée sans jamais remplacer
+ *   unlink                  `active-run.json` est libéré, et le successeur devient possible
+ *
+ * L'ORDRE DES EXCLUSIONS N'EST PAS INDICATIF. `withSpaceGuard` d'abord, `withRunGuard`
+ * ensuite : une succession met en jeu DEUX runs, celui qui finit et celui qui naît, et un
+ * verrou nommé par l'un d'eux ne les exclut pas l'un de l'autre. C'est C1.2 — N englobe R,
+ * jamais l'inverse — imposé ici, là où il se joue, et éprouvé par `A-P1-F01-concurrence`.
+ *
+ * Un refus ne modifie RIEN : ni manifeste, ni archive, ni `active-run.json`, ni séquence.
+ * C'est pour cela que la validation est entière avant le premier octet écrit.
+ */
+export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunManifest {
+  const quoi = `terminer ${runId} en ${fin.outcome}`;
+  return withSpaceGuard(dir, () =>
+    withRunGuard(dir, runId, () => {
+      /*
+       * ---- 1. VALIDATION STRUCTURELLE, sous les deux exclusions ----
+       *
+       * Identité du run, absence de propriétaire, version, raison et
+       * `continuation_block` sont contrôlés avant toute écriture. Les préconditions
+       * MÉTIER de `completed` seront ajoutées à l'étape 6, dans cette même section
+       * critique N → R et avant `writeManifest` — jamais avant l'acquisition, jamais
+       * dans un préfiltre du dispatcher.
+       */
+      const courant = readManifest(dir);
+      if (!courant || courant.runId !== runId) {
+        throw new RecoveryError(
+          `${quoi} : run courant différent ou absent (${courant?.runId ?? "aucun"})`,
+        );
+      }
+
+      /*
+       * Aucun bail n'est exigé, et c'est le contraire d'un relâchement.
+       *
+       * C1.8 termine un run dont plus personne n'est propriétaire : exiger un bail
+       * vivant rendrait la fin impossible dans le seul cas où elle est nécessaire.
+       * Ce qui est exigé, c'est l'ABSENCE PROUVÉE de propriétaire — et l'absence se
+       * prouve par une observation, pas par le fait de n'avoir rien vu.
+       *
+       * ENOENT prouve l'absence. Un propriétaire présent refuse les deux issues. Toute
+       * autre erreur d'observation refuse aussi (T2) : un `statSync` qui échoue pour
+       * EACCES n'a rien constaté, et traiter ce silence comme une absence terminerait
+       * le run d'autrui.
+       */
+      try {
+        statSync(ownerPath(dir, runId));
+        throw new RecoveryError(
+          `${quoi} : un propriétaire est encore inscrit (${ownerPath(dir, runId)}). ` +
+            `Une fin ne se pose pas sur un run possédé. Ce refus ne modifie rien.`,
+        );
+      } catch (err) {
+        if (err instanceof RecoveryError) throw err;
+        const code = (err as { code?: string })?.code;
+        if (code !== "ENOENT") {
+          throw new RecoveryError(
+            `${quoi} : la propriété de ${runId} n'a pas pu être observée ` +
+              `(${code ?? "erreur inconnue"}). Ne rien avoir vu n'est pas avoir vu ` +
+              `qu'il n'y a rien. Ce refus ne modifie rien.`,
+          );
+        }
+      }
+
+      if (courant.status === "completed" || courant.status === "abandoned") {
+        throw new RecoveryError(
+          `${quoi} : le run est déjà ${courant.status}. La reprise d'une transition ` +
+            `interrompue est un chemin distinct, pas une seconde terminaison.`,
+        );
+      }
+      if (fin.outcome === "abandoned" && !fin.reason?.trim()) {
+        throw new RecoveryError(`${quoi} : un abandon ne s'accorde pas sans raison opérateur`);
+      }
+      /*
+       * Un manifeste v1 ne peut pas être terminé dans ce lot, et pas seulement pour
+       * `completed`. Poser `ended` sur un v1 serait une conversion implicite v1 → v2,
+       * que le § 1 interdit ; la terminalisation d'un ancien v1 sera spécifiée à part.
+       * Les deux refus sont distincts parce que leurs raisons le sont.
+       */
+      if (courant.version === 1) {
+        throw new RecoveryError(
+          fin.outcome === "completed"
+            ? `${quoi} : un manifeste de version 1 ne porte pas de quoi prouver les ` +
+              `préconditions d'une fin explicite`
+            : `${quoi} : poser une fin sur un manifeste de version 1 serait une conversion ` +
+              `implicite vers la version 2, qu'aucune migration n'autorise dans ce lot`,
+        );
+      }
+      /*
+       * C6.6 : un contournement constaté de la garde d'écriture inline interdit de
+       * DÉCLARER le run abouti. L'abandon reste ouvert — c'est précisément la sortie
+       * qu'un run bloqué doit garder. Le champ est seulement lu, et préservé tel quel.
+       */
+      if (fin.outcome === "completed" && courant.continuation_block) {
+        throw new RecoveryError(
+          `${quoi} : ${courant.continuation_block.code} posé le ` +
+            `${courant.continuation_block.at} — un run dont la garde d'écriture a été ` +
+            `contournée ne peut pas être déclaré abouti. L'abandon motivé reste ouvert. ` +
+            `Ce refus ne modifie rien.`,
+        );
+      }
+
+      // ---- 2. active-run.json devient DURABLEMENT terminal ----
+      /*
+       * Écrit sur le disque avant l'archive, et non gardé en mémoire : c'est ce qui
+       * fait exister la fenêtre canonique terminal → link → unlink. Une interruption
+       * après ce point laisse un terminal publiable, que la reprise sait finir. Sans
+       * cette durabilité, la même interruption laisserait un run actif sans trace de
+       * la décision prise.
+       */
+      const ended: RunEnd = {
+        at: fin.at ?? new Date().toISOString(),
+        by: fin.by,
+        outcome: fin.outcome,
+        ...(fin.outcome === "abandoned" ? { reason: fin.reason?.trim() } : {}),
+      };
+      const terminal: RunManifest = { ...courant, status: fin.outcome, ended };
+      assertVersionedFields(terminal, `${quoi} : manifeste terminal`);
+      writeManifest(dir, terminal);
+
+      // ---- 3 et 4. publication durable et libération, par le chemin UNIQUE ----
+      archiveFinished(dir, terminal);
+
+      return terminal;
+    }),
+  );
 }
 
 export function setStatus(dir: string, status: RunStatus, lease: Lease): RunManifest {

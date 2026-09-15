@@ -12,7 +12,8 @@ import assert from "node:assert/strict";
 import { copieJetable } from "./l0-lib.ts";
 import { test } from "node:test";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync,
+  writeFileSync,
 } from "node:fs";
 import { execFile, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
@@ -45,6 +46,8 @@ import {
   releaseRunOwnership,
   setStatus,
   takeOverRun,
+  archivePath,
+  terminerRun,
   type Lease,
   type RunManifest,
 } from "../subagent-only/run-manifest.ts";
@@ -1892,5 +1895,629 @@ test("sousGuardAcquis — corps en échec et retrait impossible : l'erreur du co
     assert.doesNotMatch(r.sortie.message, /verrou d'espace non libéré/);
   } finally {
     rmSync(copie, { recursive: true, force: true });
+  }
+});
+
+
+
+/*
+ * La transition terminale : une seule primitive, et ce qu'elle refuse ne laisse rien.
+ *
+ * Chaque refus est monté à côté du cas où la même opération DOIT aboutir. Sans ce
+ * témoin positif, « X est refusé » serait vrai d'un runtime qui refuse tout.
+ *
+ * AUCUN témoin positif ne détient de bail : C1.8 termine un run dont plus personne
+ * n'est propriétaire, et un montage qui garderait le bail éprouverait le contraire du
+ * contrat.
+ */
+
+/** Un run v2 actif, SANS propriétaire — l'état dans lequel une fin se pose. */
+function runTerminable(champs: Partial<RunManifest> = {}): { dir: string; done: () => void; m: RunManifest } {
+  const { dir, done } = dossier();
+  const { manifest } = openRun(dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+  const lease = own(dir, manifest.runId);
+  releaseRunOwnership(dir, lease);
+  if (Object.keys(champs).length > 0) {
+    const actif = join(dir, "active-run.json");
+    const courant = JSON.parse(readFileSync(actif, "utf-8"));
+    writeFileSync(actif, `${JSON.stringify({ ...courant, ...champs }, null, 2)}\n`);
+  }
+  return { dir, done, m: JSON.parse(readFileSync(join(dir, "active-run.json"), "utf-8")) };
+}
+
+/** Le manifeste actif, octet pour octet — ce qu'un refus ne doit pas avoir touché. */
+const actifBrut = (dir: string): string => readFileSync(join(dir, "active-run.json"), "utf-8");
+/** L'identité physique d'un fichier : un contenu identique ne prouve pas la non-réécriture. */
+function identite(p: string) {
+  const st = statSync(p, { bigint: true });
+  return { dev: st.dev, ino: st.ino, mtimeNs: st.mtimeNs, ctimeNs: st.ctimeNs, size: st.size };
+}
+
+test("terminerRun — une fin explicite archive, libère active-run.json, et préserve les registres", () => {
+  const { dir, done, m } = runTerminable({ ledgers: { lanes: 2 } });
+  try {
+    assert.equal(m.version, 2, "PRÉCONDITION — le run doit naître en v2");
+    assert.ok(existsSync(join(dir, "active-run.json")), "PRÉCONDITION — le manifeste actif doit être là");
+
+    const terminal = terminerRun(dir, m.runId, { by: "operator", outcome: "completed" });
+
+    assert.equal(terminal.status, "completed");
+    assert.equal(terminal.ended?.outcome, "completed");
+    assert.equal(terminal.ended?.by, "operator");
+    assert.deepEqual(terminal.ledgers, { lanes: 2 }, "les registres attestés doivent survivre à la fin");
+    assert.equal(existsSync(join(dir, "active-run.json")), false, "active-run.json doit être libéré");
+
+    const archive = JSON.parse(readFileSync(archivePath(dir, m.runId), "utf-8"));
+    assert.equal(archive.status, "completed");
+    assert.equal(archive.ended.by, "operator");
+    assert.deepEqual(archive.ledgers, { lanes: 2 });
+  } finally {
+    done();
+  }
+});
+
+test("terminerRun — un abandon exige sa raison, et l'abandon motivé aboutit", () => {
+  const refus = runTerminable();
+  try {
+    const avant = actifBrut(refus.dir);
+    assert.throws(
+      () => terminerRun(refus.dir, refus.m.runId, { by: "operator", outcome: "abandoned" }),
+      /ne s'accorde pas sans raison/,
+    );
+    assert.equal(actifBrut(refus.dir), avant, "le refus ne modifie pas le manifeste, octet pour octet");
+    assert.equal(existsSync(archivePath(refus.dir, refus.m.runId)), false, "un refus n'archive rien");
+  } finally {
+    refus.done();
+  }
+
+  /*
+   * Raison présente ET propriétaire présent : le refus vient de la propriété, pas de la
+   * raison. C1.8 termine un run dont plus personne n'est propriétaire ; un run possédé
+   * n'est pas à terminer, quelle que soit la qualité de la demande.
+   */
+  const possede = runTerminable();
+  try {
+    own(possede.dir, possede.m.runId); // le bail est repris, et pas rendu
+    const avant = actifBrut(possede.dir);
+    assert.throws(
+      () => terminerRun(possede.dir, possede.m.runId, { by: "operator", outcome: "abandoned", reason: "raison présente" }),
+      /propriétaire est encore inscrit/,
+    );
+    assert.throws(
+      () => terminerRun(possede.dir, possede.m.runId, { by: "operator", outcome: "completed" }),
+      /propriétaire est encore inscrit/,
+    );
+    assert.equal(actifBrut(possede.dir), avant, "aucun des deux refus ne modifie le manifeste, octet pour octet");
+    assert.equal(existsSync(archivePath(possede.dir, possede.m.runId)), false, "aucun des deux refus n'archive");
+  } finally {
+    possede.done();
+  }
+
+  // Témoin positif : sans propriétaire et avec sa raison, l'abandon aboutit.
+  const ok = runTerminable();
+  try {
+    const terminal = terminerRun(ok.dir, ok.m.runId, { by: "operator", outcome: "abandoned", reason: "pilote interrompu" });
+    assert.equal(terminal.ended?.reason, "pilote interrompu");
+    assert.equal(existsSync(join(ok.dir, "active-run.json")), false);
+  } finally {
+    ok.done();
+  }
+});
+
+test("terminerRun — continuation_block interdit d'aboutir, jamais d'abandonner, et ne modifie rien", () => {
+  const bloc = { at: "2026-09-14T08:00:00.000Z", code: "RUN_CONTINUATION_BLOCKED" } as const;
+
+  const refus = runTerminable({ continuation_block: bloc });
+  try {
+    const avant = actifBrut(refus.dir);
+    assert.throws(
+      () => terminerRun(refus.dir, refus.m.runId, { by: "operator", outcome: "completed" }),
+      /RUN_CONTINUATION_BLOCKED/,
+    );
+    assert.equal(actifBrut(refus.dir), avant, "le refus ne modifie pas le manifeste");
+    assert.equal(existsSync(archivePath(refus.dir, refus.m.runId)), false, "le refus n'archive rien");
+  } finally {
+    refus.done();
+  }
+
+  const abandon = runTerminable({ continuation_block: bloc });
+  try {
+    const terminal = terminerRun(abandon.dir, abandon.m.runId, { by: "operator", outcome: "abandoned", reason: "garde contournée" });
+    assert.equal(terminal.status, "abandoned");
+    assert.deepEqual(terminal.continuation_block, bloc, "le champ est préservé, jamais effacé");
+  } finally {
+    abandon.done();
+  }
+
+  const sansBloc = runTerminable();
+  try {
+    assert.equal(terminerRun(sansBloc.dir, sansBloc.m.runId, { by: "operator", outcome: "completed" }).status, "completed");
+  } finally {
+    sansBloc.done();
+  }
+});
+
+test("terminerRun — un manifeste v1 n'est pas terminable, et le v2 équivalent l'est", () => {
+  const v1 = runTerminable();
+  try {
+    const actif = join(v1.dir, "active-run.json");
+    const courant = JSON.parse(readFileSync(actif, "utf-8"));
+    delete courant.ledgers;
+    writeFileSync(actif, `${JSON.stringify({ ...courant, version: 1 }, null, 2)}\n`);
+    assert.equal(JSON.parse(actifBrut(v1.dir)).version, 1, "PRÉCONDITION — le manifeste doit être en v1");
+    const avant = actifBrut(v1.dir);
+
+    assert.throws(() => terminerRun(v1.dir, v1.m.runId, { by: "operator", outcome: "completed" }), /version 1/);
+    assert.throws(() => terminerRun(v1.dir, v1.m.runId, { by: "operator", outcome: "abandoned", reason: "r" }), /conversion implicite/);
+    assert.equal(actifBrut(v1.dir), avant, "aucun des deux refus ne modifie le manifeste");
+    assert.equal(existsSync(archivePath(v1.dir, v1.m.runId)), false, "aucun des deux refus n'archive");
+  } finally {
+    v1.done();
+  }
+
+  const v2 = runTerminable();
+  try {
+    assert.equal(terminerRun(v2.dir, v2.m.runId, { by: "operator", outcome: "completed" }).status, "completed");
+  } finally {
+    v2.done();
+  }
+});
+
+test("publication exclusive — une archive contradictoire est refusée, une archive identique n'est pas réécrite", () => {
+  const a = runTerminable();
+  try {
+    const terminal = terminerRun(a.dir, a.m.runId, { by: "operator", outcome: "completed" });
+    const chemin = archivePath(a.dir, terminal.runId);
+    const posee = readFileSync(chemin, "utf-8");
+    const avantId = identite(chemin);
+
+    // Un manifeste terminé reparaît, avec une histoire différente sous le même nom.
+    writeFileSync(join(a.dir, "active-run.json"), `${JSON.stringify({ ...terminal, nextSeq: terminal.nextSeq + 7 }, null, 2)}\n`);
+    const actifAvant = actifBrut(a.dir);
+    assert.throws(() => openRun(a.dir, "cbf7015a57b5e296d7c964790bb4989c4380da25"), /archive contradictoire/);
+    assert.equal(readFileSync(chemin, "utf-8"), posee, "l'archive existante n'est jamais remplacée");
+    assert.deepEqual(identite(chemin), avantId, "ni réécrite : même inode, mêmes horodatages");
+    assert.equal(actifBrut(a.dir), actifAvant, "le manifeste terminal actif reste strictement inchangé");
+  } finally {
+    a.done();
+  }
+
+  const b = runTerminable();
+  try {
+    const terminal = terminerRun(b.dir, b.m.runId, { by: "operator", outcome: "completed" });
+    const chemin = archivePath(b.dir, terminal.runId);
+    const posee = readFileSync(chemin, "utf-8");
+    const avantId = identite(chemin);
+    writeFileSync(join(b.dir, "active-run.json"), posee);
+    const suivant = openRun(b.dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+    assert.notEqual(suivant.manifest.runId, terminal.runId, "un successeur doit naître");
+    assert.equal(readFileSync(chemin, "utf-8"), posee, "l'archive identique reste ce qu'elle était");
+    assert.deepEqual(identite(chemin), avantId, "et n'est pas réécrite : dev, ino, mtimeNs, ctimeNs et taille inchangés");
+  } finally {
+    b.done();
+  }
+});
+
+
+/*
+ * Les deux fenêtres qu'aucun montage séquentiel ordinaire n'atteint.
+ *
+ * Une interruption entre le manifeste terminal et son archive, et un système de
+ * fichiers sans lien physique, ne se produisent pas sur commande. Ils s'INJECTENT dans
+ * une copie jetable du module — le mécanisme des mutants — et jamais par une couture
+ * ajoutée à la production.
+ */
+const ANCRE_LINK = "    linkSync(source, destination);";
+const ANCRE_COPIE = '    writeFileSync(destination, contenu, { encoding: "utf-8", flag: "wx" });';
+
+/** Une copie jetable du dépôt, mutée par remplacements dont chacun est prouvé unique. */
+function copieMutee(remplacements: Array<[string, string]>): string {
+  const copie = copieJetable(join(import.meta.dirname, ".."));
+  const cible = join(copie, "subagent-only", "run-manifest.ts");
+  let source = readFileSync(cible, "utf-8");
+  for (const [ancre, remplacement] of remplacements) {
+    const n = source.split(ancre).length - 1;
+    assert.equal(
+      n,
+      1,
+      `PRÉCONDITION — l'ancre « ${ancre.trim()} » doit apparaître exactement une fois, ` +
+        `trouvée ${n} fois. Sans elle, l'injection ne porte sur rien.`,
+    );
+    source = source.replace(ancre, remplacement);
+  }
+  writeFileSync(cible, source);
+  return copie;
+}
+
+/** Monte un run terminable dans un enfant frais, le termine, et rend un relevé structuré. */
+function terminerDansEnfant(copie: string): {
+  erreur: { name: string; message: string; code?: string } | null;
+  actif: { existe: boolean; status?: string; aEnded?: boolean; brut?: string };
+  archive: { existe: boolean; contenu?: string };
+  rejeu: { name: string; message: string } | null;
+  actifApresRejeu?: string;
+  proprietaireAvant: boolean;
+} {
+  const enfant = join(copie, "s4-terminaison.ts");
+  writeFileSync(
+    enfant,
+    `import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  acquireRunOwnership, archivePath, openRun, releaseRunOwnership, terminerRun,
+} from "./subagent-only/run-manifest.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "pi-terminaison-"));
+const { manifest } = openRun(dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+const pris = acquireRunOwnership(dir, manifest.runId, "s-enfant");
+releaseRunOwnership(dir, pris.lease);
+
+const actifPath = join(dir, "active-run.json");
+const arch = archivePath(dir, manifest.runId);
+const releve = {
+  erreur: null,
+  actif: { existe: false },
+  archive: { existe: false },
+  rejeu: null,
+  proprietaireAvant: existsSync(join(dir, \`\${manifest.runId}.lease\`, "owner.json")),
+};
+
+try {
+  terminerRun(dir, manifest.runId, { by: "operator", outcome: "completed" });
+} catch (err) {
+  releve.erreur = { name: err?.constructor?.name, message: String(err?.message), code: err?.code };
+}
+
+releve.actif.existe = existsSync(actifPath);
+if (releve.actif.existe) {
+  releve.actif.brut = readFileSync(actifPath, "utf-8");
+  const m = JSON.parse(releve.actif.brut);
+  releve.actif.status = m.status;
+  releve.actif.aEnded = m.ended !== undefined;
+}
+releve.archive.existe = existsSync(arch);
+if (releve.archive.existe) releve.archive.contenu = readFileSync(arch, "utf-8");
+
+try {
+  terminerRun(dir, manifest.runId, { by: "operator", outcome: "completed" });
+} catch (err) {
+  releve.rejeu = { name: err?.constructor?.name, message: String(err?.message) };
+}
+if (existsSync(actifPath)) releve.actifApresRejeu = readFileSync(actifPath, "utf-8");
+
+// Sérialisé AVANT le nettoyage : effacer d'abord perdrait ce qu'on vient d'observer.
+const sortie = JSON.stringify(releve);
+rmSync(dir, { recursive: true, force: true });
+process.stdout.write(sortie);
+`,
+  );
+  const p = spawnSync(process.execPath, ["--experimental-strip-types", enfant], {
+    cwd: copie,
+    encoding: "utf-8",
+  });
+  assert.equal(
+    p.status,
+    0,
+    `PRÉCONDITION — l'enfant doit sortir avec le code 0 ; statut ${String(p.status)}, ` +
+      `stdout « ${p.stdout.trim().slice(0, 200) || "(vide)"} », ` +
+      `stderr « ${p.stderr.trim().slice(0, 400) || "(vide)"} »`,
+  );
+  assert.ok(p.stdout.trim().startsWith("{"), `PRÉCONDITION — relevé illisible : ${p.stdout.slice(0, 200)}`);
+  return JSON.parse(p.stdout.trim());
+}
+
+test("terminerRun — interrompu entre le terminal et l'archive : le terminal est durable, rien n'est archivé", () => {
+  const copie = copieMutee([
+    [ANCRE_LINK, '    throw Object.assign(new Error("L0_CRASH_PUBLICATION"), { code: "L0_CRASH_PUBLICATION" });'],
+  ]);
+  try {
+    const r = terminerDansEnfant(copie);
+
+    assert.ok(r.erreur, "PRÉCONDITION — l'appel doit avoir échoué au point de publication");
+    assert.equal(r.erreur.code, "L0_CRASH_PUBLICATION", "et échouer là, pas ailleurs");
+
+    assert.ok(r.actif.existe, "active-run.json doit être resté : c'est la fenêtre terminal → link → unlink");
+    assert.equal(r.actif.status, "completed", "et être durablement terminal");
+    assert.equal(r.actif.aEnded, true, "avec sa fin posée");
+    assert.equal(r.archive.existe, false, "aucune archive ne doit exister");
+
+    assert.ok(r.rejeu, "un second appel doit refuser");
+    assert.match(r.rejeu.message, /déjà completed/, "et refuser comme « déjà terminal »");
+    assert.equal(r.actifApresRejeu, r.actif.brut, "le refus du rejeu ne modifie rien");
+  } finally {
+    rmSync(copie, { recursive: true, force: true });
+  }
+});
+
+test("publication exclusive — sans lien physique, le repli copie et VÉRIFIE, et refuse une copie partielle", () => {
+  const sansLien = '    throw Object.assign(new Error("pas de lien physique"), { code: "EOPNOTSUPP" });';
+
+  // Repli nominal : la copie exclusive aboutit, et l'archive est complète.
+  const complet = copieMutee([[ANCRE_LINK, sansLien]]);
+  try {
+    const r = terminerDansEnfant(complet);
+    assert.equal(r.erreur, null, `le repli doit aboutir ; ${JSON.stringify(r.erreur)}`);
+    assert.equal(r.actif.existe, false, "active-run.json doit être libéré comme par le chemin nominal");
+    assert.ok(r.archive.existe, "l'archive doit avoir été posée par le repli");
+    const archive = JSON.parse(r.archive.contenu ?? "");
+    assert.equal(archive.status, "completed");
+    assert.equal(archive.ended.by, "operator");
+  } finally {
+    rmSync(complet, { recursive: true, force: true });
+  }
+
+  // Copie tronquée : la relecture refuse, et la destination incomplète reste en obstacle.
+  const tronque = copieMutee([
+    [ANCRE_LINK, sansLien],
+    [ANCRE_COPIE, '    writeFileSync(destination, contenu.slice(0, 5), { encoding: "utf-8", flag: "wx" });'],
+  ]);
+  try {
+    const r = terminerDansEnfant(tronque);
+    assert.ok(r.erreur, "une copie partielle ne doit pas passer pour une archive");
+    assert.match(r.erreur.message, /archive non vérifiée après copie exclusive/);
+    assert.ok(r.actif.existe, "le manifeste terminal actif reste présent");
+    assert.equal(r.actif.status, "completed");
+    assert.ok(r.archive.existe, "la destination incomplète n'est pas effacée : elle est un obstacle à réconcilier");
+    assert.notEqual(r.archive.contenu, r.actif.brut, "et elle n'est ni acceptée ni complétée");
+    assert.ok(r.rejeu, "le rejeu doit refuser");
+    assert.match(r.rejeu.message, /déjà completed/, "le rejeu refuse, il ne remplace pas");
+  } finally {
+    rmSync(tronque, { recursive: true, force: true });
+  }
+});
+
+
+/*
+ * T2 : ne rien avoir vu n'est pas avoir vu qu'il n'y a rien.
+ *
+ * Une observation de la propriété qui ÉCHOUE n'établit aucune absence. Traiter ce
+ * silence comme un ENOENT terminerait le run d'autrui. La branche ne s'atteint pas sur
+ * commande : elle s'injecte dans une copie jetable.
+ */
+const ANCRE_PROPRIETAIRE = "        statSync(ownerPath(dir, runId));";
+
+test("terminerRun — une propriété inobservable refuse, et ne laisse rien derrière", () => {
+  const copie = copieMutee([
+    [
+      ANCRE_PROPRIETAIRE,
+      '        throw Object.assign(new Error("L0_PROPRIETE_INCONNUE"), { code: "EACCES" });',
+    ],
+  ]);
+  try {
+    const r = terminerDansEnfant(copie);
+
+    assert.equal(
+      r.proprietaireAvant,
+      false,
+      "PRÉCONDITION — le run doit être réellement sans propriétaire avant l'observation injectée",
+    );
+    assert.ok(r.erreur, "PRÉCONDITION — l'appel doit avoir été atteint et avoir échoué");
+    assert.match(
+      r.erreur.message,
+      /la propriété de .* n'a pas pu être observée/,
+      "le refus doit porter sur l'impossibilité d'observer, pas sur autre chose",
+    );
+
+    assert.ok(r.actif.existe, "aucun unlink : active-run.json doit être resté");
+    assert.equal(r.actif.status, "planning", "et n'avoir pas été rendu terminal");
+    assert.equal(r.actif.aEnded, false, "aucune fin n'a été posée");
+    assert.equal(r.archive.existe, false, "aucune archive");
+    assert.equal(r.actifApresRejeu, r.actif.brut, "le rejeu ne modifie rien non plus");
+  } finally {
+    rmSync(copie, { recursive: true, force: true });
+  }
+});
+
+
+/*
+ * L'ordre durable, observé et non supposé.
+ *
+ * `fsync` ne change rien d'observable par une lecture ordinaire : c'est précisément ce
+ * qui le rend facile à oublier et impossible à éprouver de l'extérieur. La séquence est
+ * donc INSTRUMENTÉE dans une copie jetable — chaque synchronisation, la publication et
+ * l'unlink s'inscrivent dans un journal — et le test compare l'ordre obtenu à celui que
+ * C0 impose.
+ */
+const ANCRE_FSYNC = "function synchroniserChemin(path: string): void {";
+const ANCRE_UNLINK = "  unlinkSync(source);";
+const JOURNALISER = (quoi: string) =>
+  `  appendFileSync(String(process.env.L0_JOURNAL), \`${quoi}\\n\`);`;
+
+/** Termine un run dans un enfant frais et rend le journal des opérations durables. */
+function journalDeTerminaison(copie: string): string[] {
+  const enfant = join(copie, "s4-ordre-durable.ts");
+  writeFileSync(
+    enfant,
+    `import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { rmSync } from "node:fs";
+import {
+  acquireRunOwnership, archivePath, openRun, releaseRunOwnership, terminerRun,
+} from "./subagent-only/run-manifest.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "pi-ordre-"));
+const { manifest } = openRun(dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+const pris = acquireRunOwnership(dir, manifest.runId, "s-enfant");
+releaseRunOwnership(dir, pris.lease);
+
+const journal = join(dir, "journal.txt");
+process.env.L0_JOURNAL = journal;
+terminerRun(dir, manifest.runId, { by: "operator", outcome: "completed" });
+
+const lignes = readFileSync(journal, "utf-8").trim().split("\\n")
+  .map((l) => l
+    .replace(join(dir, "active-run.json"), "<source>")
+    .replace(archivePath(dir, manifest.runId), "<destination>")
+    .replace(dir, "<N>"));
+const sortie = JSON.stringify(lignes);
+rmSync(dir, { recursive: true, force: true });
+process.stdout.write(sortie);
+`,
+  );
+  const p = spawnSync(process.execPath, ["--experimental-strip-types", enfant], {
+    cwd: copie,
+    encoding: "utf-8",
+  });
+  assert.equal(
+    p.status,
+    0,
+    `PRÉCONDITION — l'enfant doit sortir avec le code 0 ; statut ${String(p.status)}, ` +
+      `stdout « ${p.stdout.trim().slice(0, 200) || "(vide)"} », ` +
+      `stderr « ${p.stderr.trim().slice(0, 400) || "(vide)"} »`,
+  );
+  assert.ok(p.stdout.trim().startsWith("["), `PRÉCONDITION — journal illisible : ${p.stdout.slice(0, 200)}`);
+  return JSON.parse(p.stdout.trim());
+}
+
+test("publication durable — la séquence fsync exigée par C0, au lien physique comme au repli", () => {
+  const instrumentation: Array<[string, string]> = [
+    [ANCRE_FSYNC, `${ANCRE_FSYNC}\n${JOURNALISER("fsync ${path}")}`],
+    [ANCRE_UNLINK, `${JOURNALISER("unlink")}\n${ANCRE_UNLINK}`],
+  ];
+
+  // Chemin nominal : le lien physique.
+  const nominal = copieMutee([
+    ...instrumentation,
+    [ANCRE_LINK, `${JOURNALISER("publication link")}\n${ANCRE_LINK}`],
+  ]);
+  try {
+    assert.deepEqual(journalDeTerminaison(nominal), [
+      "fsync <source>",
+      "fsync <N>",
+      "publication link",
+      "fsync <destination>",
+      "fsync <N>",
+      "unlink",
+      "fsync <N>",
+    ]);
+  } finally {
+    rmSync(nominal, { recursive: true, force: true });
+  }
+
+  // Repli : pas de lien physique, la destination est un autre inode — le fsync qui la
+  // suit n'est donc pas redondant avec celui de la source.
+  const repli = copieMutee([
+    ...instrumentation,
+    [
+      ANCRE_LINK,
+      `${JOURNALISER("publication link refusée")}\n    throw Object.assign(new Error("pas de lien physique"), { code: "EOPNOTSUPP" });`,
+    ],
+    [ANCRE_COPIE, `${JOURNALISER("publication wx")}\n${ANCRE_COPIE}`],
+  ]);
+  try {
+    assert.deepEqual(journalDeTerminaison(repli), [
+      "fsync <source>",
+      "fsync <N>",
+      "publication link refusée",
+      "publication wx",
+      "fsync <destination>",
+      "fsync <N>",
+      "unlink",
+      "fsync <N>",
+    ]);
+  } finally {
+    rmSync(repli, { recursive: true, force: true });
+  }
+});
+
+
+/*
+ * La source disparue entre la relecture stable et l'archivage.
+ *
+ * Cette branche T2 n'est pas comme les trois invariants de concurrence : elle est
+ * DÉTERMINISTE et injectable. Un mutant qui la supprime ne ferait rougir aucune suite —
+ * elle resterait décorative. Elle est donc éprouvée, et par la surface publique.
+ */
+const ANCRE_RELECTURE_SOURCE = '    contenu = readFileSync(source, "utf-8");';
+
+/** Monte un run terminal conforme dans un enfant frais, puis ouvre — et n'observe que ça. */
+function ouvrirSurTerminal(copie: string): {
+  issue: { name: string; message: string } | null;
+  archiveExiste: boolean;
+  activeExiste: boolean;
+  successeurCree: boolean;
+} {
+  const enfant = join(copie, "s4-source-disparue.ts");
+  writeFileSync(
+    enfant,
+    `import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  acquireRunOwnership, archivePath, openRun, releaseRunOwnership,
+} from "./subagent-only/run-manifest.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "pi-source-"));
+const { manifest } = openRun(dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+const pris = acquireRunOwnership(dir, manifest.runId, "s-enfant");
+releaseRunOwnership(dir, pris.lease);
+
+// Un terminal CONFORME, avec sa fin : c'est l'état sur lequel la succession s'exerce.
+const actif = join(dir, "active-run.json");
+const terminal = {
+  ...JSON.parse(readFileSync(actif, "utf-8")),
+  status: "completed",
+  ended: { at: "2026-09-14T09:00:00.000Z", by: "operator", outcome: "completed" },
+};
+writeFileSync(actif, JSON.stringify(terminal, null, 2) + "\\n");
+
+const releve = { issue: null, archiveExiste: false, activeExiste: false, successeurCree: false };
+try {
+  const ouvert = openRun(dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+  releve.successeurCree = ouvert.manifest.runId !== manifest.runId;
+} catch (err) {
+  releve.issue = { name: err?.constructor?.name, message: String(err?.message) };
+}
+releve.archiveExiste = existsSync(archivePath(dir, manifest.runId));
+releve.activeExiste = existsSync(actif);
+
+const sortie = JSON.stringify(releve);
+rmSync(dir, { recursive: true, force: true });
+process.stdout.write(sortie);
+`,
+  );
+  const p = spawnSync(process.execPath, ["--experimental-strip-types", enfant], {
+    cwd: copie,
+    encoding: "utf-8",
+  });
+  assert.equal(
+    p.status,
+    0,
+    `PRÉCONDITION — l'enfant doit sortir avec le code 0 ; statut ${String(p.status)}, ` +
+      `stdout « ${p.stdout.trim().slice(0, 200) || "(vide)"} », ` +
+      `stderr « ${p.stderr.trim().slice(0, 400) || "(vide)"} »`,
+  );
+  assert.ok(p.stdout.trim().startsWith("{"), `PRÉCONDITION — relevé illisible : ${p.stdout.slice(0, 200)}`);
+  return JSON.parse(p.stdout.trim());
+}
+
+test("archivage — une source disparue refuse, et ne fait naître aucun successeur", () => {
+  const disparue = copieMutee([
+    [ANCRE_RELECTURE_SOURCE, `    unlinkSync(source);\n${ANCRE_RELECTURE_SOURCE}`],
+  ]);
+  try {
+    const r = ouvrirSurTerminal(disparue);
+
+    assert.ok(r.issue, "la disparition de la source ne doit pas passer pour un archivage réussi");
+    assert.equal(r.issue.name, "RecoveryError");
+    assert.match(r.issue.message, /manifeste terminal impossible à relire/);
+    assert.equal(r.archiveExiste, false, "rien n'a pu être publié");
+    assert.equal(r.activeExiste, false, "l'injection a bien supprimé la source");
+    assert.equal(r.successeurCree, false, "aucun successeur ne naît sur une histoire jamais publiée");
+  } finally {
+    rmSync(disparue, { recursive: true, force: true });
+  }
+
+  // Contrôle positif : le MÊME montage, sans disparition, archive et fait naître un successeur.
+  const intacte = copieMutee([]);
+  try {
+    const r = ouvrirSurTerminal(intacte);
+    assert.equal(r.issue, null, `le montage sain doit aboutir ; ${JSON.stringify(r.issue)}`);
+    assert.equal(r.archiveExiste, true, "le terminal doit avoir été archivé");
+    assert.equal(r.successeurCree, true, "et un successeur distinct doit être né");
+  } finally {
+    rmSync(intacte, { recursive: true, force: true });
   }
 });
