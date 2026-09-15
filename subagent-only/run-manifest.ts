@@ -720,6 +720,9 @@ export interface FinDemandee {
  *
  * Un refus ne modifie RIEN : ni manifeste, ni archive, ni `active-run.json`, ni séquence.
  * C'est pour cela que la validation est entière avant le premier octet écrit.
+ *
+ * Sur un run DÉJÀ terminal, la primitive ne termine pas une seconde fois : elle REPREND
+ * la transition interrompue, sans réécrire la fin déjà posée. Voir la section Reprise.
  */
 export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunManifest {
   const quoi = `terminer ${runId} en ${fin.outcome}`;
@@ -772,14 +775,58 @@ export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunMa
         }
       }
 
-      if (courant.status === "completed" || courant.status === "abandoned") {
-        throw new RecoveryError(
-          `${quoi} : le run est déjà ${courant.status}. La reprise d'une transition ` +
-            `interrompue est un chemin distinct, pas une seconde terminaison.`,
-        );
-      }
+      /*
+       * La raison d'abandon est exigée AVANT la branche de reprise, et pas après.
+       *
+       * Placée après, elle laissait aboutir une reprise `abandoned` sans raison : la
+       * branche terminale rendait avant de l'atteindre. Un abandon ne s'accorde jamais
+       * sans raison opérateur — ni à la première demande, ni à la reprise. Que la raison
+       * conservée soit celle d'origine ne dispense pas d'en fournir une : c'est la
+       * demande qui doit être motivée, pas seulement l'archive.
+       */
       if (fin.outcome === "abandoned" && !fin.reason?.trim()) {
         throw new RecoveryError(`${quoi} : un abandon ne s'accorde pas sans raison opérateur`);
+      }
+
+      /*
+       * ---- REPRISE d'une transition interrompue ----
+       *
+       * L'étape 3 a rendu le manifeste terminal DURABLE avant l'archive : une coupure
+       * dans la fenêtre terminal → link → unlink laisse donc un terminal publiable, et
+       * c'est exactement l'état que C1.9 demande de reprendre.
+       *
+       * Reprendre, ce n'est pas terminer une seconde fois. La fin déjà posée n'est pas
+       * réécrite : son `at`, son `by` et sa raison sont ceux de la décision d'origine, et
+       * les remplacer par l'instant de la reprise effacerait qui a décidé et quand. Seule
+       * la fenêtre se referme — publication si elle manque, unlink ensuite.
+       *
+       * L'idempotence tombe d'elle-même : une archive identique se reconnaît comme déjà
+       * publiée, et la reprise conclut sans rien réécrire. Une archive contradictoire
+       * refuse, comme partout ailleurs.
+       */
+      if (courant.status === "completed" || courant.status === "abandoned") {
+        const posee = courant.ended;
+        /*
+         * Inatteignable à l'exécution depuis l'étape 4 : `readManifest` refuse déjà un v2
+         * terminal sans fin. C'est le type qui exige ce rétrécissement, et le refus vaut
+         * mieux qu'un `!` — le jour où le lecteur changerait, il échouerait fermé.
+         * Aucune preuve ne l'atteint, et c'est pour cette raison-là, pas par omission.
+         */
+        if (!posee) {
+          throw new RecoveryError(
+            `${quoi} : le run est ${courant.status} sans porter sa fin — état que personne ` +
+              `ne sait reconstruire. Ce refus ne modifie rien.`,
+          );
+        }
+        if (posee.outcome !== fin.outcome) {
+          throw new RecoveryError(
+            `${quoi} : le run porte déjà une fin ${posee.outcome}, posée le ${posee.at} ` +
+              `par ${posee.by}. Une reprise conclut la transition commencée, elle n'en ` +
+              `change pas l'issue. Ce refus ne modifie rien.`,
+          );
+        }
+        archiveFinished(dir, courant);
+        return courant;
       }
       /*
        * Un manifeste v1 ne peut pas être terminé dans ce lot, et pas seulement pour

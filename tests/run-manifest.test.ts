@@ -2258,9 +2258,14 @@ test("terminerRun — interrompu entre le terminal et l'archive : le terminal es
     assert.equal(r.actif.aEnded, true, "avec sa fin posée");
     assert.equal(r.archive.existe, false, "aucune archive ne doit exister");
 
-    assert.ok(r.rejeu, "un second appel doit refuser");
-    assert.match(r.rejeu.message, /déjà completed/, "et refuser comme « déjà terminal »");
-    assert.equal(r.actifApresRejeu, r.actif.brut, "le refus du rejeu ne modifie rien");
+    /*
+     * Depuis l'étape 5, un second appel REPREND la transition au lieu de la refuser. Ici
+     * l'injection tient toujours : la reprise bute au même point, et rien ne bouge. Ce
+     * qu'on vérifie, c'est qu'elle ne réécrit pas la fin déjà posée.
+     */
+    assert.ok(r.rejeu, "la reprise doit buter sur la même injection");
+    assert.match(r.rejeu.message, /L0_CRASH_PUBLICATION/, "au point de publication, pas ailleurs");
+    assert.equal(r.actifApresRejeu, r.actif.brut, "et ne rien modifier — la fin posée n'est pas réécrite");
   } finally {
     rmSync(copie, { recursive: true, force: true });
   }
@@ -2296,8 +2301,12 @@ test("publication exclusive — sans lien physique, le repli copie et VÉRIFIE, 
     assert.equal(r.actif.status, "completed");
     assert.ok(r.archive.existe, "la destination incomplète n'est pas effacée : elle est un obstacle à réconcilier");
     assert.notEqual(r.archive.contenu, r.actif.brut, "et elle n'est ni acceptée ni complétée");
-    assert.ok(r.rejeu, "le rejeu doit refuser");
-    assert.match(r.rejeu.message, /déjà completed/, "le rejeu refuse, il ne remplace pas");
+    assert.ok(r.rejeu, "la reprise doit refuser");
+    assert.match(
+      r.rejeu.message,
+      /archive contradictoire/,
+      "la reprise bute sur la destination incomplète — elle ne la remplace pas",
+    );
   } finally {
     rmSync(tronque, { recursive: true, force: true });
   }
@@ -2614,5 +2623,105 @@ test("manifeste v2 — un run terminal sans sa fin est illisible, et le même av
     assert.notEqual(suivant.manifest.runId, manifest.runId, "et la succession a lieu");
   } finally {
     avecFin.done();
+  }
+});
+
+
+/*
+ * La reprise d'une transition interrompue, et son idempotence.
+ *
+ * L'étape 3 a rendu le terminal DURABLE avant l'archive : la fenêtre
+ * terminal → link → unlink existe, et une coupure dedans laisse un état reprenable.
+ * Reprendre n'est pas terminer une seconde fois — la fin déjà posée n'est jamais réécrite.
+ */
+
+/** Un run v2 dont le manifeste actif est terminal et conforme, sans propriétaire. */
+function runDejaTerminal(outcome: "completed" | "abandoned" = "completed"): {
+  dir: string;
+  done: () => void;
+  m: RunManifest;
+} {
+  const { dir, done, m } = runTerminable();
+  const terminal = poserTerminal(dir, outcome, "fin d'origine");
+  return { dir, done, m: terminal };
+}
+
+test("reprise — un terminal publié sans archive est archivé, et sa fin n'est pas réécrite", () => {
+  const { dir, done, m } = runDejaTerminal();
+  try {
+    assert.equal(existsSync(archivePath(dir, m.runId)), false, "PRÉCONDITION — aucune archive avant la reprise");
+    const finPosee = JSON.stringify(m.ended);
+
+    const repris = terminerRun(dir, m.runId, { by: "quelqu-un-d-autre", outcome: "completed" });
+
+    assert.equal(JSON.stringify(repris.ended), finPosee, "la fin d'origine est conservée, pas remplacée");
+    assert.equal(repris.ended?.by, "fixture", "ni le by de la reprise, ni son instant");
+    assert.ok(existsSync(archivePath(dir, m.runId)), "l'archive manquante est posée");
+    assert.equal(existsSync(join(dir, "active-run.json")), false, "et le manifeste actif est libéré");
+    assert.equal(JSON.parse(readFileSync(archivePath(dir, m.runId), "utf-8")).ended.by, "fixture");
+  } finally {
+    done();
+  }
+});
+
+test("reprise — rejouée sur une archive identique, elle conclut sans rien réécrire", () => {
+  const { dir, done, m } = runDejaTerminal();
+  try {
+    // L'état canonique du crash entre link et unlink : archive posée, actif encore là.
+    const chemin = archivePath(dir, m.runId);
+    const actif = join(dir, "active-run.json");
+    writeFileSync(chemin, readFileSync(actif, "utf-8"));
+    const contenu = readFileSync(chemin, "utf-8");
+    const avantId = identite(chemin);
+
+    const repris = terminerRun(dir, m.runId, { by: "operator", outcome: "completed" });
+
+    assert.equal(repris.status, "completed");
+    assert.equal(readFileSync(chemin, "utf-8"), contenu, "l'archive n'est pas réécrite");
+    assert.deepEqual(identite(chemin), avantId, "ni même touchée : dev, ino, mtimeNs, ctimeNs, taille");
+    assert.equal(existsSync(actif), false, "et la fenêtre se referme : actif libéré");
+  } finally {
+    done();
+  }
+});
+
+test("reprise — elle ne change pas l'issue, et l'issue concordante aboutit", () => {
+  const contradictoire = runDejaTerminal("completed");
+  try {
+    const actif = join(contradictoire.dir, "active-run.json");
+    const avant = readFileSync(actif, "utf-8");
+    assert.throws(
+      () => terminerRun(contradictoire.dir, contradictoire.m.runId, { by: "operator", outcome: "abandoned", reason: "r" }),
+      /porte déjà une fin completed/,
+      "une reprise conclut la transition commencée, elle n'en change pas l'issue",
+    );
+    assert.equal(readFileSync(actif, "utf-8"), avant, "et le refus ne modifie rien");
+    assert.equal(existsSync(archivePath(contradictoire.dir, contradictoire.m.runId)), false, "ni n'archive");
+  } finally {
+    contradictoire.done();
+  }
+
+  // Témoin positif : le MÊME montage, avec l'issue concordante, aboutit.
+  const concordante = runDejaTerminal("abandoned");
+  try {
+    /*
+     * Une reprise `abandoned` reste un abandon demandé : elle exige sa raison. Que la
+     * raison CONSERVÉE soit celle d'origine ne dispense pas d'en fournir une — c'est la
+     * demande qui doit être motivée, pas seulement l'archive.
+     */
+    const actif = join(concordante.dir, "active-run.json");
+    const avant = readFileSync(actif, "utf-8");
+    assert.throws(
+      () => terminerRun(concordante.dir, concordante.m.runId, { by: "operator", outcome: "abandoned" }),
+      /ne s'accorde pas sans raison/,
+    );
+    assert.equal(readFileSync(actif, "utf-8"), avant, "et ce refus ne modifie rien");
+    assert.equal(existsSync(archivePath(concordante.dir, concordante.m.runId)), false, "ni n'archive");
+
+    const repris = terminerRun(concordante.dir, concordante.m.runId, { by: "operator", outcome: "abandoned", reason: "autre raison" });
+    assert.equal(repris.ended?.reason, "fin d'origine", "et la raison d'origine reste la sienne");
+    assert.ok(existsSync(archivePath(concordante.dir, concordante.m.runId)));
+  } finally {
+    concordante.done();
   }
 });
