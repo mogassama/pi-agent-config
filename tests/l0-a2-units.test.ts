@@ -261,7 +261,7 @@ preservation("A-P1-F04", "hors bundle, aucune de ces commandes n'est bloquée", 
 });
 // ============================================================ C-P1-F09 — panne de battement
 
-regression("C-P1-F09", "une panne d'écriture du battement signale la perte au lieu de tuer le processus", (t) => {
+regressionCorrigee("C-P1-F09", "une panne d'écriture du battement signale la perte au lieu de tuer le processus", (t) => {
   const root = neuf("l0-f09-");
   const dir = join(root, ".pi-subagent-runs");
   const { manifest } = openRun(dir, undefined);

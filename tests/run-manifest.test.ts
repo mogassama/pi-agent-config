@@ -2748,3 +2748,111 @@ test("reprise — elle ne change pas l'issue, et l'issue concordante aboutit", (
     concordante.done();
   }
 });
+
+
+/*
+ * La perte de bail : ce que le signal a le droit de trouver derrière lui.
+ *
+ * La preuve L0 `C-P1-F09` établit qu'une panne de maintien signale au lieu de tuer le
+ * processus. Le plan exige deux choses de plus, qu'aucune preuve n'atteignait :
+ * la capacité doit être révoquée AVANT le signal, et le signal reste unique même si son
+ * écriture échoue.
+ */
+
+/** Un run possédé dont le fichier de battement est devenu inécrivable. */
+function bailQuiVaSePerdre(): { dir: string; done: () => void; lease: Lease } {
+  const { dir, done } = dossier();
+  const { manifest } = openRun(dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+  const lease = own(dir, manifest.runId);
+  const hb = join(dir, `${manifest.runId}.lease`, `hb-${lease.leaseId}`);
+  assert.ok(existsSync(hb), "PRÉCONDITION — le battement initial doit exister");
+  rmSync(hb);
+  mkdirSync(hb); // la prochaine écriture rendra EISDIR
+  return { dir, done, lease };
+}
+
+test("perte de bail — la capacité entière est révoquée AVANT le signal, pas après", (t) => {
+  const { dir, done, lease } = bailQuiVaSePerdre();
+  try {
+    /*
+     * Le gestionnaire tente une mutation, comme le ferait un vrai : arrêter des enfants,
+     * journaliser, remonter un refus. S'il peut encore écrire, la fenêtre existe.
+     */
+    let mutationPendantLeSignal: string | undefined;
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const battement = startHeartbeat(dir, lease, () => {
+      try {
+        allocateSeq(dir, lease);
+        mutationPendantLeSignal = "la mutation a ABOUTI";
+      } catch (err) {
+        mutationPendantLeSignal = `refusée : ${(err as Error).constructor.name}`;
+      }
+    }, 10);
+    t.mock.timers.tick(35);
+    battement.stop();
+
+    assert.equal(
+      mutationPendantLeSignal,
+      "refusée : NotOwnerError",
+      "le gestionnaire ne doit plus rien pouvoir muter : révoquer après le signal laisserait " +
+        "la fenêtre ouverte pendant tout son travail",
+    );
+    // Et la révocation survit au signal : ce qui vient après ne mute pas davantage.
+    assert.throws(() => allocateSeq(dir, lease), /révoquée après une perte de bail/);
+
+    /*
+     * La révocation ne ferme pas seulement les mutateurs qui passent par `assertOwner`.
+     * Rebattre maintiendrait vivant un bail inutilisable ; le libérer le rendrait
+     * reprenable par un tiers ; le réacquérir sous la même session ferait les deux.
+     */
+    const owner = join(dir, `${lease.runId}.lease`, "owner.json");
+    const ownerApresSignal = readFileSync(owner, "utf-8");
+    assert.equal(heartbeatRun(dir, lease), false, "une capacité révoquée ne rebat plus");
+    assert.equal(
+      releaseRunOwnership(dir, lease),
+      false,
+      "une capacité révoquée ne libère pas le bail qu'elle ne sait plus prouver",
+    );
+    const reacquisition = acquireRunOwnership(dir, lease.runId, lease.sessionId);
+    assert.equal(reacquisition.ok, false, "le même leaseId révoqué ne doit pas être réacquis");
+    if (!reacquisition.ok) {
+      assert.equal(reacquisition.kind, "recovery-required");
+    }
+    assert.equal(
+      readFileSync(owner, "utf-8"),
+      ownerApresSignal,
+      "battement, libération et réacquisition refusés doivent laisser owner.json intact",
+    );
+  } finally {
+    done();
+  }
+});
+
+test("perte de bail — le signal reste unique par capacité, même si son écriture échoue", (t) => {
+  const { dir, done, lease } = bailQuiVaSePerdre();
+  try {
+    let appels = 0;
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const signal = () => {
+      appels += 1;
+      throw new Error("l'écriture du signal a échoué");
+    };
+    // Deux contrôleurs sur la même capacité : `clearInterval` ne suffit pas à rendre le
+    // signal unique entre eux. La transition de révocation, elle, est commune.
+    const battementA = startHeartbeat(dir, lease, signal, 10);
+    const battementB = startHeartbeat(dir, lease, signal, 10);
+
+    assert.doesNotThrow(() => t.mock.timers.tick(100), "un gestionnaire qui lève ne doit pas sortir du timer");
+    battementA.stop();
+    battementB.stop();
+
+    assert.equal(
+      appels,
+      1,
+      "deux pertes annoncées pour une seule perte réelle, et la seconde arriverait sur un " +
+        "monde que la première a déjà changé",
+    );
+  } finally {
+    done();
+  }
+});

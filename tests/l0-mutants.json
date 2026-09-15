@@ -118,5 +118,11 @@
     "file": "bin/subagent-recover",
     "find": "        if (err instanceof TransitionLockedError) {\n          console.error(err.message);",
     "replace": "        if (false) {\n          console.error(err.message);"
+  },
+  {
+    "test": "L0 REG C-P1-F09 — une panne d'écriture du battement signale la perte au lieu de tuer le processus",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    let tenu: boolean;\n    try {\n      tenu = heartbeatRun(dir, lease);\n    } catch {\n      tenu = false;\n    }",
+    "replace": "    const tenu = heartbeatRun(dir, lease);"
   }
 ]

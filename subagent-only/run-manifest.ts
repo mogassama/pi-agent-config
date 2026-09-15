@@ -1331,6 +1331,28 @@ export interface Lease {
 }
 
 /**
+ * Les capacités révoquées, par identité complète de bail.
+ *
+ * En MÉMOIRE, et pas sur le disque : une révocation n'est pas une libération. Le bail
+ * reste celui qu'il était — c'est la session qui cesse de pouvoir s'en servir, parce
+ * qu'elle ne sait plus prouver qu'elle le tient. Toucher au bail ferait le contraire de
+ * ce qu'on veut : il serait repris par un tiers alors que son propriétaire est peut-être
+ * encore vivant.
+ *
+ * La clé porte R ET leaseId : le contrat identifie la capacité par ce couple, et une
+ * collision d'identifiant entre deux runs ne doit pas révoquer le second par accident.
+ */
+const CAPACITES_REVOQUEES = new Set<string>();
+
+function cleCapacite(lease: Pick<Lease, "runId" | "leaseId">): string {
+  return `${lease.runId}\0${lease.leaseId}`;
+}
+
+function capaciteRevoquee(lease: Pick<Lease, "runId" | "leaseId">): boolean {
+  return CAPACITES_REVOQUEES.has(cleCapacite(lease));
+}
+
+/**
  * Le bail est un **répertoire**, et c'est `mkdir` qui tranche.
  *
  * La première version faisait « regarder puis écrire » : deux sessions
@@ -1630,6 +1652,20 @@ export function inspectRun(dir: string, runId: string, sessionId: string): RunAc
     };
   }
   if (!owner) return { kind: "free" };
+  /*
+   * La même session ne réacquiert jamais implicitement une capacité qu'elle a révoquée.
+   * Sinon `acquireUnguarded` rebattrait avant de rendre exactement le même leaseId : une
+   * panne transitoire maintiendrait alors vivant, indéfiniment, un bail inutilisable.
+   */
+  if (capaciteRevoquee(owner)) {
+    return {
+      kind: "recovery-required",
+      reason:
+        `la capacité ${owner.leaseId} de ${runId} a été révoquée après une perte de bail : ` +
+        `réconciliation explicite requise`,
+      lease: owner,
+    };
+  }
   if (owner.sessionId === sessionId) return { kind: "owned", lease: owner };
   if (leaseAlive(dir, owner)) return { kind: "owned-by-other", lease: owner };
   return {
@@ -1741,6 +1777,9 @@ export function ownsRun(dir: string, lease: Lease): boolean {
  * propriété perdue, et il n'y a aucune fenêtre entre la vérification et l'acte.
  */
 export function heartbeatRun(dir: string, lease: Lease): boolean {
+  // Après révocation, même un battement serait une mutation : il pourrait maintenir
+  // artificiellement vivant un bail que cette session ne sait plus prouver.
+  if (capaciteRevoquee(lease)) return false;
   try {
     beat(dir, lease);
   } catch (err) {
@@ -1761,6 +1800,9 @@ export function heartbeatRun(dir: string, lease: Lease): boolean {
  * effacer un bail que tout le reste classait « reprise requise ».
  */
 export function releaseRunOwnership(dir: string, lease: Lease): boolean {
+  // Une capacité révoquée n'a plus le droit de rendre le bail supprimable par un tiers.
+  // La réconciliation explicite est le seul chemin qui puisse désormais le déplacer.
+  if (capaciteRevoquee(lease)) return false;
   return withRunGuard(dir, lease.runId, () => {
     // Sous le verrou : une reprise ne peut plus s'intercaler entre la
     // vérification et la suppression, donc on n'efface plus le bail d'autrui.
@@ -1771,6 +1813,17 @@ export function releaseRunOwnership(dir: string, lease: Lease): boolean {
 }
 
 function assertOwner(dir: string, lease: Lease, quoi: string): void {
+  /*
+   * Une capacité révoquée ne mute plus rien. Le disque peut encore désigner ce bail
+   * comme propriétaire — c'est précisément le cas quand le maintien a échoué sans que
+   * personne l'ait repris. Ce que la session ne sait plus prouver, elle ne s'en sert plus.
+   */
+  if (capaciteRevoquee(lease)) {
+    throw new NotOwnerError(
+      `${quoi} : la capacité de ${lease.runId} a été révoquée après une perte de bail. ` +
+        `Lire reste possible, muter non.`,
+    );
+  }
   if (!ownsRun(dir, lease)) {
     throw new NotOwnerError(
       `${quoi} demande le bail courant de ${lease.runId} ; celui présenté ne l'est plus. ` +
@@ -1815,16 +1868,65 @@ export interface Heartbeat {
  * que le temps passe. Le timer est `unref` — il n'a aucune raison de maintenir
  * pi en vie à lui seul.
  */
+/**
+ * Révoque une capacité une seule fois.
+ *
+ * Le booléen désigne la transition : `true` pour le premier révocateur, `false` pour les
+ * contrôleurs qui constatent ensuite la même perte. Il porte donc l'unicité du signal
+ * sans ajouter un second drapeau susceptible de diverger de l'état de révocation.
+ */
+export function revoquerCapacite(lease: Lease): boolean {
+  const cle = cleCapacite(lease);
+  if (CAPACITES_REVOQUEES.has(cle)) return false;
+  CAPACITES_REVOQUEES.add(cle);
+  return true;
+}
+
 export function startHeartbeat(
   dir: string,
   lease: Lease,
   onLost?: (runId: string) => void,
   everyMs: number = LEASE_HEARTBEAT_MS,
 ): Heartbeat {
+  /*
+   * Un signal, une seule fois, et la capacité révoquée AVANT lui.
+   *
+   * L'ORDRE N'EST PAS COSMÉTIQUE. Signaler d'abord, c'est laisser le gestionnaire —
+   * qui arrête des enfants, écrit un journal, remonte un refus — s'exécuter pendant que
+   * la capacité mute encore. Révoquer d'abord ferme la fenêtre : ce qui suit le signal
+   * ne peut plus rien écrire.
+   *
+   * Et le signal reste unique MÊME SI SON ÉCRITURE ÉCHOUE. L'intervalle est arrêté AVANT
+   * l'appel, donc ce contrôleur ne réessaie pas ; entre plusieurs contrôleurs, la
+   * transition de révocation choisit l'unique émetteur. Un drapeau `signale` séparé
+   * créerait un second état susceptible de diverger de la révocation.
+   */
   const timer = setInterval(() => {
-    if (!heartbeatRun(dir, lease)) {
-      clearInterval(timer);
+    /*
+     * Une panne de MAINTIEN n'est pas une preuve de possession. `heartbeatRun` lève sur
+     * tout ce qui n'est pas ENOENT — un fichier de battement devenu répertoire, un
+     * disque plein, une permission retirée. Laissée remonter, cette exception sort du
+     * timer : sans gestionnaire, node meurt, et une session qui meurt n'a rien signalé
+     * du tout.
+     *
+     * Ne pas savoir si on tient encore le bail, c'est ne plus le tenir.
+     */
+    let tenu: boolean;
+    try {
+      tenu = heartbeatRun(dir, lease);
+    } catch {
+      tenu = false;
+    }
+    if (tenu) return;
+
+    clearInterval(timer);
+    // Plusieurs contrôleurs peuvent observer la même perte. Tous s'arrêtent, mais seul
+    // celui qui effectue la transition de révocation émet le signal.
+    if (!revoquerCapacite(lease)) return;
+    try {
       onLost?.(lease.runId);
+    } catch {
+      /* Le signal a eu lieu ; son écriture a échoué. Il ne se rejoue pas. */
     }
   }, everyMs);
   (timer as unknown as { unref?: () => void }).unref?.();
