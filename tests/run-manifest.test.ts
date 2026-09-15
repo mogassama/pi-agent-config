@@ -66,6 +66,36 @@ function own(dir: string, runId: string, session = S): Lease {
 function attachPlanOwned(dir: string, m: RunManifest, text: string) {
   return attachPlan(dir, text, own(dir, m.runId));
 }
+/**
+ * Sérialise un manifeste TERMINAL conforme, directement sur le disque.
+ *
+ * Réservé aux fixtures. Depuis que la fin d'un run passe par le verbe opérateur et par
+ * lui seul (C1.8), `setStatus` refuse les statuts terminaux : un test qui a besoin d'un
+ * run DÉJÀ terminé le pose, il ne le fabrique pas par un chemin que la production
+ * n'offre plus. Les tests qui prétendent éprouver une vraie terminaison, eux, passent par
+ * `terminerRun`.
+ */
+function poserTerminal(
+  dir: string,
+  outcome: "completed" | "abandoned",
+  reason?: string,
+): RunManifest {
+  const courant = readManifest(dir);
+  assert.ok(courant, "PRÉCONDITION — poserTerminal exige un manifeste actif");
+  const terminal: RunManifest = {
+    ...courant,
+    status: outcome,
+    ended: {
+      at: "2026-09-14T10:00:00.000Z",
+      by: "fixture",
+      outcome,
+      ...(outcome === "abandoned" ? { reason: reason ?? "fixture" } : {}),
+    },
+  };
+  writeFileSync(join(dir, "active-run.json"), `${JSON.stringify(terminal, null, 2)}\n`);
+  return terminal;
+}
+
 const PLAN = JSON.stringify({
   version: 1,
   work_units: [{ id: "W03", goal: "g", depends_on: [], expected_write_scope: ["src/a.py"] }],
@@ -152,7 +182,7 @@ test("remplacer un run terminé archive l'ancien manifeste", () => {
   const { dir, done } = dossier();
   try {
     const vieux = openRun(dir).manifest;
-    setStatus(dir, "completed", own(dir, vieux.runId));
+    poserTerminal(dir, "completed");
 
     const neuf = openRun(dir);
     assert.equal(neuf.resumed, false);
@@ -174,7 +204,8 @@ test("archiver un manifeste déjà archivé ne casse rien", () => {
   const { dir, done } = dossier();
   try {
     const vieux = openRun(dir).manifest;
-    setStatus(dir, "completed", own(dir, vieux.runId));
+    void vieux;
+    poserTerminal(dir, "completed");
 
     const a = openRun(dir);
     // La seconde session arrive après : elle voit un run actif et le rejoint.
@@ -258,9 +289,7 @@ test("une création n'écrase jamais un manifeste existant", () => {
   const { dir, done } = dossier();
   try {
     const un = openRun(dir).manifest;
-    const bail = own(dir, un.runId);
-    setStatus(dir, "completed", bail);
-    releaseRunOwnership(dir, bail);
+    poserTerminal(dir, "completed");
 
     // Terminé : le suivant est un autre run, et il s'écrit une seule fois.
     const deux = openRun(dir);
@@ -276,7 +305,7 @@ test("un run terminé n'est pas repris : le suivant en est un autre", () => {
   const { dir, done } = dossier();
   try {
     const premier = openRun(dir).manifest;
-    setStatus(dir, "completed", own(dir, premier.runId));
+    poserTerminal(dir, "completed");
     const second = openRun(dir);
     assert.equal(second.resumed, false);
     assert.notEqual(second.manifest.runId, premier.runId);
@@ -289,7 +318,8 @@ test("un run abandonné n'est pas repris non plus", () => {
   const { dir, done } = dossier();
   try {
     const premier = openRun(dir).manifest;
-    setStatus(dir, "abandoned", own(dir, premier.runId));
+    void premier;
+    poserTerminal(dir, "abandoned", "fixture abandonnée");
     assert.equal(openRun(dir).resumed, false);
   } finally {
     done();
@@ -546,7 +576,12 @@ test("geler le plan et changer le statut demandent aussi la propriété", () => 
     const bailA = own(dir, m.runId, "s-A");
     const usurpe = { ...bailA, sessionId: "s-B" };
     assert.throws(() => attachPlan(dir, PLAN, usurpe), NotOwnerError);
-    assert.throws(() => setStatus(dir, "completed", usurpe), NotOwnerError);
+    /*
+     * « active » et non « completed » : cette preuve porte sur la PROPRIÉTÉ. Depuis que
+     * le setter refuse les statuts terminaux, un `completed` serait refusé par la garde
+     * de C1.8 et la preuve serait verte par une autre porte que celle qu'elle vise.
+     */
+    assert.throws(() => setStatus(dir, "active", usurpe), NotOwnerError);
   } finally {
     done();
   }
@@ -732,7 +767,8 @@ test("une mutation présentant un bail périmé de la même session est refusée
 
     assert.throws(() => allocateSeq(dir, ancien), NotOwnerError);
     assert.throws(() => attachPlan(dir, PLAN, ancien), NotOwnerError);
-    assert.throws(() => setStatus(dir, "completed", ancien), NotOwnerError);
+    // « active » : cette preuve porte sur la propriété, pas sur la terminalité.
+    assert.throws(() => setStatus(dir, "active", ancien), NotOwnerError);
 
     // Le bail courant, lui, passe.
     assert.equal(allocateSeq(dir, nouveau).seq, 1);
@@ -2519,5 +2555,64 @@ test("archivage — une source disparue refuse, et ne fait naître aucun success
     assert.equal(r.successeurCree, true, "et un successeur distinct doit être né");
   } finally {
     rmSync(intacte, { recursive: true, force: true });
+  }
+});
+
+
+/*
+ * L'équivalence v2, dans le sens que l'étape 1 ne pouvait pas fermer.
+ *
+ *     status ∈ {completed, abandoned} ⇔ ended est présent
+ *
+ * Le sens « ended présent → statut terminal concordant » était déjà tenu. L'autre ne
+ * pouvait pas l'être tant que le setter général produisait des statuts terminaux sans
+ * fin. Il se ferme au même changement que sa garde, et il se vérifie ici : sans quoi la
+ * fermeture serait décorative, et son retrait ne ferait rougir personne.
+ */
+function poserManifesteBrut(dir: string, champs: Record<string, unknown>): void {
+  const courant = readManifest(dir);
+  assert.ok(courant, "PRÉCONDITION — un manifeste actif doit exister");
+  const doc = { ...courant, ...champs } as Record<string, unknown>;
+  for (const [cle, valeur] of Object.entries(champs)) {
+    if (valeur === undefined) delete doc[cle];
+  }
+  writeFileSync(join(dir, "active-run.json"), `${JSON.stringify(doc, null, 2)}\n`);
+}
+
+test("manifeste v2 — un run terminal sans sa fin est illisible, et le même avec sa fin se lit", () => {
+  const sansFin = dossier();
+  try {
+    openRun(sansFin.dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+    poserManifesteBrut(sansFin.dir, { status: "completed", ended: undefined });
+    const avant = readFileSync(join(sansFin.dir, "active-run.json"), "utf-8");
+    assert.equal(JSON.parse(avant).version, 2, "PRÉCONDITION — le manifeste doit être en v2");
+    assert.equal(JSON.parse(avant).ended, undefined, "PRÉCONDITION — et ne porter aucune fin");
+
+    assert.throws(
+      () => readManifest(sansFin.dir),
+      /un run est terminal si et seulement s'il porte sa fin/,
+      "ne pas savoir qui a terminé, quand et pourquoi, c'est ne pas savoir si le run est terminé",
+    );
+    // Non réinscriptible : aucune surface publique ne peut le reprendre.
+    assert.throws(() => openRun(sansFin.dir, "cbf7015a57b5e296d7c964790bb4989c4380da25"), /porte sa fin/);
+    assert.equal(
+      readFileSync(join(sansFin.dir, "active-run.json"), "utf-8"),
+      avant,
+      "et le refus ne modifie rien",
+    );
+  } finally {
+    sansFin.done();
+  }
+
+  // Témoin positif : le MÊME terminal, avec sa fin, se lit et s'archive.
+  const avecFin = dossier();
+  try {
+    const { manifest } = openRun(avecFin.dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+    poserTerminal(avecFin.dir, "completed");
+    assert.equal(readManifest(avecFin.dir)!.status, "completed");
+    const suivant = openRun(avecFin.dir, "cbf7015a57b5e296d7c964790bb4989c4380da25");
+    assert.notEqual(suivant.manifest.runId, manifest.runId, "et la succession a lieu");
+  } finally {
+    avecFin.done();
   }
 });

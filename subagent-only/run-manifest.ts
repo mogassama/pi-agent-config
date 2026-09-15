@@ -183,22 +183,18 @@ function writeAtomic(path: string, text: string): void {
  * ramener à l'une des deux versions inventerait ce qu'on ne sait pas. Refus nommé,
  * et aucune conversion implicite — ni ici, ni ailleurs.
  *
- * TOLÉRANCE TRANSITOIRE, NON CANONIQUE (Sol, adjudication de l'étape 1).
- *
- * À cette étape intermédiaire seulement, le lecteur et l'écrivain v2 vérifient
- * `ended présent → status terminal concordant`, mais tolèrent encore
- * `status terminal sans ended`, parce que le setter général historique peut
- * toujours produire cet état.
- *
- * Cette tolérance n'est pas canonique et ne survivra pas au lot 1. À l'étape 4,
- * dans le MÊME changement que l'interdiction des états terminaux dans setStatus,
- * `readManifest` et `writeManifest` imposeront pour tout manifeste v2 :
+ * L'ÉQUIVALENCE V2 EST COMPLÈTE, dans les deux sens.
  *
  *     status ∈ {completed, abandoned} ⇔ ended est présent
  *
- * Un manifeste v2 terminal sans `ended` deviendra alors illisible et non
- * réinscriptible. Un manifeste v1 reste soumis à C4.7 : aucun champ v2 ne lui est
- * ajouté, et son éventuelle migration opérateur reste hors de ce lot.
+ * L'étape 1 ne fermait qu'un sens, parce que le setter général historique pouvait
+ * encore produire un statut terminal sans fin. Ce chemin est fermé au même changement :
+ * la fin d'un run passe désormais par le verbe opérateur et par lui seul (C1.8), donc un
+ * manifeste v2 terminal sans `ended` ne peut plus naître d'un runtime correct.
+ *
+ * Il devient illisible ET non réinscriptible : ne pas savoir QUI a terminé, QUAND et
+ * POURQUOI, c'est ne pas savoir si le run est terminé. Un manifeste v1 reste soumis à
+ * C4.7 — aucun champ v2 ne lui est ajouté, et sa migration opérateur reste hors de ce lot.
  */
 function assertVersionedFields(m: Partial<RunManifest>, quoi: string): void {
   const champsV2 = ["ledgers", "ended", "continuation_block"].filter(
@@ -230,6 +226,15 @@ function assertVersionedFields(m: Partial<RunManifest>, quoi: string): void {
         );
       }
     }
+  }
+
+  const terminal = m.status === "completed" || m.status === "abandoned";
+  if (terminal !== (m.ended !== undefined)) {
+    throw new RecoveryError(
+      `${quoi} : statut ${String(m.status)} et ` +
+        `${m.ended === undefined ? "aucune fin" : "une fin posée"} se contredisent — ` +
+        `en version 2, un run est terminal si et seulement s'il porte sa fin`,
+    );
   }
 
   const fin: unknown = m.ended;
@@ -831,7 +836,29 @@ export function terminerRun(dir: string, runId: string, fin: FinDemandee): RunMa
   );
 }
 
+/**
+ * Le setter général des statuts NON TERMINAUX.
+ *
+ * C1.8 : la fin d'un run est posée par un verbe opérateur, et par lui seul. Tant que ce
+ * setter acceptait `completed` et `abandoned`, il existait DEUX chemins de terminaison —
+ * celui-ci écrivant un statut terminal sous le seul verrou du run, sans exclusion de N,
+ * sans précondition, sans `ended`, sans archive et sans libérer `active-run.json`.
+ *
+ * La garde est de RUNTIME, et le paramètre reste `RunStatus`. Rétrécir le type à
+ * `Exclude<RunStatus, "completed" | "abandoned">` rendrait
+ * `C1.8-setStatus-terminal-interdit` incompilable : elle appelle ce setter avec
+ * `completed`, c'est son objet. Une garde qu'aucune preuve ne peut atteindre est une
+ * garde décorative.
+ */
 export function setStatus(dir: string, status: RunStatus, lease: Lease): RunManifest {
+  if (status === "completed" || status === "abandoned") {
+    throw new RecoveryError(
+      `changer le statut du run : « ${status} » ne s'obtient pas par le setter général. ` +
+        `La fin d'un run passe par le verbe opérateur, qui prend l'exclusion de l'espace, ` +
+        `contrôle ses préconditions, pose sa fin, publie l'archive et libère le manifeste ` +
+        `actif (C1.8). Ce refus ne modifie rien.`,
+    );
+  }
   return withRunGuard(dir, lease.runId, () => {
     const next: RunManifest = { ...mutable(dir, lease, "changer le statut du run"), status };
     writeManifest(dir, next);

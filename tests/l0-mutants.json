@@ -76,5 +76,11 @@
     "file": "extensions/subagent/index.ts",
     "find": "          if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push(\"scope-breach\");",
     "replace": "          // mutant B3-racine-propre : plus rien n'est intégrable\n          void unitDef; void finalFiles;\n          blocks.push(\"scope-breach\");"
+  },
+  {
+    "test": "L0 REG C1.8-setStatus-terminal-interdit — le setter général ne termine pas un run, le verbe opérateur seul le fait",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  if (status === \"completed\" || status === \"abandoned\") {",
+    "replace": "  if (false) {"
   }
 ]

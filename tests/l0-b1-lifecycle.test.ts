@@ -32,6 +32,15 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`.
+ *
+ * Elle est verte sur l'objet corrigé, et elle porte un mutant qui réintroduit le défaut.
+ * Sans ce mutant, elle pourrait verdir grâce à une autre porte que celle qu'elle vise.
+ */
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
 }
@@ -598,7 +607,7 @@ preservation("C1.8-trace", "un verbe inconnu refuse proprement, sans trace brute
  * de la terminalité. Cette preuve ne porte pas sur le format : elle porte sur le fait qu'un
  * setter général ne termine pas un run, ce qui est vrai des deux versions.
  */
-regression("C1.8-setStatus-terminal-interdit", "le setter général ne termine pas un run, le verbe opérateur seul le fait", () => {
+regressionCorrigee("C1.8-setStatus-terminal-interdit", "le setter général ne termine pas un run, le verbe opérateur seul le fait", () => {
     const vivant = runEcrit("l0-b1-set-actif-", [{ unite: "W03", ouverte: true }], { manifesteV1: true });
     const bailVivant = acquireRunOwnership(vivant.dir, RUN, "session-setter");
     precondition(bailVivant.ok, "le bail du témoin positif doit être détenu");
