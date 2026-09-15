@@ -124,5 +124,17 @@
     "file": "subagent-only/run-manifest.ts",
     "find": "    let tenu: boolean;\n    try {\n      tenu = heartbeatRun(dir, lease);\n    } catch {\n      tenu = false;\n    }",
     "replace": "    const tenu = heartbeatRun(dir, lease);"
+  },
+  {
+    "test": "L0 PRES C1.10 — un vestige de transition ancien ne lève ni verrou ni registre",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "      const depuis = ageOf(path);\n      if (depuis > GUARD_STALE_MS) {\n        throw new TransitionLockedError(\n          `${RUN_TRANSITION_LOCKED} : une transition de ${runId} est restée inachevée `",
+    "replace": "      const depuis = ageOf(path);\n      if (depuis > GUARD_STALE_MS) {\n        // mutant C1.10 : le vestige est levé sur son seul mtime.\n        rmSync(path, { recursive: true, force: true });\n        continue;\n      }\n      if (false) {\n        throw new TransitionLockedError(\n          `${RUN_TRANSITION_LOCKED} : une transition de ${runId} est restée inachevée `"
+  },
+  {
+    "test": "L0 PRES C1.8-observation — observer un run sain ne le termine pas",
+    "file": "bin/subagent-recover",
+    "find": "if (!unite) {\n  const { laneRead, vu } = etat();\n  console.log(`run ${runId} · ${manifest.status}`);",
+    "replace": "if (!unite) {\n  const { laneRead, vu } = etat();\n  // mutant C1.8-observation : l'observation conclut le run qu'elle vient de lire.\n  (await import(\"node:fs\")).writeFileSync(\n    join(dir, \"active-run.json\"),\n    `${JSON.stringify({ ...manifest, status: \"abandoned\" }, null, 2)}\\n`,\n  );\n  console.log(`run ${runId} · ${manifest.status}`);"
   }
 ]
