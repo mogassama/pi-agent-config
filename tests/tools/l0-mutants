@@ -3,6 +3,7 @@
  * l0-mutants — chaque porte éprouvée rougit-elle quand on la retire ?
  *
  *   tests/tools/l0-mutants
+ *   tests/tools/l0-mutants --racine <dépôt>     autotest seulement ; la racine est imprimée
  *
  * Exige un mutant pour chaque couverture et pour chaque régression corrigée ;
  * refuse un mutant sur une régression ouverte, qui n'a encore rien à retirer.
@@ -12,41 +13,207 @@
  * est listée sans mutant, à voix haute, pour que ce trou reste visible ; le lot qui
  * introduit ce code lui en donne un.
  *
- * Pour chaque mutant de tests/l0-mutants.json — { test, file, find, replace } :
+ * tests/l0-mutants.json accepte exactement l'une de deux formes par entrée :
  *
- *   1. une copie fraîche (fichiers suivis + fichiers L0 non suivis) : la preuve
- *      intacte y est verte, et node rend 0 ;
- *   2. une seconde copie fraîche : la cible y apparaît exactement une fois, le
- *      fichier muté diffère de l'original, la preuve y est ROUGE sur une assertion
- *      PROPRIÉTÉ, et node rend un code non nul.
+ *   historique   { test, file, find, replace }
+ *   composée     { test, edits: [{ file, find, replace }, …],
+ *                  control?: [{ file, find, replace }, …], runs? }
  *
- * Deux copies par mutant plutôt qu'une restauration : un test qui modifierait un
- * autre fichier que la cible ne contamine ainsi ni le mutant ni le suivant.
+ * Une forme composée sert quand une seule édition ne peut pas atteindre la propriété :
+ * plusieurs gardes redondantes, ou une course dont la fenêtre doit être élargie. Dans
+ * ce second cas, `control` porte l'élargissement SEUL : sans lui, un rouge prouverait
+ * la pause, pas l'absence de garde. Un contrôle impose `runs` ≥ 20.
+ *
+ * Pour chaque mutant :
+ *
+ *   1. une copie fraîche : la preuve intacte y est verte, et node rend 0 ;
+ *   2. si `control` : `runs` copies fraîches, contrôle appliqué, preuve VERTE à chaque
+ *      exécution ;
+ *   3. `runs` copies fraîches (1 par défaut), éditions appliquées dans l'ordre : chaque
+ *      cible apparaît exactement une fois dans le fichier d'origine ET dans le fichier
+ *      au moment où elle s'applique ; chaque fichier touché diffère de l'original ; la
+ *      preuve est ROUGE sur une assertion PROPRIÉTÉ et node rend un code non nul, à
+ *      CHAQUE exécution — une série incomplète est une anomalie, pas un mutant ;
+ *   4. après chaque mutant, tout fichier suivi ou non ignoré du dépôt source est
+ *      identique à son état antérieur à l'épreuve.
+ *
+ * Des copies fraîches plutôt qu'une restauration : un test qui modifierait un autre
+ * fichier que la cible ne contamine ainsi ni l'exécution suivante ni le mutant suivant.
+ *
+ * JavaScript sans annotation : le retrait des types ne s'applique pas à un fichier
+ * sans extension.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { copieJetable, declarations, echapper, lancer, lireTap, MARQUE } from "../l0-lib.ts";
 
-const root = join(import.meta.dirname, "..", "..");
-const mutants = JSON.parse(readFileSync(join(root, "tests", "l0-mutants.json"), "utf-8"));
+const RUNS_COURSE = 20;
+const defaut = join(import.meta.dirname, "..", "..");
+const iRacine = process.argv.indexOf("--racine");
+const root = iRacine > 0 ? resolve(process.argv[iRacine + 1] ?? "") : defaut;
+const contenuMutants = JSON.parse(readFileSync(join(root, "tests", "l0-mutants.json"), "utf-8"));
+const mutants = Array.isArray(contenuMutants) ? contenuMutants : [];
 const { liste, anomalies } = declarations(root);
 const sha = (s) => createHash("sha256").update(s).digest("hex");
-if (mutants.length === 0) anomalies.push("tests/l0-mutants.json est vide");
+if (!Array.isArray(contenuMutants)) anomalies.push("tests/l0-mutants.json n'est pas une liste");
+else if (mutants.length === 0) anomalies.push("tests/l0-mutants.json est vide");
 
-// Deux déclarations rigoureusement identiques comptent la même expérience deux fois, et
-// gonflent un total sans rien éprouver de plus. Plusieurs mutants distincts visant une même
-// preuve composée restent légitimes : c'est une branche chacun.
+/**
+ * Empreinte du dépôt source entier, et non des seules cibles de mutation.
+ *
+ * `git ls-files -co --exclude-standard` couvre les fichiers suivis et les fichiers
+ * non suivis qui ne sont pas ignorés. Une épreuve ne peut donc pas cacher une écriture
+ * dans un autre fichier source, une création, une suppression, un changement de mode,
+ * ou le remplacement d'un fichier ordinaire par un lien symbolique.
+ */
+function etatDepotSource() {
+  const p = spawnSync(
+    "git",
+    ["-C", root, "ls-files", "-co", "--exclude-standard", "-z"],
+    { encoding: "utf-8" },
+  );
+  if (p.status !== 0) {
+    throw new Error(`inventaire Git du dépôt source impossible : ${p.stderr.trim()}`);
+  }
+  const etat = new Map();
+  for (const file of p.stdout.split("\0").filter(Boolean).sort()) {
+    const path = join(root, file);
+    if (!existsSync(path)) {
+      etat.set(file, "absent");
+      continue;
+    }
+    const stat = lstatSync(path);
+    const mode = (stat.mode & 0o777).toString(8);
+    if (stat.isSymbolicLink()) etat.set(file, `l:${mode}:${readlinkSync(path)}`);
+    else if (stat.isFile()) etat.set(file, `f:${mode}:${sha(readFileSync(path))}`);
+    else etat.set(file, `other:${mode}`);
+  }
+  return etat;
+}
+
+function changementsDepot(avant, apres) {
+  const fichiers = new Set([...avant.keys(), ...apres.keys()]);
+  return [...fichiers].filter((f) => avant.get(f) !== apres.get(f)).sort();
+}
+
+// ------------------------------------------------------------------ les deux formes
+
+const estTexte = (v) => typeof v === "string" && v.length > 0;
+const cheminSur = (f) => estTexte(f) && !isAbsolute(f) && !normalize(f).startsWith("..");
+function edition(e, ou) {
+  if (!e || typeof e !== "object" || Array.isArray(e)) return `${ou} : pas un objet`;
+  const cles = Object.keys(e).sort().join(",");
+  if (cles !== "file,find,replace") return `${ou} : clés ${cles}, attendues file,find,replace`;
+  if (!cheminSur(e.file)) return `${ou} : chemin refusé (${String(e.file)})`;
+  if (!estTexte(e.find) || typeof e.replace !== "string") return `${ou} : find ou replace invalide`;
+  if (e.find === e.replace) return `${ou} : find et replace identiques`;
+  return null;
+}
+/** Rend { edits, control, runs } ou { erreur } — jamais une forme devinée. */
+function forme(m) {
+  if (!m || typeof m !== "object" || !estTexte(m.test)) return { erreur: "entrée sans test" };
+  const cles = Object.keys(m).filter((k) => k !== "test").sort();
+  if (cles.join(",") === "file,find,replace") {
+    const err = edition({ file: m.file, find: m.find, replace: m.replace }, "forme historique");
+    return err ? { erreur: err } : { edits: [{ file: m.file, find: m.find, replace: m.replace }], control: [], runs: 1 };
+  }
+  const permises = new Set(["edits", "control", "runs"]);
+  const etrangeres = cles.filter((k) => !permises.has(k));
+  if (etrangeres.length > 0 || !cles.includes("edits")) {
+    return { erreur: `forme ni historique ni composée (clés ${cles.join(",")})` };
+  }
+  if (!Array.isArray(m.edits) || m.edits.length === 0) return { erreur: "edits vide ou absent" };
+  const control = m.control ?? [];
+  if (!Array.isArray(control)) return { erreur: "control n'est pas une liste" };
+  for (const [i, e] of m.edits.entries()) {
+    const err = edition(e, `edits[${i}]`);
+    if (err) return { erreur: err };
+  }
+  for (const [i, e] of control.entries()) {
+    const err = edition(e, `control[${i}]`);
+    if (err) return { erreur: err };
+  }
+  const runs = m.runs ?? 1;
+  if (!Number.isInteger(runs) || runs < 1) return { erreur: `runs invalide (${String(m.runs)})` };
+  if (control.length > 0 && runs < RUNS_COURSE) {
+    return { erreur: `un contrôle impose runs ≥ ${RUNS_COURSE} (déclaré ${runs})` };
+  }
+  return { edits: m.edits, control, runs };
+}
+
+/**
+ * Applique des éditions à une copie fraîche, dans l'ordre.
+ *
+ * Rend null, ou la raison du refus. La copie de chaque fichier doit être identique au
+ * dépôt avant sa première édition : sinon on muterait autre chose que ce qu'on mesure.
+ */
+function appliquer(copie, edits) {
+  const originaux = new Map();
+  for (const [i, e] of edits.entries()) {
+    const cible = join(copie, e.file);
+    if (!existsSync(cible)) return `édition ${i} : ${e.file} absent de la copie`;
+    if (!originaux.has(e.file)) {
+      const original = readFileSync(cible, "utf-8");
+      const source = join(root, e.file);
+      if (!existsSync(source) || sha(original) !== sha(readFileSync(source, "utf-8"))) {
+        return `édition ${i} : la copie de ${e.file} diffère du dépôt`;
+      }
+      originaux.set(e.file, original);
+    }
+    const dansOriginal = originaux.get(e.file).split(e.find).length - 1;
+    if (dansOriginal !== 1) return `édition ${i} : cible trouvée ${dansOriginal} fois dans ${e.file}`;
+    const courant = readFileSync(cible, "utf-8");
+    const dansCourant = courant.split(e.find).length - 1;
+    if (dansCourant !== 1) {
+      return `édition ${i} : cible trouvée ${dansCourant} fois dans ${e.file} au moment de l'appliquer`;
+    }
+    writeFileSync(cible, courant.replace(e.find, () => e.replace));
+  }
+  for (const [file, original] of originaux) {
+    if (sha(readFileSync(join(copie, file), "utf-8")) === sha(original)) {
+      return `la mutation ne change pas ${file}`;
+    }
+  }
+  return null;
+}
+
+/** Une exécution sur copie fraîche : « vert », « rouge », ou la raison d'un autre issue. */
+function executer(edits, decl, motif) {
+  const copie = copieJetable(root);
+  try {
+    const refus = edits.length > 0 ? appliquer(copie, edits) : null;
+    if (refus) return { issue: "refus", detail: refus };
+    const { code, tap } = lancer(copie, [decl.fichier], motif);
+    const r = lireTap(tap).get(decl.nom);
+    if (!r || r.length !== 1) return { issue: "absente", detail: `absente du rapport (node rc=${code})` };
+    if (r[0].directive) return { issue: "directive", detail: `exécutée sous ${r[0].directive}` };
+    if (r[0].ok) return code === 0 ? { issue: "vert" } : { issue: "autre", detail: `verte mais node rend ${code}` };
+    if (!r[0].bloc.includes(MARQUE)) return { issue: "autre", detail: `rouge SANS ${MARQUE} — rouge pour une autre raison` };
+    if (code === 0) return { issue: "autre", detail: "rouge mais node rend 0" };
+    return { issue: "rouge" };
+  } finally {
+    rmSync(copie, { recursive: true, force: true });
+  }
+}
+
+// ------------------------------------------------------------------ déclarations
+
+const formes = new Map();
 const vues = new Map();
 for (const m of mutants) {
-  const cle = JSON.stringify([m.test, m.file, m.find, m.replace]);
-  if (vues.has(cle)) anomalies.push(`mutant déclaré deux fois à l'identique : ${m.test} sur ${m.file}`);
+  const f = forme(m);
+  if (f.erreur) { anomalies.push(`${m?.test ?? "(sans test)"} : ${f.erreur}`); continue; }
+  // Deux déclarations identiques comptent la même expérience deux fois. Plusieurs mutants
+  // distincts visant une même preuve composée restent légitimes : une branche chacun.
+  const cle = JSON.stringify([m.test, f.edits, f.control, f.runs]);
+  if (vues.has(cle)) anomalies.push(`mutant déclaré deux fois à l'identique : ${m.test}`);
   vues.set(cle, true);
+  formes.set(m, f);
 }
 
 const aMutant = (d) => mutants.some((m) => m.test === d.nom);
-// Obligatoire : ce qui prétend tenir une porte. Une préservation n'en exige pas encore ;
-// quand elle en a un, elle compte parmi les preuves éprouvées comme les autres.
 const obligatoires = liste.filter((d) => d.espece === "COUV" || d.corrigee);
 for (const d of obligatoires) {
   if (!aMutant(d)) anomalies.push(`${d.espece === "COUV" ? "couverture" : "régression corrigée"} sans mutant : ${d.nom}`);
@@ -56,43 +223,53 @@ for (const d of liste.filter((d) => d.espece === "PRES" && !aMutant(d))) {
   console.log(`  préservation sans mutant       ${d.nom}`);
 }
 
+// ------------------------------------------------------------------ épreuve
 
-for (const m of mutants) {
+for (const [m, f] of formes) {
   const decl = liste.find((d) => d.nom === m.test);
   if (!decl) { anomalies.push(`mutant pour une preuve non déclarée : ${m.test}`); continue; }
   if (decl.espece === "REG" && !decl.corrigee) { anomalies.push(`mutant sur une régression ouverte : ${m.test}`); continue; }
   const motif = ["--test-name-pattern", `^${echapper(m.test)}$`];
-
-  const intacte = copieJetable(root);
+  const depotAvant = etatDepotSource();
+  let echec = null;
   try {
-    const { code, tap } = lancer(intacte, [decl.fichier], motif);
-    const r = lireTap(tap).get(m.test);
-    if (code !== 0 || !r || r.length !== 1 || !r[0].ok || r[0].directive) {
-      anomalies.push(`${m.test} : pas verte sur la copie intacte (node rc=${code})`);
-      continue;
+    const intacte = executer([], decl, motif);
+    if (intacte.issue !== "vert") {
+      echec = `pas verte sur la copie intacte (${intacte.detail ?? intacte.issue})`;
     }
-  } finally { rmSync(intacte, { recursive: true, force: true }); }
 
-  const mutee = copieJetable(root);
-  try {
-    const cible = join(mutee, m.file);
-    const original = readFileSync(cible, "utf-8");
-    if (sha(original) !== sha(readFileSync(join(root, m.file), "utf-8"))) { anomalies.push(`${m.test} : la copie de ${m.file} diffère du dépôt`); continue; }
-    const occurrences = original.split(m.find).length - 1;
-    if (occurrences !== 1) { anomalies.push(`${m.test} : cible trouvée ${occurrences} fois dans ${m.file}`); continue; }
-    const mute = original.replace(m.find, m.replace);
-    if (sha(mute) === sha(original)) { anomalies.push(`${m.test} : la mutation ne change pas le fichier`); continue; }
-    writeFileSync(cible, mute);
-    const { code, tap } = lancer(mutee, [decl.fichier], motif);
-    const r = lireTap(tap).get(m.test);
-    if (!r || r.length !== 1) anomalies.push(`${m.test} : absente du rapport sur le mutant (node rc=${code})`);
-    else if (r[0].ok) anomalies.push(`${m.test} : VERTE sur le mutant — la preuve ne tient pas sa porte`);
-    else if (!r[0].bloc.includes(MARQUE)) anomalies.push(`${m.test} : rouge sur le mutant SANS ${MARQUE} — rouge pour une autre raison`);
-    else if (code === 0) anomalies.push(`${m.test} : rouge sur le mutant mais node rend 0`);
-    else console.log(`  intacte verte · mutant rouge   ${m.test}`);
-  } finally { rmSync(mutee, { recursive: true, force: true }); }
+    for (let i = 1; i <= f.runs && !echec && f.control.length > 0; i++) {
+      const r = executer(f.control, decl, motif);
+      if (r.issue === "refus") echec = `contrôle refusé : ${r.detail}`;
+      else if (r.issue !== "vert") echec = `contrôle non vert à l'exécution ${i}/${f.runs} (${r.detail ?? r.issue})`;
+    }
+    for (let i = 1; i <= f.runs && !echec; i++) {
+      const r = executer(f.edits, decl, motif);
+      if (r.issue === "rouge") continue;
+      if (r.issue === "refus") echec = r.detail;
+      else if (r.issue === "vert") {
+        echec = f.runs === 1
+          ? "VERTE sur le mutant — la preuve ne tient pas sa porte"
+          : `série incomplète : VERTE sur le mutant à l'exécution ${i}/${f.runs}`;
+      } else echec = `${f.runs === 1 ? "" : `exécution ${i}/${f.runs} : `}${r.detail ?? r.issue}`;
+    }
+  } finally {
+    const changements = changementsDepot(depotAvant, etatDepotSource());
+    if (changements.length > 0) {
+      anomalies.push(`${m.test} : dépôt source modifié pendant l'épreuve : ${changements.join(", ")}`);
+    }
+  }
+  if (echec) { anomalies.push(`${m.test} : ${echec}`); continue; }
+  if (f.control.length > 0) {
+    console.log(`  intacte verte · contrôle vert ${f.runs}/${f.runs} · mutant rouge ${f.runs}/${f.runs}   ${m.test}`);
+  } else if (f.runs > 1) {
+    console.log(`  intacte verte · mutant rouge ${f.runs}/${f.runs}   ${m.test}`);
+  } else {
+    console.log(`  intacte verte · mutant rouge   ${m.test}`);
+  }
 }
 
-console.log(`\nmutants · ${mutants.length} déclarés · obligatoires ${obligatoires.length} · preuves éprouvées ${eprouvees.length} · anomalies ${anomalies.length}`);
+const ou = root === defaut ? "" : ` · racine ${root}`;
+console.log(`\nmutants · ${mutants.length} déclarés · obligatoires ${obligatoires.length} · preuves éprouvées ${eprouvees.length} · anomalies ${anomalies.length}${ou}`);
 for (const a of anomalies) console.log(`ANOMALIE  ${a}`);
 process.exit(anomalies.length === 0 ? 0 : 1);

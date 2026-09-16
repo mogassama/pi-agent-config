@@ -27,7 +27,7 @@ import {
 } from "../subagent-only/run-manifest.ts";
 import { openLanes } from "../subagent-only/worktree.ts";
 import {
-  aJeter, AT, cheminIntegrations, cheminLanes, GUARD_STALE_MS, manifeste, RUN, runEcrit,
+  aJeter, AT, cheminIntegrations, cheminLanes, GUARD_STALE_MS, hashPlan, manifeste, RUN, runEcrit,
 } from "./l0-b1-fixtures.ts";
 
 // ------------------------------------------------------------------ espèces
@@ -245,6 +245,11 @@ regression("C1.8-preconditions", "chaque précondition manquante refuse la fin, 
   const planJamais = lireJson(join(jamais.dir, `${RUN}-plan.json`))!;
   (planJamais.work_units as unknown[]).push({ id: "W42", goal: "faire W42", depends_on: [], expected_write_scope: ["src/W42.py"] });
   writeFileSync(join(jamais.dir, `${RUN}-plan.json`), `${JSON.stringify(planJamais, null, 2)}\n`);
+  // Le plan réécrit est le plan attaché : son empreinte suit. Sans elle, ce cas refuserait
+  // sur la garde d'empreinte et n'atteindrait jamais l'unité jamais ouverte.
+  manifeste(jamais.dir, {
+    version: 2, base: jamais.base, plan: `${RUN}-plan.json`, ledgers: { lanes: 2 }, planHash: hashPlan(jamais.dir),
+  });
   cas.push(["unité jamais ouverte", jamais]);
 
   const tentative = runEcrit("l0-b1-pre-tentative-", [{ unite: "W03", integree: true }]);
@@ -254,6 +259,7 @@ regression("C1.8-preconditions", "chaque précondition manquante refuse la fin, 
   })}\n`);
   manifeste(tentative.dir, {
     version: 2, base: tentative.base, plan: `${RUN}-plan.json`, ledgers: { lanes: 2, integrations: 1 },
+    planHash: hashPlan(tentative.dir),
   });
   cas.push(["tentative d'intégration ouverte", tentative]);
 
@@ -280,6 +286,118 @@ regression("C1.8-preconditions", "chaque précondition manquante refuse la fin, 
     passes.length === 0 && saineAboutie,
     `le run sain doit aboutir (${saineAboutie}) et chacun des ${cas.length} cas dégradés refuser ` +
       `sans archiver ni libérer ; ont abouti à tort : ${JSON.stringify(passes)}`,
+  );
+});
+
+/*
+ * Les trois preuves suivantes ont été ajoutées au LOT 2, avant tout code de production
+ * (PLAN-LOT2, § 1.2). Chacune distingue une correction de `run-end.ts` du code fautif,
+ * ce qu'aucun des six cas de C1.8-preconditions ne fait. Chacune porte son témoin
+ * positif : la même fin, sans le seul défaut monté, doit aboutir. Sans lui, « refusé »
+ * serait vrai d'un verbe qui refuse tout — c'est pourquoi elles naissent REG et non COUV.
+ */
+
+/** Refusée sans rien toucher : code non nul, aucune archive, active-run.json en place. */
+const refusSansEffet = (s: Sortie, dir: string): boolean => aRefuse(s) && archives(dir).length === 0 && actif(dir);
+/** Aboutie : code nul, une archive, active-run.json libéré. */
+const finAboutie = (s: Sortie, dir: string): boolean => aAbouti(s) && archives(dir).length === 1 && !actif(dir);
+
+regression("C1.8-abandoned-non-integre", "une unité du plan abandonnée n'est pas une unité intégrée", () => {
+  const r = runEcrit("l0-b1-aband-int-", [{ unite: "W03", integree: true }, { unite: "W09", abandonnee: true }]);
+  const brut = readFileSync(cheminLanes(r.dir), "utf-8");
+  const planW09 = ((lireJson(join(r.dir, `${RUN}-plan.json`))!.work_units as Array<{ id: string }>)
+    .some((u) => u.id === "W09"));
+  precondition(planW09, "W09 doit appartenir au plan attaché");
+  precondition(
+    brut.includes('"event":"ABANDONED"') && !/"work_unit":"W09"[^\n]*"event":"INTEGRATED"/.test(brut),
+    "W09 doit être abandonnée au registre, et jamais intégrée",
+  );
+  precondition(openLanes(r.root).length === 0, "aucune lane ne doit rester ouverte");
+
+  const i = issue(() => recover(r.root, "run", "completed"));
+  precondition(i.kind === "returned", `le dispatcher doit rendre une sortie ; rendu : ${montrer(i)}`);
+  const refusee = refusSansEffet(sortieDe(i), r.dir);
+
+  // Le témoin : le même plan de deux unités, les deux intégrées.
+  const temoin = runEcrit("l0-b1-aband-int-temoin-", [{ unite: "W03", integree: true }, { unite: "W09", integree: true }]);
+  const iTemoin = issue(() => recover(temoin.root, "run", "completed"));
+  precondition(iTemoin.kind === "returned", "le témoin doit rendre une sortie");
+  const temoinAbouti = finAboutie(sortieDe(iTemoin), temoin.dir);
+
+  propriete(
+    refusee && temoinAbouti,
+    `une unité abandonnée ne vaut pas intégration : fin refusée sans effet (${refusee}, code ` +
+      `${sortieDe(i).status}), alors que le témoin tout intégré aboutit (${temoinAbouti}, code ` +
+      `${sortieDe(iTemoin).status})`,
+  );
+});
+
+regression("C1.8-risque-cle", "un risque s'identifie par son unité, pas par son seul identifiant", () => {
+  /*
+   * W09 d'abord, W03 ensuite : la DERNIÈRE transition portant l'identifiant `r1` est
+   * alors la résolution de W03. Un repli par identifiant seul conclurait « r1 résolu » et
+   * laisserait finir un run dont le risque de W09 est ouvert.
+   */
+  const r = runEcrit("l0-b1-risque-cle-", [
+    { unite: "W09", integree: true, risques: [{ id: "r1", transitions: ["opened"] }] },
+    { unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened", "resolved"] }] },
+  ]);
+  const risques = readFileSync(cheminLanes(r.dir), "utf-8").split("\n")
+    .filter((l) => l.includes('"event":"RISK"'))
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+  const suite = risques.map((e) => `${String(e.work_unit)}:${String(e.id)}:${String(e.transition)}`);
+  precondition(
+    JSON.stringify(suite) === JSON.stringify(["W09:r1:opened", "W03:r1:opened", "W03:r1:resolved"]),
+    `le registre doit porter r1 ouvert sur W09 puis r1 ouvert et résolu sur W03, dans cet ordre ; vu ${JSON.stringify(suite)}`,
+  );
+
+  const i = issue(() => recover(r.root, "run", "completed"));
+  precondition(i.kind === "returned", `le dispatcher doit rendre une sortie ; rendu : ${montrer(i)}`);
+  const refusee = refusSansEffet(sortieDe(i), r.dir);
+
+  // Le témoin : la même histoire, le risque de W09 résolu lui aussi.
+  const temoin = runEcrit("l0-b1-risque-cle-temoin-", [
+    { unite: "W09", integree: true, risques: [{ id: "r1", transitions: ["opened", "resolved"] }] },
+    { unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened", "resolved"] }] },
+  ]);
+  const iTemoin = issue(() => recover(temoin.root, "run", "completed"));
+  precondition(iTemoin.kind === "returned", "le témoin doit rendre une sortie");
+  const temoinAbouti = finAboutie(sortieDe(iTemoin), temoin.dir);
+
+  propriete(
+    refusee && temoinAbouti,
+    `le risque r1 de W09 reste ouvert même si r1 est résolu sur W03 : fin refusée sans effet ` +
+      `(${refusee}, code ${sortieDe(i).status}), alors que le témoin aux deux risques résolus ` +
+      `aboutit (${temoinAbouti}, code ${sortieDe(iTemoin).status})`,
+  );
+});
+
+regression("C1.8-plan-hash", "un plan réécrit après son attachement refuse la fin", () => {
+  const r = runEcrit("l0-b1-plan-hash-", [{ unite: "W03", integree: true }]);
+  const cheminPlan = join(r.dir, `${RUN}-plan.json`);
+  const empreinte = lireJson(join(r.dir, "active-run.json"))!.planHash;
+  precondition(empreinte === hashPlan(r.dir), "le manifeste doit porter l'empreinte du plan attaché");
+  // Même unité, même dépendances, même scope : seul le texte change. Le plan reste valide.
+  const reecrit = lireJson(cheminPlan)!;
+  (reecrit.work_units as Array<Record<string, unknown>>)[0].goal = "faire W03 autrement";
+  writeFileSync(cheminPlan, `${JSON.stringify(reecrit, null, 2)}\n`);
+  precondition(hashPlan(r.dir) !== empreinte, "le plan sur disque ne doit plus correspondre à son empreinte");
+
+  const i = issue(() => recover(r.root, "run", "completed"));
+  precondition(i.kind === "returned", `le dispatcher doit rendre une sortie ; rendu : ${montrer(i)}`);
+  const refusee = refusSansEffet(sortieDe(i), r.dir);
+
+  // Le témoin : la même fixture, plan intact.
+  const temoin = runEcrit("l0-b1-plan-hash-temoin-", [{ unite: "W03", integree: true }]);
+  const iTemoin = issue(() => recover(temoin.root, "run", "completed"));
+  precondition(iTemoin.kind === "returned", "le témoin doit rendre une sortie");
+  const temoinAbouti = finAboutie(sortieDe(iTemoin), temoin.dir);
+
+  propriete(
+    refusee && temoinAbouti,
+    `un run n'est pas déclaré abouti sur un plan qu'il n'a pas commencé : fin refusée sans effet ` +
+      `(${refusee}, code ${sortieDe(i).status}), alors que le témoin au plan intact aboutit ` +
+      `(${temoinAbouti}, code ${sortieDe(iTemoin).status})`,
   );
 });
 

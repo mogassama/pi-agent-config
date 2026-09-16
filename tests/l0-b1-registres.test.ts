@@ -25,7 +25,7 @@ import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 import { openRun, readLaneEvents } from "../subagent-only/run-manifest.ts";
 import { ensureLane, openLanes, runBranches } from "../subagent-only/worktree.ts";
 import {
-  aJeter, cheminIntegrations, cheminLanes, depot, git, manifeste, plan, Registre, RUN, runEcrit,
+  aJeter, cheminIntegrations, cheminLanes, depot, git, hashPlan, manifeste, plan, Registre, RUN, runEcrit,
 } from "./l0-b1-fixtures.ts";
 
 // ------------------------------------------------------------------ espèces
@@ -220,6 +220,7 @@ regression("C4-integrations", "le registre des intégrations porte aussi EMPTY, 
 
   manifeste(r.dir, {
     version: 2, base: r.base, plan: `${RUN}-plan.json`, ledgers: { lanes: 2, integrations: 1 },
+    planHash: hashPlan(r.dir),
   });
   const perdu = etat(lireIntegrations(r.root, r.dir));
 

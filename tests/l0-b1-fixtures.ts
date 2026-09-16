@@ -16,7 +16,8 @@
  *   - `from_tree` est le tree réel de la base de la lane, pas le tree vide.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,6 +120,7 @@ export function manifeste(dir: string, options: {
   base?: string;
   nextSeq?: number;
   ended?: Record<string, unknown>;
+  planHash?: string;
 } = {}): void {
   const m: Record<string, unknown> = {
     version: options.version ?? 2,
@@ -128,6 +130,7 @@ export function manifeste(dir: string, options: {
   };
   if (options.base) m.baseCommit = options.base;
   if (options.plan) m.plan = options.plan;
+  if (options.planHash) m.planHash = options.planHash;
   if (options.ledgers) m.ledgers = options.ledgers;
   if (options.ended) m.ended = options.ended;
   writeFileSync(join(dir, "active-run.json"), `${JSON.stringify(m, null, 2)}\n`);
@@ -143,6 +146,19 @@ export function plan(dir: string, unites: string[]): void {
   writeFileSync(join(dir, `${RUN}-plan.json`), `${JSON.stringify(contenu, null, 2)}\n`);
 }
 
+/**
+ * L'empreinte du plan tel qu'il est écrit sur le disque, au format de `planHash`.
+ *
+ * Calculée ICI, pas par le helper de production : une fixture qui emprunterait
+ * `planHash()` concorderait avec lui même s'il changeait d'algorithme, et la garde qui
+ * compare le plan à son empreinte ne verrait jamais une fixture fausse. Le format est
+ * celui que le manifeste porte : sha256 du texte exact, seize premiers hexadécimaux.
+ */
+export function hashPlan(dir: string): string {
+  const texte = readFileSync(join(dir, `${RUN}-plan.json`), "utf-8");
+  return createHash("sha256").update(texte).digest("hex").slice(0, 16);
+}
+
 export interface Unite {
   unite: string;
   /** Intégrée : la lane est gelée, mergée dans la racine, et son worktree retiré. */
@@ -150,6 +166,12 @@ export interface Unite {
   /** Ouverte : le worktree reste, et le registre ne porte qu'un OPENED. */
   ouverte?: boolean;
   risqueOuvert?: boolean;
+  /**
+   * Des risques nommés, écrits juste après OPENED, dans l'ordre donné. Chaque transition
+   * est un événement RISK distinct. Sert quand l'identifiant doit être choisi — deux
+   * unités portant le même `id` —, ce que `risqueOuvert` ne permet pas.
+   */
+  risques?: Array<{ id: string; transitions: Array<"opened" | "routed" | "resolved"> }>;
   violation?: boolean;
   abandonnee?: boolean;
   generation?: number;
@@ -198,6 +220,16 @@ export function runEcrit(
         source: { delegation_seq: 3, agent: "worker" },
         observed_tree: d.baseTree,
       });
+    }
+    if (version === 2) {
+      for (const risque of u.risques ?? []) {
+        for (const transition of risque.transitions) {
+          registre.ajouter(u.unite, g, {
+            event: "RISK", id: risque.id, transition,
+            ...(transition === "routed" ? { to: "scout" } : { by: transition === "opened" ? "reviewer" : "orchestrator" }),
+          });
+        }
+      }
     }
     if (version === 2 && u.risqueOuvert) {
       registre.ajouter(u.unite, g, { event: "RISK", id: `${u.unite}-r1`, transition: "opened", by: "reviewer" });
@@ -254,11 +286,16 @@ export function runEcrit(
    * v1 est donc v1 de bout en bout, sauf demande explicite.
    */
   const manifesteV1 = options.manifesteV1 ?? version === 1;
+  /*
+   * Un manifeste v2 qui porte un plan attaché porte aussi son empreinte, comme
+   * `attachPlan` l'écrit : un plan attaché sans empreinte est un état que la production
+   * ne crée pas, et la fin `completed` le refuserait pour cette raison-là.
+   */
   manifeste(d.dir, {
     version: manifesteV1 ? 1 : 2,
     base: d.base,
     plan: `${RUN}-plan.json`,
-    ...(manifesteV1 ? {} : { ledgers: { lanes: 2 } }),
+    ...(manifesteV1 ? {} : { ledgers: { lanes: 2 }, planHash: hashPlan(d.dir) }),
   });
   return { ...d, registre };
 }
