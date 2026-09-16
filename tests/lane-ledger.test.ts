@@ -20,9 +20,10 @@ import {
   integrationCommits,
   reconcile,
   type LaneEvent,
+  type LaneEventKind,
 } from "../subagent-only/lane-ledger.ts";
 
-const ev = (event: LaneEvent["event"], unit: string, reason?: string): LaneEvent =>
+const ev = (event: LaneEventKind, unit: string, reason?: string): LaneEvent =>
   event === "OPENED"
     ? { event, work_unit: unit, at: new Date().toISOString(), base: `base-${unit}` }
     : event === "ABANDONED"

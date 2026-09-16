@@ -32,7 +32,7 @@ import {
   readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import type { LaneEvent } from "./lane-ledger.js";
+import { parseLaneEventV2, type LaneEvent, type LaneEventV1 } from "./lane-ledger.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
 import { join } from "node:path";
 
@@ -1136,7 +1136,16 @@ export function laneLedgerPath(dir: string, runId: string): string {
  */
 export const LANE_LEDGER_VERSION = 1;
 
-export function appendLaneEvent(dir: string, event: LaneEvent, lease: Lease): void {
+/**
+ * La version du registre des lanes que C0 § F décrit : `{"ledger":2}`.
+ *
+ * LUE seulement. L'écrivain reste en version 1 jusqu'au lot qui écrit les identités g1
+ * (C4.9) : `appendLaneEvent` continue de refuser tout registre qui n'est pas de sa
+ * version, et aucune ligne v2 n'est produite ici.
+ */
+export const LANE_LEDGER_V2 = 2;
+
+export function appendLaneEvent(dir: string, event: LaneEventV1, lease: Lease): void {
   withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.work_unit}`);
     const path = laneLedgerPath(dir, lease.runId);
@@ -1206,6 +1215,22 @@ export function readLaneEvents(dir: string, runId: string): LedgerRead {
       // L'en-tête, s'il est là, est la première ligne physique.
       if (typeof doc.ledger === "number" && numero === 1) {
         version = doc.ledger;
+        continue;
+      }
+      /*
+       * Deux grammaires séparées, choisies par l'en-tête et par lui seul. Une ligne v2 ne
+       * se lit jamais avec les règles v1 : elle y passerait pour peu qu'elle porte
+       * OPENED, INTEGRATED ou ABANDONED, et les cinq autres natures y seraient comptées
+       * abîmées. Une ligne que la grammaire v2 refuse est comptée, jamais ignorée.
+       */
+      if (version === LANE_LEDGER_V2) {
+        const lu = parseLaneEventV2(doc);
+        if (lu) {
+          events.push(lu);
+        } else {
+          malformed += 1;
+          malformedLines.push(numero);
+        }
         continue;
       }
       const nature = doc.event;

@@ -48,9 +48,11 @@ import {
   takeOverRun,
   archivePath,
   terminerRun,
+  LANE_LEDGER_V2,
   type Lease,
   type RunManifest,
 } from "../subagent-only/run-manifest.ts";
+import { parseLaneEventV2, type LaneEventV2 } from "../subagent-only/lane-ledger.ts";
 
 function dossier(): { dir: string; done: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "pi-run-"));
@@ -2856,3 +2858,251 @@ test("perte de bail — le signal reste unique par capacité, même si son écri
     done();
   }
 });
+
+// ================================================= registre des lanes v2 : la grammaire (LOT 2, étape 1)
+
+/*
+ * Chaque cas écrit un registre `{"ledger":2}` fait d'une ligne témoin valide puis d'une
+ * ligne à juger, et vérifie les deux : la ligne témoin lue, la ligne jugée lue ou comptée
+ * abîmée à son numéro. Un lecteur qui refuserait tout échouerait sur le témoin ; un
+ * lecteur qui accepterait tout échouerait sur la ligne jugée.
+ */
+const RV2 = "run-v2";
+const enveloppe = (seq: number, reste: Record<string, unknown>): Record<string, unknown> => ({
+  event_seq: seq, work_unit: "W03", lane: `${RV2}-W03-g1`, at: "2026-09-16T00:00:00Z", ...reste,
+});
+const valides: Record<string, Record<string, unknown>> = {
+  OPENED: { event: "OPENED", base: "b1", generation: 1 },
+  REVIEWED: {
+    event: "REVIEWED", from_tree: "t0", tree: "t1", verdict: "approved",
+    reviewer: { delegation_seq: 2, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" },
+  },
+  VIOLATION: {
+    event: "VIOLATION", kind: "reserved-violation", paths: ["DESIGN.md", "src/a.py"],
+    source: { delegation_seq: 3, agent: "worker" }, observed_tree: "t1",
+  },
+  RISK: { event: "RISK", id: "r1", transition: "opened", by: "reviewer" },
+  FROZEN: { event: "FROZEN", commit: "c1", parent: "b1", tree: "t1", reviewed_event_seq: 2 },
+  MERGED: { event: "MERGED", integration_commit: "i1", frozen_event_seq: 5 },
+  INTEGRATED: { event: "INTEGRATED", integration_commit: "i1", status: { outcome: "not-applicable" } },
+  ABANDONED: { event: "ABANDONED", by: "operator", reason: "essai", generation: 1 },
+};
+
+function lireV2(lignes: Record<string, unknown>[], entete: Record<string, unknown> = { ledger: 2 }) {
+  const { dir, done } = dossier();
+  try {
+    const corps = lignes.map((l) => JSON.stringify(l));
+    writeFileSync(laneLedgerPath(dir, RV2), `${[JSON.stringify(entete), ...corps].join("\n")}\n`);
+    return readLaneEvents(dir, RV2);
+  } finally {
+    done();
+  }
+}
+
+/** La ligne jugée, précédée du témoin OPENED valide. */
+function juger(ligne: Record<string, unknown>) {
+  const lu = lireV2([enveloppe(1, valides.OPENED), ligne]);
+  assert.equal(lu.version, LANE_LEDGER_V2);
+  assert.equal(lu.events.length >= 1 && lu.events[0].event === "OPENED", true, "le témoin OPENED doit être lu");
+  return lu;
+}
+function accepte(ligne: Record<string, unknown>, quoi: string): void {
+  const lu = juger(ligne);
+  assert.deepEqual(lu.malformedLines, [], `${quoi} : aucune ligne abîmée attendue`);
+  assert.equal(lu.events.length, 2, `${quoi} : la ligne doit être lue`);
+}
+function refuse(ligne: Record<string, unknown>, quoi: string): void {
+  const lu = juger(ligne);
+  assert.deepEqual(lu.malformedLines, [3], `${quoi} : la ligne 3 doit être comptée abîmée`);
+  assert.equal(lu.malformed, 1, quoi);
+  assert.equal(lu.events.length, 1, `${quoi} : la ligne ne doit pas être lue`);
+}
+const sans = (o: Record<string, unknown>, cle: string): Record<string, unknown> => {
+  const copie = { ...o };
+  delete copie[cle];
+  return copie;
+};
+
+test("registre v2 : les huit natures de § F se lisent, dans l'ordre, sans ligne abîmée", () => {
+  const natures = Object.keys(valides);
+  const lu = lireV2(natures.map((n, i) => enveloppe(i + 1, valides[n])));
+  assert.equal(lu.version, LANE_LEDGER_V2);
+  assert.deepEqual(lu.malformedLines, []);
+  assert.deepEqual(lu.events.map((e) => e.event), natures);
+});
+
+test("registre v2 : l'enveloppe est exigée champ par champ", () => {
+  const ligne = enveloppe(2, valides.REVIEWED);
+  accepte(ligne, "enveloppe complète");
+  for (const cle of ["event_seq", "work_unit", "lane", "at"]) refuse(sans(ligne, cle), `sans ${cle}`);
+  refuse({ ...ligne, event_seq: 0 }, "event_seq nul");
+  refuse({ ...ligne, event_seq: 1.5 }, "event_seq non entier");
+  refuse({ ...ligne, event_seq: "2" }, "event_seq chaîne");
+  refuse({ ...ligne, work_unit: "" }, "work_unit vide");
+});
+
+test("registre v2 : une nature inconnue, ou un tableau, est une ligne abîmée", () => {
+  refuse(enveloppe(2, { event: "STILL_OPEN" }), "nature inconnue");
+  refuse(enveloppe(2, sans(valides.RISK, "event")), "nature absente");
+  const { dir, done } = dossier();
+  try {
+    writeFileSync(laneLedgerPath(dir, RV2), `{"ledger":2}\n${JSON.stringify(enveloppe(1, valides.OPENED))}\n[1,2]\nnull\n`);
+    assert.deepEqual(readLaneEvents(dir, RV2).malformedLines, [3, 4]);
+  } finally {
+    done();
+  }
+});
+
+test("registre v2 : champs obligatoires et types exacts, nature par nature", () => {
+  const cas: Array<[string, string]> = [
+    ["OPENED", "base"], ["OPENED", "generation"],
+    ["REVIEWED", "from_tree"], ["REVIEWED", "tree"], ["REVIEWED", "verdict"],
+    ["REVIEWED", "reviewer"], ["REVIEWED", "proof"],
+    ["VIOLATION", "kind"], ["VIOLATION", "paths"], ["VIOLATION", "source"], ["VIOLATION", "observed_tree"],
+    ["RISK", "id"], ["RISK", "transition"],
+    ["FROZEN", "commit"], ["FROZEN", "parent"], ["FROZEN", "tree"], ["FROZEN", "reviewed_event_seq"],
+    ["MERGED", "integration_commit"], ["MERGED", "frozen_event_seq"],
+    ["INTEGRATED", "integration_commit"], ["INTEGRATED", "status"],
+    ["ABANDONED", "by"], ["ABANDONED", "reason"], ["ABANDONED", "generation"],
+  ];
+  for (const [nature, champ] of cas) {
+    accepte(enveloppe(2, valides[nature]), `${nature} complet`);
+    refuse(enveloppe(2, sans(valides[nature], champ)), `${nature} sans ${champ}`);
+  }
+  refuse(enveloppe(2, { ...valides.OPENED, generation: 0 }), "génération nulle");
+  refuse(enveloppe(2, { ...valides.ABANDONED, generation: "1" }), "génération chaîne");
+  refuse(enveloppe(2, { ...valides.FROZEN, reviewed_event_seq: 0 }), "renvoi REVIEWED nul");
+  refuse(enveloppe(2, { ...valides.MERGED, frozen_event_seq: "5" }), "renvoi FROZEN chaîne");
+  refuse(enveloppe(2, { ...valides.OPENED, base: "" }), "base vide");
+});
+
+test("registre v2 : l'identité du reviewer et le mode de preuve", () => {
+  const r = valides.REVIEWED;
+  const reviewer = r.reviewer as Record<string, unknown>;
+  for (const cle of ["delegation_seq", "agent", "role"]) {
+    refuse(enveloppe(2, { ...r, reviewer: sans(reviewer, cle) }), `reviewer sans ${cle}`);
+  }
+  refuse(enveloppe(2, { ...r, reviewer: { ...reviewer, delegation_seq: 0 } }), "delegation_seq nul");
+  refuse(enveloppe(2, { ...r, reviewer: "reviewer" }), "reviewer chaîne");
+  accepte(enveloppe(2, { ...r, proof: { mode: "none" } }), "preuve none");
+  accepte(enveloppe(2, { ...r, proof: { mode: "reading-list", paths: ["src/a.py"] } }), "reading-list avec paths");
+  refuse(enveloppe(2, { ...r, proof: { mode: "reading-list" } }), "reading-list sans paths");
+  refuse(enveloppe(2, { ...r, proof: { mode: "reading-list", paths: [] } }), "reading-list aux paths vides");
+  refuse(enveloppe(2, { ...r, proof: { mode: "sampled" } }), "mode inconnu");
+  refuse(enveloppe(2, { ...r, proof: { mode: "diff", paths: ["../x"] } }), "paths facultatifs mais faux");
+});
+
+test("registre v2 : une violation porte des chemins canoniques, triés, uniques", () => {
+  const v = valides.VIOLATION;
+  refuse(enveloppe(2, { ...v, kind: "scope-breach" }), "scope-breach n'est pas une violation historique");
+  for (const [paths, quoi] of [
+    [["src/a.py", "DESIGN.md"], "non triés"],
+    [["DESIGN.md", "DESIGN.md"], "doublon"],
+    [["/etc/passwd"], "absolu"],
+    [["src/../DESIGN.md"], "segment .."],
+    [["./DESIGN.md"], "segment ."],
+    [["src//a.py"], "segment vide"],
+    [["src\\a.py"], "barre inverse"],
+    [[""], "chemin vide"],
+    [[], "liste vide"],
+    ["DESIGN.md", "chaîne au lieu d'une liste"],
+  ] as Array<[unknown, string]>) {
+    refuse(enveloppe(2, { ...v, paths }), `chemins ${quoi}`);
+  }
+  const source = v.source as Record<string, unknown>;
+  refuse(enveloppe(2, { ...v, source: sans(source, "agent") }), "source sans agent");
+  refuse(enveloppe(2, { ...v, source: sans(source, "delegation_seq") }), "source sans delegation_seq");
+});
+
+test("registre v2 : un risque a une transition connue, et exactement un de by ou to", () => {
+  const k = valides.RISK;
+  accepte(enveloppe(2, { ...k, transition: "routed", by: undefined, to: "scout" }), "routed vers");
+  accepte(enveloppe(2, { ...k, transition: "resolved" }), "resolved par");
+  refuse(enveloppe(2, { ...k, transition: "ignored" }), "ignored");
+  refuse(enveloppe(2, { ...k, transition: "still-open" }), "still-open");
+  refuse(enveloppe(2, { ...k, to: "scout" }), "by et to");
+  refuse(enveloppe(2, sans(k, "by")), "ni by ni to");
+  refuse(enveloppe(2, { ...k, by: "" }), "by vide");
+});
+
+test("registre v2 : le Statut d'une intégration n'a que trois issues, à clés exactes", () => {
+  const i = valides.INTEGRATED;
+  const u = { outcome: "unchanged", decision_id: "D-01", target_status: "done" };
+  const c = { ...u, outcome: "committed", status_commit: "s1" };
+  accepte(enveloppe(2, { ...i, status: u }), "unchanged");
+  accepte(enveloppe(2, { ...i, status: c }), "committed");
+  refuse(enveloppe(2, { ...i, status: { outcome: "not-applicable", status_commit: "s1" } }), "not-applicable avec commit");
+  refuse(enveloppe(2, { ...i, status: { ...u, status_commit: "s1" } }), "unchanged avec commit");
+  refuse(enveloppe(2, { ...i, status: sans(c, "status_commit") }), "committed sans commit");
+  refuse(enveloppe(2, { ...i, status: sans(u, "decision_id") }), "unchanged sans décision");
+  refuse(enveloppe(2, { ...i, status: sans(u, "target_status") }), "unchanged sans cible");
+  refuse(enveloppe(2, { ...i, status: { outcome: "merged" } }), "issue inconnue");
+  // Une clé présente mais vide n'est pas une clé renseignée ; une clé en trop change l'issue.
+  refuse(enveloppe(2, { ...i, status: { ...u, decision_id: "" } }), "unchanged à décision vide");
+  refuse(enveloppe(2, { ...i, status: { ...u, target_status: 3 } }), "unchanged à cible numérique");
+  refuse(enveloppe(2, { ...i, status: { ...c, status_commit: "" } }), "committed à commit vide");
+  refuse(enveloppe(2, { ...i, status: { ...c, decision_id: "" } }), "committed à décision vide");
+  refuse(enveloppe(2, { ...i, status: { ...c, note: "x" } }), "committed avec clé en trop");
+  refuse(enveloppe(2, { ...i, status: "not-applicable" }), "statut chaîne");
+});
+
+test("registre des lanes : l'en-tête choisit la grammaire, et la v1 reste inchangée", () => {
+  // Une ouverture v1 authentique : lue sous v1, abîmée sous v2.
+  const v1 = { event: "OPENED", work_unit: "W03", at: "2026-09-16T00:00:00Z", base: "b1" };
+  const { dir, done } = dossier();
+  try {
+    const ecrire = (entete: string, ...lignes: unknown[]) =>
+      writeFileSync(laneLedgerPath(dir, RV2), `${[entete, ...lignes.map((l) => JSON.stringify(l))].join("\n")}\n`);
+    ecrire(`{"ledger":1}`, v1);
+    let lu = readLaneEvents(dir, RV2);
+    assert.deepEqual([lu.version, lu.events.length, lu.malformedLines], [1, 1, []], "v1 lue en v1");
+    ecrire(`{"ledger":2}`, v1);
+    lu = readLaneEvents(dir, RV2);
+    assert.deepEqual([lu.version, lu.events.length, lu.malformedLines], [2, 0, [2]], "v1 refusée en v2");
+    // Une revue v2 : lue sous v2, abîmée sous v1 — les deux grammaires ne se mêlent pas.
+    ecrire(`{"ledger":2}`, enveloppe(1, valides.REVIEWED));
+    assert.deepEqual(readLaneEvents(dir, RV2).malformedLines, [], "REVIEWED lu en v2");
+    ecrire(`{"ledger":1}`, enveloppe(1, valides.REVIEWED));
+    assert.deepEqual(readLaneEvents(dir, RV2).malformedLines, [2], "REVIEWED refusé en v1");
+    // Un en-tête ailleurs qu'en première ligne n'en est pas un.
+    ecrire(`{"ledger":2}`, enveloppe(1, valides.OPENED), { ledger: 2 });
+    assert.deepEqual(readLaneEvents(dir, RV2).malformedLines, [3], "second en-tête abîmé");
+  } finally {
+    done();
+  }
+});
+
+test("parseLaneEventV2 rend null, sans lever, pour ce qui n'est pas un objet", () => {
+  for (const v of [null, undefined, 42, "OPENED", [], [enveloppe(1, valides.OPENED)]]) {
+    assert.equal(parseLaneEventV2(v), null, `valeur ${JSON.stringify(v)}`);
+  }
+  assert.notEqual(parseLaneEventV2(enveloppe(1, valides.OPENED)), null, "le témoin objet est lu");
+  // Un sous-objet nul se refuse sans lever : la fonction ne compte pas sur le catch du lecteur.
+  const nuls: Array<[string, Record<string, unknown>]> = [
+    ["reviewer", { ...valides.REVIEWED, reviewer: null }],
+    ["proof", { ...valides.REVIEWED, proof: null }],
+    ["source", { ...valides.VIOLATION, source: null }],
+    ["status", { ...valides.INTEGRATED, status: null }],
+  ];
+  for (const [quoi, ligne] of nuls) {
+    assert.doesNotThrow(() => parseLaneEventV2(enveloppe(2, ligne)), `${quoi} nul ne doit pas lever`);
+    assert.equal(parseLaneEventV2(enveloppe(2, ligne)), null, `${quoi} nul`);
+  }
+});
+
+/*
+ * L'écrivain reste v1 (C4.9). Cette borne est un type, pas un contrôle : aucune exécution
+ * ne la voit. La directive ci-dessous la rend mesurable — si `appendLaneEvent` acceptait
+ * une nature v2, la directive deviendrait inutile et le compilateur le signalerait, ce
+ * que S4 refuse comme diagnostic nouveau. La fonction n'est jamais appelée.
+ */
+export function ecrivainBorneALaV1(dir: string, lease: Lease): void {
+  // Une revue v2 bien typée : la seule erreur attendue est celle de l'écrivain.
+  const revue: LaneEventV2 = {
+    event_seq: 1, work_unit: "W03", lane: `${RV2}-W03-g1`, at: "2026-09-16T00:00:00Z",
+    event: "REVIEWED", from_tree: "t0", tree: "t1", verdict: "approved",
+    reviewer: { delegation_seq: 2, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" },
+  };
+  // @ts-expect-error — REVIEWED est une nature v2, que l'écrivain n'a pas le droit d'écrire
+  appendLaneEvent(dir, revue, lease);
+}

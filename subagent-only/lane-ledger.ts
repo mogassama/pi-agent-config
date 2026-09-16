@@ -34,7 +34,7 @@ export type LaneEventKind = "OPENED" | "INTEGRATED" | "ABANDONED";
  * Aucun run parallèle réel n'a encore écrit dans ce registre. C'est le moment
  * de rendre le contrat strict.
  */
-export type LaneEvent =
+export type LaneEventV1 =
   | {
       event: "OPENED";
       work_unit: string;
@@ -66,6 +66,173 @@ export type LaneEvent =
       integration_commit?: string;
     }
   | { event: "ABANDONED"; work_unit: string; at: string; reason?: string };
+
+/**
+ * Ce qu'une lecture du registre des lanes peut rendre : un événement v1, ou un événement v2.
+ *
+ * L'écrivain, lui, reste borné à `LaneEventV1` jusqu'au lot des identités g1 (C4.9) :
+ * élargir la lecture ne lui ouvre pas les natures qu'il n'a pas le droit d'écrire. Les
+ * membres v1 restent en tête de l'union.
+ */
+export type LaneEvent = LaneEventV1 | LaneEventV2;
+
+// ============================================================ registre v2 (C0 § F)
+
+/**
+ * L'enveloppe commune d'un événement du registre v2.
+ *
+ * `event_seq` est la séquence du REGISTRE, pas celle des délégations : les confondre
+ * mêlerait deux ordres. `lane` est l'identifiant complet de la lane ; sa cohérence avec
+ * `(R, work_unit, generation)` demande plusieurs lignes, et se contrôle à la projection,
+ * pas ici.
+ */
+export interface LaneEnvelope {
+  event_seq: number;
+  work_unit: string;
+  lane: string;
+  at: string;
+}
+
+export type ProofMode = "diff" | "reading-list" | "none";
+export type ViolationKind = "reserved-violation" | "bundle-violation";
+export type RiskTransition = "opened" | "routed" | "resolved";
+
+/** Le traitement du Statut d'une intégration : trois issues, aucune autre (C0 § F). */
+export type IntegrationStatus =
+  | { outcome: "not-applicable" }
+  | { outcome: "unchanged"; decision_id: string; target_status: string }
+  | { outcome: "committed"; decision_id: string; target_status: string; status_commit: string };
+
+/**
+ * Les huit natures du registre v2, enveloppe comprise.
+ *
+ * Aucun producteur n'écrit encore les cinq nouvelles : ce type existe pour qu'une
+ * lecture les nomme au lieu de les compter comme des lignes abîmées.
+ */
+export type LaneEventV2 =
+  | (LaneEnvelope & { event: "OPENED"; base: string; generation: number })
+  | (LaneEnvelope & {
+      event: "REVIEWED";
+      from_tree: string;
+      tree: string;
+      verdict: string;
+      reviewer: { delegation_seq: number; agent: string; role: string };
+      proof: { mode: ProofMode; paths?: string[] };
+    })
+  | (LaneEnvelope & {
+      event: "VIOLATION";
+      kind: ViolationKind;
+      paths: string[];
+      source: { delegation_seq: number; agent: string };
+      observed_tree: string;
+    })
+  | (LaneEnvelope & { event: "RISK"; id: string; transition: RiskTransition; by?: string; to?: string })
+  | (LaneEnvelope & { event: "FROZEN"; commit: string; parent: string; tree: string; reviewed_event_seq: number })
+  | (LaneEnvelope & { event: "MERGED"; integration_commit: string; frozen_event_seq: number })
+  | (LaneEnvelope & { event: "INTEGRATED"; integration_commit: string; status: IntegrationStatus })
+  | (LaneEnvelope & { event: "ABANDONED"; by: string; reason: string; generation: number });
+
+const texte = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+const rang = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
+const objet = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * Un chemin canonique de dépôt : relatif, séparé par `/`, sans segment vide, `.` ni `..`.
+ *
+ * Deux écritures d'un même chemin feraient deux violations là où il n'y en a qu'une, et
+ * un chemin qui sort du dépôt n'en est pas un. Un chemin absolu commence par un segment
+ * vide : la règle des segments le refuse déjà, sans test séparé.
+ */
+function cheminCanonique(p: unknown): p is string {
+  if (!texte(p) || p.includes("\\")) return false;
+  return p.split("/").every((s) => s.length > 0 && s !== "." && s !== "..");
+}
+
+/** Une liste de chemins canoniques, triée lexicalement et sans doublon. */
+function cheminsCanoniques(v: unknown): v is string[] {
+  if (!Array.isArray(v) || v.length === 0 || !v.every(cheminCanonique)) return false;
+  for (let i = 1; i < v.length; i++) if (!(v[i - 1] < v[i])) return false;
+  return true;
+}
+
+/**
+ * Les clés exactes de chaque issue du Statut. Une clé de plus rendrait deux issues
+ * indistinguables — `not-applicable` portant un `status_commit`, par exemple.
+ */
+function statutValide(v: unknown): v is IntegrationStatus {
+  if (!objet(v)) return false;
+  const cles = Object.keys(v).sort().join(",");
+  switch (v.outcome) {
+    case "not-applicable":
+      return cles === "outcome";
+    case "unchanged":
+      return cles === "decision_id,outcome,target_status" && texte(v.decision_id) && texte(v.target_status);
+    case "committed":
+      return cles === "decision_id,outcome,status_commit,target_status"
+        && texte(v.decision_id) && texte(v.target_status) && texte(v.status_commit);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Une ligne du registre v2, ou `null` si elle n'en est pas une.
+ *
+ * Seule la forme d'UNE ligne se juge ici : enveloppe, nature, champs obligatoires et leur
+ * type exact. Ce qui demande plusieurs lignes — ordre des `event_seq`, cohérence de
+ * `lane`, chaîne des revues, renvois vers REVIEWED et FROZEN — appartient à la
+ * projection. Une ligne rendue `null` n'est jamais ignorée : l'appelant la compte abîmée.
+ *
+ * Les champs non nommés par § F sont tolérés sur un événement ; ils ne le sont pas dans
+ * `status`, dont les trois issues se distinguent par leurs clés.
+ */
+export function parseLaneEventV2(doc: unknown): LaneEventV2 | null {
+  if (!objet(doc)) return null;
+  if (!rang(doc.event_seq) || !texte(doc.work_unit) || !texte(doc.lane) || !texte(doc.at)) return null;
+  const ok = ((): boolean => {
+    switch (doc.event) {
+      case "OPENED":
+        return texte(doc.base) && rang(doc.generation);
+      case "REVIEWED": {
+        const r = doc.reviewer;
+        const p = doc.proof;
+        if (!texte(doc.from_tree) || !texte(doc.tree) || !texte(doc.verdict)) return false;
+        if (!objet(r) || !rang(r.delegation_seq) || !texte(r.agent) || !texte(r.role)) return false;
+        if (!objet(p) || (p.mode !== "diff" && p.mode !== "reading-list" && p.mode !== "none")) return false;
+        if (p.mode === "reading-list") return cheminsCanoniques(p.paths);
+        return p.paths === undefined || cheminsCanoniques(p.paths);
+      }
+      case "VIOLATION": {
+        const s = doc.source;
+        return (doc.kind === "reserved-violation" || doc.kind === "bundle-violation")
+          && cheminsCanoniques(doc.paths)
+          && objet(s) && rang(s.delegation_seq) && texte(s.agent)
+          && texte(doc.observed_tree);
+      }
+      case "RISK": {
+        const transition = doc.transition;
+        if (!texte(doc.id)) return false;
+        if (transition !== "opened" && transition !== "routed" && transition !== "resolved") return false;
+        // Exactement un des deux : qui agit, ou à qui c'est confié.
+        const par = doc.by !== undefined;
+        const vers = doc.to !== undefined;
+        return par !== vers && (par ? texte(doc.by) : texte(doc.to));
+      }
+      case "FROZEN":
+        return texte(doc.commit) && texte(doc.parent) && texte(doc.tree) && rang(doc.reviewed_event_seq);
+      case "MERGED":
+        return texte(doc.integration_commit) && rang(doc.frozen_event_seq);
+      case "INTEGRATED":
+        return texte(doc.integration_commit) && statutValide(doc.status);
+      case "ABANDONED":
+        return texte(doc.by) && texte(doc.reason) && rang(doc.generation);
+      default:
+        return false;
+    }
+  })();
+  return ok ? (doc as unknown as LaneEventV2) : null;
+}
 
 /**
  * L'histoire confirmée d'une unité, telle que le registre la raconte.
