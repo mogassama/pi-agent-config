@@ -403,6 +403,27 @@ export function projectRisks(events: readonly LaneEvent[], runId: string): Map<s
 }
 
 /**
+ * Les lanes encore ouvertes, repliées par IDENTITÉ de lane, triées.
+ *
+ * L'identité est la lane complète en v2 (`lane`), et l'unité en v1, dont l'identité legacy
+ * est l'artefact <R>-<unit>. OPENED ouvre une identité ; INTEGRATED ou ABANDONED ferme
+ * CETTE identité ; FROZEN et MERGED ne ferment rien.
+ *
+ * Replier par unité serait faux dès deux générations : une génération intégrée masquerait
+ * une autre, encore ouverte, de la même unité. Et rien ici ne dépend d'un worktree : une
+ * lane ouverte dont l'artefact a disparu reste ouverte. Projection en mémoire seulement.
+ */
+export function openLaneIdentities(events: readonly LaneEvent[], version: number | undefined): string[] {
+  const ouverte = new Map<string, boolean>();
+  for (const e of events) {
+    if (e.event !== "OPENED" && e.event !== "INTEGRATED" && e.event !== "ABANDONED") continue;
+    const identite = version === 2 && "lane" in e ? e.lane : e.work_unit;
+    ouverte.set(identite, e.event === "OPENED");
+  }
+  return [...ouverte].filter(([, o]) => o).map(([id]) => id).sort();
+}
+
+/**
  * Ce qu'un registre v2 viole sur plusieurs lignes (P4). Vide : cohérent.
  *
  * La forme de chaque ligne est jugée par `parseLaneEventV2` ; ici, ce que seul l'ensemble

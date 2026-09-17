@@ -29,6 +29,7 @@ import {
   reconcile,
   integrationCommits,
   laneLedgerIncoherences,
+  openLaneIdentities,
   projectIntegrated,
   projectLegacyGenerations,
   projectReviews,
@@ -85,6 +86,8 @@ export interface LaneProjections {
   /** Sous la clé `riskKey(R, work_unit, id)`. */
   risks: Map<string, RiskFact>;
   integrated: Map<string, IntegratedFact>;
+  /** Les identités de lane encore ouvertes au registre, triées (`openLaneIdentities`). */
+  openLanes: string[];
 }
 
 export type ObservedLanes = LedgerObservation<LaneSnapshot>;
@@ -185,6 +188,7 @@ function construire(root: string, runId: string, lu: LaneRead): LaneSnapshot {
       violations: projectViolations(laneRead.events),
       risks: projectRisks(laneRead.events, runId),
       integrated: projectIntegrated(laneRead.events, laneRead.version),
+      openLanes: openLaneIdentities(laneRead.events, laneRead.version),
     },
   };
 }

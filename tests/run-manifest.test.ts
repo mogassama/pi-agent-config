@@ -15,7 +15,7 @@ import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync,
   writeFileSync,
 } from "node:fs";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,6 +63,7 @@ import {
 import {
   integrationCommits,
   laneLedgerIncoherences,
+  openLaneIdentities,
   parseLaneEventV2,
   projectIntegrated,
   projectLegacyGenerations,
@@ -74,6 +75,11 @@ import {
   type LaneEventV2,
 } from "../subagent-only/lane-ledger.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
+import { verifierCompleted } from "../subagent-only/run-end.ts";
+import {
+  aJeter as jetablesFixtures, AT as AT_FIXTURE, cheminIntegrations, git as gitFixture, hashPlan,
+  manifeste as manifesteFixture, RUN as RUN_FIXTURE, runEcrit, type Unite,
+} from "./l0-b1-fixtures.ts";
 import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 
 function dossier(): { dir: string; done: () => void } {
@@ -3656,4 +3662,245 @@ test("observeLanes transmet la version du snapshot au projecteur d'intégration"
   } finally {
     done();
   }
+});
+
+// ================================================= run-end : la politique de completed (LOT 2, étape 5)
+
+/*
+ * La politique est appelée ici directement : à l'étape 5, la primitive terminale ne la
+ * câble pas encore. Chaque refus est jugé sur son motif, et chaque famille de cas porte
+ * son témoin — le même run, sans le défaut monté, passe.
+ */
+test.after(() => { for (const d of jetablesFixtures()) rmSync(d, { recursive: true, force: true }); });
+
+type Run = ReturnType<typeof runEcrit>;
+const lireManifeste = (r: Run): RunManifest =>
+  JSON.parse(readFileSync(join(r.dir, "active-run.json"), "utf-8")) as RunManifest;
+const verifier = (r: Run) => verifierCompleted({ root: r.root, dir: r.dir, manifest: lireManifeste(r) });
+function passe(r: Run, quoi: string): void {
+  assert.doesNotThrow(() => verifier(r), quoi);
+}
+function refuseFin(r: Run, motif: RegExp, quoi: string): void {
+  assert.throws(() => verifier(r), (err: unknown) => {
+    assert.ok(err instanceof RecoveryError, `${quoi} : RecoveryError attendue`);
+    assert.match(err.message, /^fin refusée : /, quoi);
+    assert.match(err.message, motif, quoi);
+    return true;
+  }, quoi);
+}
+const sain = (prefixe: string, unites: Unite[] = [{ unite: "W03", integree: true }]) => runEcrit(prefixe, unites);
+/** Réécrire le plan et l'empreinte ensemble : seul le contrôle visé doit juger. */
+function replanifier(r: Run, texte: string): void {
+  writeFileSync(join(r.dir, `${RUN_FIXTURE}-plan.json`), texte);
+  manifesteFixture(r.dir, {
+    version: 2, base: r.base, plan: `${RUN_FIXTURE}-plan.json`, ledgers: { lanes: 2 }, planHash: hashPlan(r.dir),
+  });
+}
+
+test("run-end : un run sain passe les sept contrôles", () => {
+  passe(sain("re-sain-"), "une unité intégrée");
+  passe(sain("re-sain2-", [{ unite: "W03", integree: true }, { unite: "W09", integree: true }]), "deux unités");
+  passe(sain("re-sain3-", [{ unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened", "routed", "resolved"] }] }]),
+    "un risque routé puis résolu");
+});
+
+test("run-end 1 : le plan attaché, présent, lisible, valide et identique à son empreinte", () => {
+  let r = sain("re-p1-");
+  manifesteFixture(r.dir, { version: 2, base: r.base, ledgers: { lanes: 2 } });
+  refuseFin(r, /aucun plan n'est attaché/, "sans plan");
+  r = sain("re-p2-");
+  manifesteFixture(r.dir, { version: 2, base: r.base, plan: `${RUN_FIXTURE}-plan.json`, ledgers: { lanes: 2 } });
+  refuseFin(r, /ne porte pas l'empreinte/, "sans empreinte");
+  r = sain("re-p3-");
+  rmSync(join(r.dir, `${RUN_FIXTURE}-plan.json`));
+  refuseFin(r, /plan attaché est illisible/, "plan absent");
+  r = sain("re-p4-");
+  writeFileSync(join(r.dir, `${RUN_FIXTURE}-plan.json`), readFileSync(join(r.dir, `${RUN_FIXTURE}-plan.json`), "utf-8") + " ");
+  refuseFin(r, /ne correspond plus à son empreinte/, "plan réécrit");
+  r = sain("re-p5-");
+  replanifier(r, "{ pas du json");
+  refuseFin(r, /n'est pas du JSON/, "plan illisible mais haché");
+  r = sain("re-p6-");
+  replanifier(r, JSON.stringify({ version: 1, work_units: [{ id: "W03" }, { id: "W03" }] }));
+  refuseFin(r, /le plan attaché est (?!usable)/, "plan invalide mais haché");
+});
+
+test("run-end 2 : le registre des lanes doit être KNOWN, ni EMPTY ni autre", () => {
+  let r = sain("re-l1-");
+  manifesteFixture(r.dir, { version: 2, base: r.base, plan: `${RUN_FIXTURE}-plan.json`, ledgers: { lanes: 1 }, planHash: hashPlan(r.dir) });
+  refuseFin(r, /registre des lanes est UNKNOWN/, "témoin discordant");
+  r = sain("re-l2-");
+  rmSync(join(r.dir, `${RUN_FIXTURE}-lanes.jsonl`));
+  manifesteFixture(r.dir, { version: 2, base: r.base, plan: `${RUN_FIXTURE}-plan.json`, planHash: hashPlan(r.dir) });
+  refuseFin(r, /registre des lanes est EMPTY/, "registre absent sans témoin");
+});
+
+test("run-end 3 et 4 : aucune lane ouverte, chaque unité du plan intégrée et prouvée", () => {
+  /*
+   * Une lane ouverte se voit par son worktree. En registre v2, le worktree porte le nom
+   * <R>-<unit>-g1, que la réconciliation ne rattache pas encore à son unité (identité du
+   * LOT 3) : le contrôle 3 ne serait pas atteint, et c'est le 4 qui refuserait. L'hybride
+   * du LOT 1 — manifeste v2 sans témoin, registre v1, worktree <R>-<unit> — l'atteint.
+   */
+  const ouverte = runEcrit("re-o1-", [{ unite: "W03", ouverte: true }], { ledger: 1, manifesteV1: false });
+  manifesteFixture(ouverte.dir, { version: 2, base: ouverte.base, plan: `${RUN_FIXTURE}-plan.json`, planHash: hashPlan(ouverte.dir) });
+  refuseFin(ouverte, /lanes sont encore ouvertes : W03/, "lane ouverte");
+  // Témoin : le même hybride, unité intégrée, passe.
+  const hybride = runEcrit("re-o2-", [{ unite: "W03", integree: true }], { ledger: 1, manifesteV1: false });
+  manifesteFixture(hybride.dir, { version: 2, base: hybride.base, plan: `${RUN_FIXTURE}-plan.json`, planHash: hashPlan(hybride.dir) });
+  passe(hybride, "hybride intégré");
+  refuseFin(sain("re-a1-", [{ unite: "W03", integree: true }, { unite: "W09", abandonnee: true }]),
+    /ne sont pas intégrées : W09 \(abandoned\)/, "abandon");
+  const r = sain("re-j1-");
+  const plan = JSON.parse(readFileSync(join(r.dir, `${RUN_FIXTURE}-plan.json`), "utf-8")) as { work_units: Array<Record<string, unknown>> };
+  plan.work_units.push({ ...plan.work_units[0], id: "W12", expected_write_scope: ["src/W12.py"] });
+  replanifier(r, `${JSON.stringify(plan, null, 2)}\n`);
+  refuseFin(r, /ne sont pas intégrées : W12 \(jamais ouverte\)/, "unité jamais ouverte");
+  // Intégrée au registre, mais sans merge que git confirme : pas prouvée.
+  const faux = sain("re-f1-", [{ unite: "W03", integree: true }]);
+  gitFixture(faux.root, "reset", "-q", "--hard", faux.base);
+  refuseFin(faux, /ne sont pas intégrées : W03 \(integrated\)/, "intégration non confirmée");
+});
+
+test("run-end 5 : les tentatives d'intégration, exploitables et closes", () => {
+  let r = sain("re-t1-");
+  writeFileSync(cheminIntegrations(r.dir), `${JSON.stringify({ integration_ledger: 1 })}\n{ abîmé\n`);
+  refuseFin(r, /tentatives d'intégration est UNKNOWN/, "registre abîmé");
+  r = sain("re-t2-");
+  writeFileSync(cheminIntegrations(r.dir), `${JSON.stringify({ integration_ledger: 1 })}\n${JSON.stringify({
+    event: "ATTEMPT_OPENED", id: `${RUN_FIXTURE}-W03-1`, work_unit: "W03", seq: 1,
+    p1: r.base, p2: r.base, conflicts: ["src/a.py"], at: AT_FIXTURE,
+  })}\n`);
+  refuseFin(r, /tentatives d'intégration sont encore ouvertes : .*W03-1/, "tentative active");
+  // Témoin : un registre des tentatives présent et vide passe.
+  r = sain("re-t3-");
+  writeFileSync(cheminIntegrations(r.dir), `${JSON.stringify({ integration_ledger: 1 })}\n`);
+  passe(r, "registre des tentatives KNOWN et vide");
+});
+
+test("run-end 6 : un risque ouvert refuse, sous sa clé et sur sa dernière transition", () => {
+  refuseFin(sain("re-r1-", [{ unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened"] }] }]),
+    /risques restent ouverts : W03:r1 \(opened\)/, "ouvert");
+  refuseFin(sain("re-r2-", [{ unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened", "routed"] }] }]),
+    /W03:r1 \(routed\)/, "routé");
+  refuseFin(sain("re-r3-", [{ unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened", "resolved", "opened"] }] }]),
+    /W03:r1 \(opened\)/, "rouvert après résolution");
+  refuseFin(sain("re-r4-", [
+    { unite: "W09", integree: true, risques: [{ id: "r1", transitions: ["opened"] }] },
+    { unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened", "resolved"] }] },
+  ]), /risques restent ouverts : W09:r1 \(opened\)$|risques restent ouverts : W09:r1 \(opened\)\./, "même id sur deux unités");
+});
+
+test("run-end 7 : la racine propre, et un échec d'observation vaut refus", () => {
+  const r = sain("re-g1-");
+  writeFileSync(join(r.root, "sale.txt"), "x\n");
+  refuseFin(r, /la racine porte 1 modification/, "racine sale");
+  // git status échoue, le reste de git fonctionne : l'échec doit refuser, pas passer.
+  const s = sain("re-g2-");
+  const vrai = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf-8" }).trim();
+  const shim = mkdtempSync(join(tmpdir(), "re-shim-"));
+  writeFileSync(join(shim, "git"), `#!/bin/sh\n[ "$1" = "status" ] && exit 128\nexec "${vrai}" "$@"\n`, { mode: 0o755 });
+  const avant = process.env.PATH;
+  process.env.PATH = `${shim}:${avant ?? ""}`;
+  try {
+    refuseFin(s, /l'état de la racine n'a pas pu être observé/, "git status en échec");
+  } finally {
+    process.env.PATH = avant;
+    rmSync(shim, { recursive: true, force: true });
+  }
+  passe(s, "le même run, git rétabli");
+});
+
+test("run-end : aucune décision sur usable, aucun vérificateur exporté", () => {
+  const source = readFileSync(join(import.meta.dirname, "..", "subagent-only", "run-end.ts"), "utf-8");
+  // `"usable"` reste le statut d'un plan valide ; c'est la PROPRIÉTÉ des observations qui est interdite.
+  assert.equal(/\.usable\b|\busable\s*[:?]|\[\s*["']usable["']\s*\]/.test(source), false,
+    "aucun accès à la propriété usable dans run-end.ts");
+  const exports = [...source.matchAll(/^export\s+(?:function|type|interface|const)\s+(\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports, ["verifierCompleted"], "une seule exportation : la politique elle-même");
+});
+
+test("run-end : le module se charge dans les deux ordres du cycle", () => {
+  const flags = Number(process.versions.node.split(".")[0]) < 23 ? ["--experimental-strip-types"] : [];
+  const racine = join(import.meta.dirname, "..", "subagent-only");
+  for (const [premier, second] of [["run-end.ts", "run-manifest.ts"], ["run-manifest.ts", "run-end.ts"]]) {
+    const code =
+      `const a = await import(${JSON.stringify(join(racine, premier))});` +
+      `const b = await import(${JSON.stringify(join(racine, second))});` +
+      "const e = a.verifierCompleted ?? b.verifierCompleted; const t = a.terminerRun ?? b.terminerRun;" +
+      "if (typeof e !== 'function' || typeof t !== 'function') process.exit(3);";
+    const p = spawnSync(process.execPath, [...flags, "--input-type=module", "-e", code], { encoding: "utf-8" });
+    assert.equal(p.status, 0, `${premier} puis ${second} : ${p.stderr}`);
+  }
+});
+
+// ================================================= contrôle 3 par identité de lane (E3, 3a)
+
+/** Retire le worktree d'une lane, sans toucher au registre. */
+function sansWorktree(r: Run, laneId: string): void {
+  const liste = gitFixture(r.root, "worktree", "list", "--porcelain");
+  const chemin = liste.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9))
+    .find((c) => c.endsWith(laneId));
+  assert.ok(chemin, `worktree de ${laneId} introuvable`);
+  gitFixture(r.root, "worktree", "remove", "--force", chemin);
+}
+/** Le plan réduit aux unités données, empreinte comprise. */
+function planReduit(r: Run, garder: string[]): void {
+  const plan = JSON.parse(readFileSync(join(r.dir, `${RUN_FIXTURE}-plan.json`), "utf-8")) as { work_units: Array<{ id: string }> };
+  plan.work_units = plan.work_units.filter((u) => garder.includes(u.id));
+  replanifier(r, `${JSON.stringify(plan, null, 2)}\n`);
+}
+
+test("run-end 3 : une lane v2 ouverte hors du plan, sans worktree, refuse ; fermée, la fin passe", () => {
+  const r = sain("re-i1-", [{ unite: "W03", integree: true }, { unite: "W99", ouverte: true }]);
+  sansWorktree(r, `${RUN_FIXTURE}-W99-g1`);
+  planReduit(r, ["W03"]);
+  refuseFin(r, new RegExp(`fin refusée : des lanes sont encore ouvertes : ${RUN_FIXTURE}-W99-g1\\.`), "hors plan, sans worktree");
+  // Témoin : la même histoire, W99 abandonnée, donc fermée — aucune autre cause ne refuse.
+  const t = sain("re-i2-", [{ unite: "W03", integree: true }, { unite: "W99", abandonnee: true }]);
+  planReduit(t, ["W03"]);
+  passe(t, "hors plan, fermée");
+});
+
+test("run-end 3 : une génération intégrée ne masque pas une autre génération ouverte de la même unité", () => {
+  const r = sain("re-i3-");
+  const chemin = join(r.dir, `${RUN_FIXTURE}-lanes.jsonl`);
+  const lignes = readFileSync(chemin, "utf-8").trimEnd().split("\n");
+  const i = lignes.findIndex((l) => l.includes('"event":"INTEGRATED"'));
+  assert.ok(i > 0, "l'intégration de W03 est au registre");
+  const g2 = { work_unit: "W03", lane: `${RUN_FIXTURE}-W03-g2`, at: AT_FIXTURE, event: "OPENED", base: r.base, generation: 2 };
+  const corps = [...lignes.slice(1, i), JSON.stringify(g2), ...lignes.slice(i)]
+    .map((l, k) => JSON.stringify({ ...JSON.parse(l), event_seq: k + 1 }));
+  writeFileSync(chemin, `${[lignes[0], ...corps].join("\n")}\n`);
+  refuseFin(r, new RegExp(`des lanes sont encore ouvertes : ${RUN_FIXTURE}-W03-g2\\.`), "g1 intégrée, g2 ouverte");
+  // Témoin : le même run sans la seconde génération passe.
+  passe(sain("re-i4-"), "g1 seule, intégrée");
+});
+
+test("openLaneIdentities : par identité de lane, fermée seulement par INTEGRATED ou ABANDONED", () => {
+  const ev = (seq: number, lane: string, reste: Record<string, unknown>) =>
+    ({ event_seq: seq, work_unit: lane.split("-")[1], lane, at: "t", ...reste }) as unknown as LaneEvent;
+  const h = [
+    ev(1, "R-W03-g1", { event: "OPENED", base: "b", generation: 1 }),
+    ev(2, "R-W03-g2", { event: "OPENED", base: "b", generation: 2 }),
+    ev(3, "R-W03-g1", { event: "INTEGRATED", integration_commit: "i", status: { outcome: "not-applicable" } }),
+    ev(4, "R-W09-g1", { event: "OPENED", base: "b", generation: 1 }),
+    ev(5, "R-W09-g1", { event: "FROZEN", commit: "c", parent: "b", tree: "t", reviewed_event_seq: 1 }),
+    ev(6, "R-W09-g1", { event: "MERGED", integration_commit: "i", frozen_event_seq: 5 }),
+    ev(7, "R-W12-g1", { event: "OPENED", base: "b", generation: 1 }),
+    ev(8, "R-W12-g1", { event: "ABANDONED", by: "o", reason: "r", generation: 1 }),
+    ev(9, "R-W14-g1", { event: "OPENED", base: "b", generation: 1 }),
+    ev(10, "R-W14-g1", { event: "INTEGRATED", integration_commit: "i", status: { outcome: "not-applicable" } }),
+    ev(11, "R-W14-g1", { event: "OPENED", base: "b", generation: 1 }),
+  ];
+  assert.deepEqual(openLaneIdentities(h, 2), ["R-W03-g2", "R-W09-g1", "R-W14-g1"],
+    "g2 ouverte malgré g1 intégrée ; FROZEN et MERGED ne ferment pas ; ABANDONED ferme ; rouverte : ouverte");
+  // En v1, l'identité est l'unité : un champ lane surnuméraire n'a aucune autorité.
+  const v1 = [
+    { event: "OPENED", work_unit: "W03", at: "t", base: "b", lane: "ignoré-g7" },
+    { event: "INTEGRATED", work_unit: "W03", at: "t" },
+    { event: "OPENED", work_unit: "W09", at: "t", base: "b" },
+  ] as unknown as LaneEvent[];
+  assert.deepEqual(openLaneIdentities(v1, 1), ["W09"]);
+  assert.deepEqual(openLaneIdentities([], 2), []);
 });
