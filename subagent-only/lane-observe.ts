@@ -28,6 +28,7 @@ import { join } from "node:path";
 import {
   reconcile,
   integrationCommits,
+  projectLegacyGenerations,
   type LaneEvent,
   type Observations,
   type Reconciliation,
@@ -95,8 +96,14 @@ export function observeLanes(input: {
   );
 }
 
-/** Le snapshot d'un registre exploitable. N'est appelé qu'une fois `state` établi. */
-function construire(root: string, runId: string, laneRead: LaneRead): LaneSnapshot {
+/**
+ * Le snapshot d'un registre exploitable. N'est appelé qu'une fois `state` établi.
+ *
+ * `read` est la lecture PROJETÉE : un registre v1 y porte ses générations synthétisées
+ * (C4.9). Le lecteur a rendu le fichier tel quel ; tout ce qui suit consomme la projection.
+ */
+function construire(root: string, runId: string, lu: LaneRead): LaneSnapshot {
+  const laneRead: LaneRead = { ...lu, events: projectLegacyGenerations(lu.events, lu.version) };
 
   const worktrees = openLanes(root)
     .filter((id) => id.startsWith(`${runId}-`))

@@ -166,5 +166,11 @@
     "file": "subagent-only/lane-ledger.ts",
     "find": "      case \"REVIEWED\": {\n        const r = doc.reviewer;",
     "replace": "      case \"REVIEWED\": {\n        return false;\n        const r = doc.reviewer;"
+  },
+  {
+    "test": "L0 REG F-generation-ancienne — un identifiant écrit avant les générations se reconstruit comme g1",
+    "file": "subagent-only/lane-ledger.ts",
+    "find": "  if (version !== 1) return [...events];\n",
+    "replace": "  return [...events]; // mutant : aucune génération synthétisée\n"
   }
 ]

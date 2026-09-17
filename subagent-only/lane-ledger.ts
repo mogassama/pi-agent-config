@@ -132,6 +132,26 @@ export type LaneEventV2 =
   | (LaneEnvelope & { event: "INTEGRATED"; integration_commit: string; status: IntegrationStatus })
   | (LaneEnvelope & { event: "ABANDONED"; by: string; reason: string; generation: number });
 
+/**
+ * La lecture legacy d'un registre v1 : chaque ouverture et chaque abandon relus en g1.
+ *
+ * Un registre v1 a précédé les générations ; il n'en décrit qu'une par unité, la première
+ * (C4.9, lignes 6 et 13). La projection le dit explicitement au lieu de laisser chaque
+ * consommateur supposer une génération absente. Rien d'autre n'est synthétisé : `lane`
+ * appartient à l'enveloppe v2 et nommerait un artefact `-g1` qui n'existe pas.
+ *
+ * Aucune réécriture : le fichier reste v1, et le tableau reçu n'est pas modifié — les
+ * événements projetés sont des copies. Un champ `generation` qu'une ligne v1 porterait
+ * n'a aucune autorité dans cette version et ne survit pas à la projection. Un registre
+ * d'une autre version est rendu tel quel : la projection v1 ne s'applique qu'en v1.
+ */
+export function projectLegacyGenerations(events: readonly LaneEvent[], version: number | undefined): LaneEvent[] {
+  if (version !== 1) return [...events];
+  return events.map((e) =>
+    e.event === "OPENED" || e.event === "ABANDONED" ? ({ ...e, generation: 1 } as LaneEvent) : e,
+  );
+}
+
 const texte = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 const rang = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
 const objet = (v: unknown): v is Record<string, unknown> =>

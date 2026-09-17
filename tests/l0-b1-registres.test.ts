@@ -330,7 +330,7 @@ preservation("F-generation-idempotente", "rouvrir une lane existante la rend au 
   );
 });
 
-regression("F-generation-ancienne", "un identifiant écrit avant les générations se reconstruit comme g1", () => {
+regressionCorrigee("F-generation-ancienne", "un identifiant écrit avant les générations se reconstruit comme g1", () => {
   const d = depot("l0-b1-ancien-");
   manifeste(d.dir, { version: 1 });
   plan(d.dir, ["W03"]);

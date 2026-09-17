@@ -59,7 +59,7 @@ import {
   type Lease,
   type RunManifest,
 } from "../subagent-only/run-manifest.ts";
-import { parseLaneEventV2, type LaneEventV2 } from "../subagent-only/lane-ledger.ts";
+import { parseLaneEventV2, projectLegacyGenerations, type LaneEvent, type LaneEventV2 } from "../subagent-only/lane-ledger.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
 import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 
@@ -3309,6 +3309,64 @@ test("C4.9 ligne 1 : observeIntegrations refuse quand le registre des lanes n'es
     manifeste();
     vu = observer();
     assert.deepEqual([vu.state, vu.usable], ["EMPTY", true], "lanes EMPTY");
+  } finally {
+    done();
+  }
+});
+
+// ================================================= lecture legacy : génération 1 (LOT 2, étape 3)
+
+test("C4.9 : un registre v1 se projette en g1, sans toucher ce qu'il a reçu", () => {
+  const v1: LaneEvent[] = [
+    { event: "OPENED", work_unit: "W03", at: "t", base: "b" },
+    { event: "INTEGRATED", work_unit: "W03", at: "t", integration_commit: "c" },
+    { event: "ABANDONED", work_unit: "W09", at: "t", reason: "r" },
+  ];
+  const avant = JSON.stringify(v1);
+  const projetes = projectLegacyGenerations(v1, 1) as Array<Record<string, unknown>>;
+  assert.deepEqual(projetes.map((e) => e.generation), [1, undefined, 1],
+    "OPENED et ABANDONED en g1 ; INTEGRATED n'a pas de génération");
+  assert.equal(JSON.stringify(v1), avant, "le tableau reçu et ses objets restent intacts");
+  assert.notEqual(projetes, v1, "un nouveau tableau");
+  assert.equal(projetes[1], v1[1], "un événement sans génération n'est pas recopié");
+  // Une génération portée par une ligne v1 n'a pas d'autorité : la projection la remplace.
+  const porte = [{ ...v1[0], generation: 5 } as LaneEvent];
+  assert.equal((projectLegacyGenerations(porte, 1)[0] as Record<string, unknown>).generation, 1);
+});
+
+test("C4.9 : la projection v1 ne s'applique qu'à un en-tête v1", () => {
+  const ouverture = { event: "OPENED", work_unit: "W03", at: "t", base: "b" } as LaneEvent;
+  for (const version of [2, 99, undefined]) {
+    const rendus = projectLegacyGenerations([ouverture], version);
+    assert.equal((rendus[0] as Record<string, unknown>).generation, undefined, `version ${version}`);
+    assert.equal(rendus[0], ouverture, `version ${version} : rendu tel quel`);
+  }
+  const v2 = enveloppe(1, valides.OPENED) as unknown as LaneEvent;
+  assert.equal((projectLegacyGenerations([v2], 2)[0] as Record<string, unknown>).generation, 1, "v2 garde la sienne");
+  const g3 = { ...enveloppe(1, valides.OPENED), generation: 3 } as unknown as LaneEvent;
+  assert.equal((projectLegacyGenerations([g3], 2)[0] as Record<string, unknown>).generation, 3, "v2 non réécrit");
+});
+
+test("C4.9 : l'hybride (manifeste v2, registre v1) se lit en g1, et le fichier reste v1 octet pour octet", () => {
+  const { dir: root, done } = dossier();
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    const runs = join(root, RUNS_DIR);
+    mkdirSync(runs);
+    writeFileSync(join(runs, "active-run.json"),
+      JSON.stringify({ version: 2, runId: "r", status: "active", nextSeq: 1 }));
+    const brut = `{"ledger":1}\n${JSON.stringify({ event: "OPENED", work_unit: "W03", at: "t", base: "b" })}\n`;
+    writeFileSync(laneLedgerPath(runs, "r"), brut);
+    const lu = readLaneEvents(runs, "r");
+    const vu = observeLanes({
+      root, runId: "r",
+      laneRead: { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present },
+    });
+    assert.equal(vu.state, "KNOWN");
+    assert.equal(vu.usable && (vu.snapshot.read.events[0] as Record<string, unknown>).generation, 1, "g1 synthétisée");
+    assert.equal(vu.usable && vu.snapshot.read.version, 1, "la lecture reste v1");
+    assert.equal((lu.events[0] as Record<string, unknown>).generation, undefined, "la lecture brute n'est pas modifiée");
+    assert.equal(readFileSync(laneLedgerPath(runs, "r"), "utf-8"), brut, "le fichier n'est pas réécrit");
   } finally {
     done();
   }
