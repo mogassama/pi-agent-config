@@ -626,18 +626,18 @@ function refusDeVerbe(verbe, cible, snapshot, lanes) {
  *
  * ADAPTATEUR, PAS POLITIQUE. Ce bloc lit deux arguments, construit la demande, appelle la
  * primitive et rend un code de sortie. Il n'observe NI les lanes, NI les intégrations, NI
- * la racine : elles seront intégrées à la primitive avec le lecteur v2 des lanes, dans la
- * section critique N → R. Les faire ici serait un TOCTOU — entre ce qu'on aurait vu et ce
- * que la transition écrirait, une autre session peut tout changer.
+ * la racine : la primitive les relit elle-même (run-end.ts), dans la section critique
+ * N → R. Les faire ici serait un TOCTOU — entre ce qu'on aurait vu et ce que la
+ * transition écrirait, une autre session peut tout changer.
  *
  * SANS ANNOTATION, et ce n'est pas une convention de style : node n'applique pas le retrait
  * des types à un fichier SANS EXTENSION. Une annotation ici ne se compile pas — elle casse
  * au chargement, même si le shim S4 l'accepte. Le binaire ne porte donc que l'adaptation de
  * commande, en JavaScript ; toute politique métier vit dans un module .ts du canal principal.
  *
- * La primitive refuse elle-même toute PREMIÈRE fin `completed` tant que le lecteur v2 du
- * registre des lanes n'est pas disponible. Ce refus ne dépend d'aucun argument ni callback
- * fourni par l'appelant. La reprise d'une fin déjà durable reste ouverte ; `abandoned` est
+ * La primitive juge seule une PREMIÈRE fin `completed`, sur les sept contrôles de run-end.ts.
+ * Aucun argument ni callback fourni par l'appelant n'y prend part : ce bloc n'en passe
+ * aucun. La reprise d'une fin déjà durable ne recalcule rien ; `abandoned` est
  * pleinement fonctionnel.
  */
 if (args[0] === "run") {

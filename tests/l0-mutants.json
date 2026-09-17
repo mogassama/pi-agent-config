@@ -178,5 +178,121 @@
     "file": "subagent-only/lane-ledger.ts",
     "find": "        if (avant !== undefined && avant !== e.from_tree) {\n",
     "replace": "        if (false) { // mutant : la rupture de chaîne n'est plus vue\n"
+  },
+  {
+    "test": "L0 REG C1.8-completed — un run dont tout est intégré se termine, et son archive dit tout",
+    "file": "subagent-only/run-end.ts",
+    "find": "  if (lanes.state !== \"KNOWN\") refuser(`le registre des lanes est ${lanes.state}`);",
+    "replace": "  if (lanes.state !== \"EMPTY\") refuser(`le registre des lanes est ${lanes.state}`); // mutant : KNOWN refusé"
+  },
+  {
+    "test": "L0 REG C1.8-abandoned-non-integre — une unité du plan abandonnée n'est pas une unité intégrée",
+    "file": "subagent-only/run-end.ts",
+    "find": "    .filter((id) => !bilan.integrated.has(id))",
+    "replace": "    .filter((id) => !bilan.integrated.has(id) && bilan.states.get(id) !== \"abandoned\")"
+  },
+  {
+    "test": "L0 REG C1.8-risque-cle — un risque s'identifie par son unité, pas par son seul identifiant",
+    "file": "subagent-only/lane-ledger.ts",
+    "find": "    risques.set(riskKey(runId, e.work_unit, e.id), {",
+    "replace": "    risques.set(riskKey(runId, \"\", e.id), { // mutant : clé par identifiant seul"
+  },
+  {
+    "test": "L0 REG C1.8-plan-hash — un plan réécrit après son attachement refuse la fin",
+    "file": "subagent-only/run-end.ts",
+    "find": "  if (planHash(texte) !== manifest.planHash) {",
+    "replace": "  if (false) { // mutant : empreinte non comparée"
+  },
+  {
+    "test": "L0 REG A-P1-F01-archive — une archive contradictoire est refusée, jamais remplacée",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (code === \"EEXIST\") return confronter();",
+    "replace": "    if (code === \"EEXIST\") { writeFileSync(destination, contenu); return \"publiee\"; } // mutant : archive remplacée"
+  },
+  {
+    "test": "L0 REG C1.8-preconditions — chaque précondition manquante refuse la fin, et le run sain l'obtient",
+    "file": "subagent-only/run-end.ts",
+    "find": "    refuser(`le plan attaché est illisible (${manifest.plan}) : ${message(err)}`);",
+    "replace": "    return []; // mutant : plan absent accepté"
+  },
+  {
+    "test": "L0 REG C1.8-preconditions — chaque précondition manquante refuse la fin, et le run sain l'obtient",
+    "file": "subagent-only/run-end.ts",
+    "find": "  if (manquantes.length > 0) {",
+    "replace": "  if (false) { // mutant : unité jamais ouverte acceptée"
+  },
+  {
+    "test": "L0 REG C1.8-preconditions — chaque précondition manquante refuse la fin, et le run sain l'obtient",
+    "file": "subagent-only/run-end.ts",
+    "find": "  if (actives.length > 0) {",
+    "replace": "  if (false) { // mutant : tentative active acceptée"
+  },
+  {
+    "test": "L0 REG C1.8-preconditions — chaque précondition manquante refuse la fin, et le run sain l'obtient",
+    "file": "subagent-only/run-end.ts",
+    "find": "  if (ouverts.length > 0) refuser(",
+    "replace": "  if (false) refuser( // mutant : risque ouvert accepté\n    "
+  },
+  {
+    "test": "L0 REG C1.8-preconditions — chaque précondition manquante refuse la fin, et le run sain l'obtient",
+    "file": "subagent-only/run-end.ts",
+    "find": "  if (sale) refuser(sale);",
+    "replace": "  void sale; // mutant : racine sale acceptée"
+  },
+  {
+    "test": "L0 REG A-P1-F01-concurrence — deux fins simultanées ne produisent qu'une transition",
+    "edits": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () =>\n    withRunGuard(dir, runId, () => {",
+        "replace": "  return ((f: () => RunManifest) => f())(() =>\n    ((_d: string, _r: string, g: () => RunManifest) => g())(dir, runId, () => {"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "      const ended: RunEnd = {",
+        "replace": "      {\n        // épreuve de concurrence : barrières observables, délai = chien de garde seulement.\n        // La première fin attend que la seconde soit prête à écrire ; la seconde attend que\n        // la première ait publié son archive ET libéré active-run.json.\n        const fs = process.getBuiltinModule(\"node:fs\");\n        let premiere = true;\n        try { fs.mkdirSync(join(dir, \".course-fin-1\")); } catch { premiere = false; }\n        const t0 = Date.now();\n        if (premiere) {\n          while (!fs.existsSync(join(dir, \".course-fin-2\")) && Date.now() - t0 < 10000) pause(5);\n        } else {\n          fs.mkdirSync(join(dir, \".course-fin-2\"), { recursive: true });\n          while (!(fs.existsSync(archivePath(dir, runId)) && !fs.existsSync(manifestPath(dir))) && Date.now() - t0 < 10000) pause(5);\n        }\n      }\n      const ended: RunEnd = {"
+      }
+    ],
+    "control": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "      const ended: RunEnd = {",
+        "replace": "      {\n        // épreuve de concurrence : barrières observables, délai = chien de garde seulement.\n        // La première fin attend que la seconde soit prête à écrire ; la seconde attend que\n        // la première ait publié son archive ET libéré active-run.json.\n        const fs = process.getBuiltinModule(\"node:fs\");\n        let premiere = true;\n        try { fs.mkdirSync(join(dir, \".course-fin-1\")); } catch { premiere = false; }\n        const t0 = Date.now();\n        if (premiere) {\n          while (!fs.existsSync(join(dir, \".course-fin-2\")) && Date.now() - t0 < 10000) pause(5);\n        } else {\n          fs.mkdirSync(join(dir, \".course-fin-2\"), { recursive: true });\n          while (!(fs.existsSync(archivePath(dir, runId)) && !fs.existsSync(manifestPath(dir))) && Date.now() - t0 < 10000) pause(5);\n        }\n      }\n      const ended: RunEnd = {"
+      }
+    ],
+    "runs": 20
+  },
+  {
+    "test": "L0 REG A-P1-F01-succession — le successeur ne devient courant qu'après l'archive de R",
+    "edits": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));",
+        "replace": "  {\n    // épreuve de succession : l'ouverture attend que la fin ait écrit son terminal\n    const fs = process.getBuiltinModule(\"node:fs\");\n    const t0 = Date.now();\n    const terminal = (): boolean => {\n      try { const m = JSON.parse(fs.readFileSync(manifestPath(dir), \"utf-8\")); return m.status === \"completed\" || m.status === \"abandoned\"; } catch { return false; }\n    };\n    while (!terminal() && Date.now() - t0 < 10000) pause(5);\n  }\n  return openRunSousGuard(dir, baseCommit);"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "    const decision = withRunGuard(dir, observe.runId, () => {",
+        "replace": "    const decision = ((_d: string, _r: string, g: () => { kind: \"resume\"; manifest: RunManifest } | { kind: \"archived\" }) => g())(dir, observe.runId, () => {"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "      writeManifest(dir, terminal);\n",
+        "replace": "      writeManifest(dir, terminal);\n      {\n        // épreuve de succession : la fin attend qu'un successeur soit courant\n        const fs = process.getBuiltinModule(\"node:fs\");\n        const t0 = Date.now();\n        const autre = (): boolean => {\n          try { return JSON.parse(fs.readFileSync(manifestPath(dir), \"utf-8\")).runId !== runId; } catch { return false; }\n        };\n        while (!autre() && Date.now() - t0 < 10000) pause(5);\n      }\n"
+      }
+    ],
+    "control": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));",
+        "replace": "  {\n    // épreuve de succession : l'ouverture attend que la fin ait écrit son terminal\n    const fs = process.getBuiltinModule(\"node:fs\");\n    const t0 = Date.now();\n    const terminal = (): boolean => {\n      try { const m = JSON.parse(fs.readFileSync(manifestPath(dir), \"utf-8\")); return m.status === \"completed\" || m.status === \"abandoned\"; } catch { return false; }\n    };\n    while (!terminal() && Date.now() - t0 < 10000) pause(5);\n  }\n  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "      writeManifest(dir, terminal);\n",
+        "replace": "      writeManifest(dir, terminal);\n      {\n        // épreuve de succession : la fin attend qu'un successeur soit courant\n        const fs = process.getBuiltinModule(\"node:fs\");\n        const t0 = Date.now();\n        const autre = (): boolean => {\n          try { return JSON.parse(fs.readFileSync(manifestPath(dir), \"utf-8\")).runId !== runId; } catch { return false; }\n        };\n        while (!autre() && Date.now() - t0 < 10000) pause(5);\n      }\n"
+      }
+    ],
+    "runs": 20
   }
 ]

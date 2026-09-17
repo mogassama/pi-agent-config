@@ -204,7 +204,7 @@ function terminalComplet(
 
 // ================================================================== C1.8 — la fin d'un run
 
-regression("C1.8-completed", "un run dont tout est intégré se termine, et son archive dit tout", () => {
+regressionCorrigee("C1.8-completed", "un run dont tout est intégré se termine, et son archive dit tout", () => {
   const r = runEcrit("l0-b1-fin-", [{ unite: "W03", integree: true }, { unite: "W09", integree: true }]);
   const avant = lireJson(join(r.dir, "active-run.json"))!;
   precondition(avant.status === "active", `le run doit être actif, vu : ${String(avant.status)}`);
@@ -226,7 +226,7 @@ regression("C1.8-completed", "un run dont tout est intégré se termine, et son 
   );
 });
 
-regression("C1.8-preconditions", "chaque précondition manquante refuse la fin, et le run sain l'obtient", () => {
+regressionCorrigee("C1.8-preconditions", "chaque précondition manquante refuse la fin, et le run sain l'obtient", () => {
   const cas: Array<[string, ReturnType<typeof runEcrit>]> = [];
 
   cas.push(["lane ouverte", runEcrit("l0-b1-pre-lane-", [{ unite: "W03", integree: true }, { unite: "W09", ouverte: true }])]);
@@ -302,7 +302,7 @@ const refusSansEffet = (s: Sortie, dir: string): boolean => aRefuse(s) && archiv
 /** Aboutie : code nul, une archive, active-run.json libéré. */
 const finAboutie = (s: Sortie, dir: string): boolean => aAbouti(s) && archives(dir).length === 1 && !actif(dir);
 
-regression("C1.8-abandoned-non-integre", "une unité du plan abandonnée n'est pas une unité intégrée", () => {
+regressionCorrigee("C1.8-abandoned-non-integre", "une unité du plan abandonnée n'est pas une unité intégrée", () => {
   const r = runEcrit("l0-b1-aband-int-", [{ unite: "W03", integree: true }, { unite: "W09", abandonnee: true }]);
   const brut = readFileSync(cheminLanes(r.dir), "utf-8");
   const planW09 = ((lireJson(join(r.dir, `${RUN}-plan.json`))!.work_units as Array<{ id: string }>)
@@ -332,7 +332,7 @@ regression("C1.8-abandoned-non-integre", "une unité du plan abandonnée n'est p
   );
 });
 
-regression("C1.8-risque-cle", "un risque s'identifie par son unité, pas par son seul identifiant", () => {
+regressionCorrigee("C1.8-risque-cle", "un risque s'identifie par son unité, pas par son seul identifiant", () => {
   /*
    * W09 d'abord, W03 ensuite : la DERNIÈRE transition portant l'identifiant `r1` est
    * alors la résolution de W03. Un repli par identifiant seul conclurait « r1 résolu » et
@@ -372,7 +372,7 @@ regression("C1.8-risque-cle", "un risque s'identifie par son unité, pas par son
   );
 });
 
-regression("C1.8-plan-hash", "un plan réécrit après son attachement refuse la fin", () => {
+regressionCorrigee("C1.8-plan-hash", "un plan réécrit après son attachement refuse la fin", () => {
   const r = runEcrit("l0-b1-plan-hash-", [{ unite: "W03", integree: true }]);
   const cheminPlan = join(r.dir, `${RUN}-plan.json`);
   const empreinte = lireJson(join(r.dir, "active-run.json"))!.planHash;
@@ -497,7 +497,7 @@ regressionCorrigee("A-P1-F01-reprise", "un manifeste terminal publié sans archi
   );
 });
 
-regression("A-P1-F01-archive", "une archive contradictoire est refusée, jamais remplacée", () => {
+regressionCorrigee("A-P1-F01-archive", "une archive contradictoire est refusée, jamais remplacée", () => {
   const r = runEcrit("l0-b1-succ-b-", [{ unite: "W03", integree: true }]);
   const autre = {
     version: 2, runId: RUN, status: "abandoned", nextSeq: 99,
@@ -531,7 +531,7 @@ regression("A-P1-F01-archive", "une archive contradictoire est refusée, jamais 
   );
 });
 
-regression("A-P1-F01-concurrence", "deux fins simultanées ne produisent qu'une transition", async () => {
+regressionCorrigee("A-P1-F01-concurrence", "deux fins simultanées ne produisent qu'une transition", async () => {
   const r = runEcrit("l0-b1-succ-c-", [{ unite: "W03", integree: true }]);
   const release = join(r.dir, "release");
   const prets = [join(r.dir, "ready-1"), join(r.dir, "ready-2")];
@@ -563,7 +563,7 @@ regression("A-P1-F01-concurrence", "deux fins simultanées ne produisent qu'une 
   );
 });
 
-regression("A-P1-F01-succession", "le successeur ne devient courant qu'après l'archive de R", async () => {
+regressionCorrigee("A-P1-F01-succession", "le successeur ne devient courant qu'après l'archive de R", async () => {
   const r = runEcrit("l0-b1-succ-d-", [{ unite: "W03", integree: true }]);
   const avant = lireJson(join(r.dir, "active-run.json"))!;
   const archiveR = join(r.dir, `${RUN}-run.json`);

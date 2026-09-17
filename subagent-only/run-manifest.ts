@@ -33,8 +33,9 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import { laneLedgerIncoherences, parseLaneEventV2, type LaneEvent, type LaneEventV1 } from "./lane-ledger.ts";
+import { verifierCompleted } from "./run-end.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /** Le manifeste ne se répare pas : ce qu'il dit et ce que le disque montre doivent s'accorder. */
 export class RecoveryError extends Error {}
@@ -689,6 +690,23 @@ export function allocateSeq(dir: string, lease: Lease): { seq: number; manifest:
   });
 }
 
+/**
+ * La racine du dépôt d'un espace de runs.
+ *
+ * L'espace de runs est `<racine>/.pi-subagent-runs` ; tout autre dossier n'a pas de racine
+ * connue, et une fin `completed` n'y est pas jugeable — la politique observe le dépôt.
+ */
+function racineDesRuns(dir: string, quoi: string): string {
+  const absolu = resolve(dir);
+  if (basename(absolu) !== RUNS_DIR) {
+    throw new RecoveryError(
+      `${quoi} : ${dir} n'est pas un espace de runs (${RUNS_DIR}) ; la racine du dépôt ` +
+        `n'est pas connue. Ce refus ne modifie rien.`,
+    );
+  }
+  return dirname(absolu);
+}
+
 /** Ce qu'un verbe opérateur apporte pour terminer un run. */
 export interface FinDemandee {
   /** Une identité ou une provenance locale de commande, à défaut le littéral "operator". */
@@ -705,9 +723,8 @@ export interface FinDemandee {
  *
  * Quatre temps, dans cet ordre et sans entrelacement possible :
  *
- *   validation structurelle tout ce que cette étape contrôle est prouvé avant la
- *                           première écriture ; une première fin `completed` reste
- *                           fermée jusqu'au lecteur v2 du registre des lanes
+ *   validation              tout est prouvé avant la première écriture ; une première
+ *                           fin `completed` passe les sept contrôles de run-end.ts
  *   manifeste terminal      écrit durablement dans active-run.json, `ledgers` et
  *                           `continuation_block` préservés
  *   publication exclusive   l'archive est posée sans jamais remplacer
@@ -737,11 +754,9 @@ export function terminerRun(
        *
        * Identité du run, absence de propriétaire, version, raison et
        * `continuation_block` sont contrôlés avant toute écriture. Les préconditions
-       * MÉTIER de `completed` seront intégrées avec le lecteur v2 du registre des lanes,
-       * dans cette même section critique N → R et avant `writeManifest` — jamais avant
-       * l'acquisition, jamais dans un préfiltre du dispatcher. Jusque-là, une première
-       * transition `completed` refuse fail-closed ; seule la reprise d'une fin déjà
-       * durable peut conclure sa publication.
+       * MÉTIER de `completed` (1 bis) le sont dans cette même section critique N → R et
+       * avant `writeManifest` — jamais avant l'acquisition, jamais dans un préfiltre du
+       * dispatcher. La reprise d'une fin déjà durable ne les recalcule pas.
        */
       const courant = readManifest(dir);
       if (!courant || courant.runId !== runId) {
@@ -864,20 +879,15 @@ export function terminerRun(
       }
 
       /*
-       * ---- 1 bis. première transition `completed` indisponible ----
+       * ---- 1 bis. la politique de `completed` ----
        *
-       * La politique métier ne peut être correctement intégrée avant que le registre
-       * autoritaire des lanes v2 soit reconstructible. Le refus vit DANS la primitive :
-       * aucun appelant ne peut le contourner en fournissant un faux vérificateur. Quand
-       * le lecteur v2 arrivera, ce bloc sera remplacé par les six contrôles, exécutés ici
-       * sous N → R et avant toute écriture. La reprise d'une fin déjà durable a rendu
-       * plus haut et ne recalcule pas ses préconditions historiques.
+       * Les sept contrôles de run-end.ts, relus ici, sous N → R et avant toute écriture.
+       * La politique vit dans la primitive : aucun appelant ne fournit ni ne remplace de
+       * vérificateur. Un refus lève avant `writeManifest` et ne modifie donc rien. La
+       * reprise d'une fin déjà durable a rendu plus haut et ne passe pas ici.
        */
       if (fin.outcome === "completed") {
-        throw new RecoveryError(
-          `${quoi} : vérification métier de completed indisponible tant que le registre ` +
-            `des lanes v2 n'est pas reconstructible. Ce refus ne modifie rien.`,
-        );
+        verifierCompleted({ root: racineDesRuns(dir, quoi), dir, manifest: courant });
       }
 
       // ---- 2. active-run.json devient DURABLEMENT terminal ----

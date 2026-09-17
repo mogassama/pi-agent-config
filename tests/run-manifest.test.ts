@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { copieJetable } from "./l0-lib.ts";
 import { test } from "node:test";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync,
   writeFileSync,
 } from "node:fs";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
@@ -2072,7 +2072,7 @@ test("terminerRun — un abandon exige sa raison, et l'abandon motivé aboutit",
   }
 });
 
-test("terminerRun — continuation_block interdit d'aboutir, l'abandon reste ouvert, et completed demeure fail-closed", () => {
+test("terminerRun — continuation_block interdit d'aboutir, l'abandon reste ouvert, et completed hors d'un espace de runs refuse sans effet", () => {
   const bloc = { at: "2026-09-14T08:00:00.000Z", code: "RUN_CONTINUATION_BLOCKED" } as const;
 
   const refus = runTerminable({ continuation_block: bloc });
@@ -2102,10 +2102,10 @@ test("terminerRun — continuation_block interdit d'aboutir, l'abandon reste ouv
     const avant = actifBrut(sansBloc.dir);
     assert.throws(
       () => terminerRun(sansBloc.dir, sansBloc.m.runId, { by: "operator", outcome: "completed" }),
-      /vérification métier de completed indisponible.*registre des lanes v2/s,
+      /n'est pas un espace de runs \(\.pi-subagent-runs\)/,
     );
-    assert.equal(actifBrut(sansBloc.dir), avant, "le refus transitoire ne modifie pas le manifeste");
-    assert.equal(existsSync(archivePath(sansBloc.dir, sansBloc.m.runId)), false, "le refus transitoire n'archive rien");
+    assert.equal(actifBrut(sansBloc.dir), avant, "le refus ne modifie pas le manifeste");
+    assert.equal(existsSync(archivePath(sansBloc.dir, sansBloc.m.runId)), false, "le refus n'archive rien");
   } finally {
     sansBloc.done();
   }
@@ -3903,4 +3903,32 @@ test("openLaneIdentities : par identité de lane, fermée seulement par INTEGRAT
   ] as unknown as LaneEvent[];
   assert.deepEqual(openLaneIdentities(v1, 1), ["W09"]);
   assert.deepEqual(openLaneIdentities([], 2), []);
+});
+
+// ================================================= câblage de completed dans terminerRun (étape 6)
+
+test("terminerRun completed : la racine se déduit du seul dossier .pi-subagent-runs, sinon refus sans effet", () => {
+  const r = sain("te-racine-");
+  // Le même espace de runs, exposé sous un autre nom : un lien symbolique.
+  const ailleurs = join(mkdtempSync(join(tmpdir(), "te-alias-")), "runs");
+  symlinkSync(r.dir, ailleurs);
+  const avant = readFileSync(join(r.dir, "active-run.json"), "utf-8");
+  assert.throws(() => terminerRun(ailleurs, RUN_FIXTURE, { by: "operator", outcome: "completed" }),
+    (err: unknown) => err instanceof RecoveryError && /n'est pas un espace de runs \(\.pi-subagent-runs\)/.test(err.message));
+  assert.equal(readFileSync(join(r.dir, "active-run.json"), "utf-8"), avant, "le manifeste n'a pas bougé");
+  assert.equal(existsSync(join(r.dir, `${RUN_FIXTURE}-run.json`)), false, "aucune archive");
+  // Témoin : le même run, par son vrai dossier, se termine.
+  const fin = terminerRun(r.dir, RUN_FIXTURE, { by: "operator", outcome: "completed" });
+  assert.equal(fin.status, "completed");
+  assert.equal(existsSync(join(r.dir, `${RUN_FIXTURE}-run.json`)), true, "archive publiée");
+  assert.equal(existsSync(join(r.dir, "active-run.json")), false, "active-run.json libéré");
+});
+
+test("terminerRun completed : un refus de la politique ne modifie rien", () => {
+  const r = sain("te-refus-", [{ unite: "W03", integree: true, risques: [{ id: "r1", transitions: ["opened"] }] }]);
+  const avant = readFileSync(join(r.dir, "active-run.json"), "utf-8");
+  assert.throws(() => terminerRun(r.dir, RUN_FIXTURE, { by: "operator", outcome: "completed" }),
+    (err: unknown) => err instanceof RecoveryError && /risques restent ouverts : W03:r1/.test(err.message));
+  assert.equal(readFileSync(join(r.dir, "active-run.json"), "utf-8"), avant);
+  assert.deepEqual(readdirSync(r.dir).filter((f) => /^[0-9a-f]+-run\.json$/.test(f)), [], "aucune archive");
 });
