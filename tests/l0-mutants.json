@@ -49,9 +49,9 @@
   },
   {
     "test": "L0 COUV F-version-inconnue — une version de registre inconnue ferme la lecture",
-    "file": "subagent-only/lane-observe.ts",
-    "find": "  if (laneRead.version !== LANE_LEDGER_VERSION || laneRead.malformedLines.length > 0) {",
-    "replace": "  if (laneRead.malformedLines.length > 0) {   // mutant F-version-inconnue : plus de contrôle de version"
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (lu.version !== LANE_LEDGER_VERSION && lu.version !== LANE_LEDGER_V2) return \"UNKNOWN\"; // 9",
+    "replace": "    // mutant F-version-inconnue : plus de contrôle de version sous manifeste v2"
   },
   {
     "test": "L0 PRES F-generation-idempotente — rouvrir une lane existante la rend au lieu de la recréer",
@@ -136,5 +136,35 @@
     "file": "bin/subagent-recover",
     "find": "if (!unite) {\n  const { laneRead, vu } = etat();\n  console.log(`run ${runId} · ${manifest.status}`);",
     "replace": "if (!unite) {\n  const { laneRead, vu } = etat();\n  // mutant C1.8-observation : l'observation conclut le run qu'elle vient de lire.\n  (await import(\"node:fs\")).writeFileSync(\n    join(dir, \"active-run.json\"),\n    `${JSON.stringify({ ...manifest, status: \"abandoned\" }, null, 2)}\\n`,\n  );\n  console.log(`run ${runId} · ${manifest.status}`);"
+  },
+  {
+    "test": "L0 REG F-ledger-v2 — les huit natures d'événement v2 se relisent et se reconstruisent",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (lu.version !== LANE_LEDGER_VERSION && lu.version !== LANE_LEDGER_V2) return \"UNKNOWN\"; // 9",
+    "replace": "    if (lu.version !== LANE_LEDGER_VERSION) return \"UNKNOWN\"; // 9"
+  },
+  {
+    "test": "L0 REG C4-etats — les six issues de lecture portent chacune leur discriminant structuré",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (forme === \"absent\") return temoin === undefined ? \"EMPTY\" : \"LOST\"; // 2, 1",
+    "replace": "    if (forme === \"absent\") return \"EMPTY\"; // 2, 1"
+  },
+  {
+    "test": "L0 REG C4-integrations — le registre des intégrations porte aussi EMPTY, LOST et UNKNOWN",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (forme === \"absent\") return temoin === undefined ? \"EMPTY\" : \"LOST\"; // 3, 2",
+    "replace": "    if (forme === \"absent\") return \"EMPTY\"; // 3, 2"
+  },
+  {
+    "test": "L0 REG C4-ledgers-partielle — la table des témoins reste partielle tant qu'un registre n'a pas d'en-tête",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    const temoin = temoins.ledgers.integrations;",
+    "replace": "    const temoin = temoins.ledgers.integrations ?? temoins.ledgers.lanes;"
+  },
+  {
+    "test": "L0 REG B2-reviewed-identite — l'identité du reviewer se lit depuis le registre autoritaire seul",
+    "file": "subagent-only/lane-ledger.ts",
+    "find": "      case \"REVIEWED\": {\n        const r = doc.reviewer;",
+    "replace": "      case \"REVIEWED\": {\n        return false;\n        const r = doc.reviewer;"
   }
 ]

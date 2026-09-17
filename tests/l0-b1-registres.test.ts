@@ -34,6 +34,15 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`.
+ *
+ * Elle est verte sur l'objet corrigé, et elle porte un mutant qui réintroduit le défaut.
+ * Sans ce mutant, elle pourrait verdir grâce à une autre porte que celle qu'elle vise.
+ */
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function couverture(id: string, titre: string, fn: Preuve): void {
   test(`L0 COUV ${id} — ${titre}`, fn);
 }
@@ -94,7 +103,7 @@ const conflits = (i: Issue): Array<[string, string]> =>
  */
 const laneRead = (dir: string) => {
   const lu = readLaneEvents(dir, RUN);
-  return { events: lu.events, malformedLines: lu.malformedLines, version: lu.version };
+  return { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present };
 };
 const lireLanes = (root: string, dir: string) =>
   issue(() => observeLanes({ root, runId: RUN, laneRead: laneRead(dir) }));
@@ -103,7 +112,7 @@ const lireIntegrations = (root: string, dir: string) =>
 
 // ================================================================== § F — le vocabulaire v2
 
-regression("F-ledger-v2", "les huit natures d'événement v2 se relisent et se reconstruisent", () => {
+regressionCorrigee("F-ledger-v2", "les huit natures d'événement v2 se relisent et se reconstruisent", () => {
   /*
    * Trois histoires conformes, pas un sac de mots.
    *
@@ -137,6 +146,9 @@ regression("F-ledger-v2", "les huit natures d'événement v2 se relisent et se r
 
 couverture("F-version-inconnue", "une version de registre inconnue ferme la lecture", () => {
   const d = depot("l0-b1-inconnue-");
+  // Le manifeste du run, lisible : sans lui, le refus viendrait de son absence (C4.9, ligne 0)
+  // et non de la version, que cette preuve vise.
+  manifeste(d.dir, { version: 2 });
   const r = new Registre(1);
   r.ajouterV1("W03", { event: "OPENED", base: d.base });
   writeFileSync(cheminLanes(d.dir), r.brut().replace('{"ledger":1}', '{"ledger":99}'));
@@ -149,7 +161,7 @@ couverture("F-version-inconnue", "une version de registre inconnue ferme la lect
 
 // ================================================================== C4 — les six issues
 
-regression("C4-etats", "les six issues de lecture portent chacune leur discriminant structuré", () => {
+regressionCorrigee("C4-etats", "les six issues de lecture portent chacune leur discriminant structuré", () => {
   const cas: Array<[string, () => Issue]> = [];
 
   const vide = depot("l0-b1-vide-");
@@ -213,7 +225,7 @@ regression("C4-etats", "les six issues de lecture portent chacune leur discrimin
   );
 });
 
-regression("C4-integrations", "le registre des intégrations porte aussi EMPTY, LOST et UNKNOWN", () => {
+regressionCorrigee("C4-integrations", "le registre des intégrations porte aussi EMPTY, LOST et UNKNOWN", () => {
   const r = runEcrit("l0-b1-int-", [{ unite: "W03", integree: true }]);
   precondition(!existsSync(cheminIntegrations(r.dir)), "le registre des intégrations doit être absent");
   const absent = etat(lireIntegrations(r.root, r.dir));
@@ -234,7 +246,7 @@ regression("C4-integrations", "le registre des intégrations porte aussi EMPTY, 
   );
 });
 
-regression("C4-ledgers-partielle", "la table des témoins reste partielle tant qu'un registre n'a pas d'en-tête", () => {
+regressionCorrigee("C4-ledgers-partielle", "la table des témoins reste partielle tant qu'un registre n'a pas d'en-tête", () => {
   const r = runEcrit("l0-b1-partielle-", [{ unite: "W03", integree: true }]);
   const brut = readFileSync(join(r.dir, "active-run.json"), "utf-8");
   precondition(brut.includes('"lanes": 2'), "le témoin des lanes doit être là");

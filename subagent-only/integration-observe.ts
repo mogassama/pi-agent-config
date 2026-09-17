@@ -23,6 +23,12 @@
 import {
   INTEGRATION_LEDGER_VERSION,
   LANE_LEDGER_VERSION,
+  integrationLedgerState,
+  laneLedgerState,
+  ledgerFacts,
+  ledgerObservation,
+  readWitnesses,
+  type LedgerObservation,
   readIntegrationEvents,
   type IntegrationLedgerRead,
 } from "./run-manifest.ts";
@@ -50,6 +56,8 @@ export interface LaneRead {
   events: LaneEvent[];
   malformedLines: number[];
   version: number | undefined;
+  /** Transporté tel que le lecteur l'a observé, jamais recalculé (C4.9). */
+  present: boolean;
 }
 
 export interface IntegrationSnapshot {
@@ -61,9 +69,7 @@ export interface IntegrationSnapshot {
   reconciliation: IntegrationReconciliation;
 }
 
-export type Observed =
-  | { usable: true; snapshot: IntegrationSnapshot }
-  | { usable: false; reason: string };
+export type Observed = LedgerObservation<IntegrationSnapshot>;
 
 /** `HEAD` ou `MERGE_HEAD` d'un contexte, ou undefined. */
 function ref(cwd: string, name: string): string | undefined {
@@ -91,34 +97,38 @@ export function observeIntegrations(input: {
 }): Observed {
   const { root, runDir, runId, laneRead } = input;
 
-  if (laneRead.version !== LANE_LEDGER_VERSION || laneRead.malformedLines.length > 0) {
-    const cause =
-      laneRead.version !== LANE_LEDGER_VERSION
-        ? `version ${laneRead.version ?? "absente"} au lieu de ${LANE_LEDGER_VERSION}`
-        : `ligne(s) ${laneRead.malformedLines.join(", ")} illisible(s)`;
-    return {
-      usable: false,
-      reason:
-        `le registre des lanes est inexploitable : ${cause}. Aucune tentative n'en est ` +
-        "reconstruite : leur intégration se prouve par ce registre, et une preuve qu'on " +
-        "ne sait pas lire en entier ne se lit pas en partie.",
-    };
-  }
-
+  /*
+   * Registre des intégrations lu, puis manifeste relu une seule fois pour les deux états :
+   * celui des lanes, que la reconstruction consomme, et celui des tentatives. Aucun
+   * événement n'est consommé avant que les deux soient établis.
+   */
   const read = readIntegrationEvents(runDir, runId);
-  if (read.version !== INTEGRATION_LEDGER_VERSION || read.malformedLines.length > 0) {
-    const cause =
-      read.version !== INTEGRATION_LEDGER_VERSION
-        ? `version ${read.version ?? "absente"} au lieu de ${INTEGRATION_LEDGER_VERSION}`
-        : `ligne(s) ${read.malformedLines.join(", ")} illisible(s)`;
-    return {
-      usable: false,
-      reason:
-        `le registre des tentatives est inexploitable : ${cause}. Aucune tentative n'en est ` +
-        "reconstruite, et les contextes présents sous .git/pi-integrations/ n'ont donc plus " +
-        "de provenance lisible.",
-    };
-  }
+  const temoins = readWitnesses(runDir, runId);
+  const lanes = laneLedgerState(temoins, laneRead);
+  const state = integrationLedgerState(temoins, read, lanes);
+  return ledgerObservation(
+    state,
+    () => construire(root, runId, laneRead, read),
+    () =>
+      lanes !== "KNOWN" && lanes !== "EMPTY"
+        ? `le registre des lanes est inexploitable (${lanes}) : ` +
+          `${ledgerFacts(temoins, laneRead, "lanes", LANE_LEDGER_VERSION)}. Aucune tentative n'en est ` +
+          "reconstruite : leur intégration se prouve par ce registre, et une preuve qu'on " +
+          "ne sait pas lire en entier ne se lit pas en partie."
+        : `le registre des tentatives est inexploitable (${state}) : ` +
+          `${ledgerFacts(temoins, read, "integrations", INTEGRATION_LEDGER_VERSION)}. Aucune tentative ` +
+          "n'en est reconstruite, et les contextes présents sous .git/pi-integrations/ n'ont donc " +
+          "plus de provenance lisible.",
+  );
+}
+
+/** Le snapshot d'un registre exploitable. N'est appelé qu'une fois les deux états établis. */
+function construire(
+  root: string,
+  runId: string,
+  laneRead: LaneRead,
+  read: IntegrationLedgerRead,
+): IntegrationSnapshot {
 
   const prefixe = `${runId}-`;
   const contexts = openIntegrations(root).filter((id) => id.startsWith(prefixe));
@@ -158,13 +168,10 @@ export function observeIntegrations(input: {
   };
 
   return {
-    usable: true,
-    snapshot: {
-      read,
-      facts,
-      contexts,
-      observations,
-      reconciliation: reconcileIntegrations(read.events, observations, runId),
-    },
+    read,
+    facts,
+    contexts,
+    observations,
+    reconciliation: reconcileIntegrations(read.events, observations, runId),
   };
 }

@@ -23,6 +23,8 @@
  * lisibles et pouvait en tirer un plan de suppression.
  */
 
+import { join } from "node:path";
+
 import {
   reconcile,
   integrationCommits,
@@ -30,7 +32,15 @@ import {
   type Observations,
   type Reconciliation,
 } from "./lane-ledger.ts";
-import { LANE_LEDGER_VERSION } from "./run-manifest.ts";
+import {
+  LANE_LEDGER_VERSION,
+  RUNS_DIR,
+  laneLedgerState,
+  ledgerFacts,
+  ledgerObservation,
+  readWitnesses,
+  type LedgerObservation,
+} from "./run-manifest.ts";
 import {
   confirmIntegrations,
   isMerged,
@@ -44,6 +54,8 @@ export interface LaneRead {
   events: LaneEvent[];
   malformedLines: number[];
   version: number | undefined;
+  /** Transporté tel que le lecteur l'a observé, jamais recalculé (C4.9). */
+  present: boolean;
 }
 
 export interface LaneSnapshot {
@@ -54,9 +66,7 @@ export interface LaneSnapshot {
   reconciliation: Reconciliation;
 }
 
-export type ObservedLanes =
-  | { usable: true; snapshot: LaneSnapshot }
-  | { usable: false; reason: string };
+export type ObservedLanes = LedgerObservation<LaneSnapshot>;
 
 export function observeLanes(input: {
   root: string;
@@ -65,20 +75,28 @@ export function observeLanes(input: {
 }): ObservedLanes {
   const { root, runId, laneRead } = input;
 
-  if (laneRead.version !== LANE_LEDGER_VERSION || laneRead.malformedLines.length > 0) {
-    const cause =
-      laneRead.version !== LANE_LEDGER_VERSION
-        ? `version ${laneRead.version ?? "absente"} au lieu de ${LANE_LEDGER_VERSION}`
-        : `ligne(s) ${laneRead.malformedLines.join(", ")} illisible(s)`;
-    return {
-      usable: false,
-      reason:
-        `le registre des lanes est inexploitable : ${cause}. Aucun état de lane n'est ` +
-        "reconstruit depuis un registre partiel : les événements encore lisibles ne " +
-        "disent pas ce que les autres disaient, et un bilan bâti sur eux affirmerait " +
-        "que ce qu'on ne lit pas ne comptait pas.",
-    };
-  }
+  /*
+   * L'état d'abord, sur le manifeste relu MAINTENANT, après la lecture du registre que
+   * l'appelant a faite (P3). Rien ne consomme un événement avant que `state` soit établi :
+   * sous une version inconnue, les lignes que le lecteur a reconnues ne sont pas une
+   * histoire, et un registre refusé ne rend aucun snapshot.
+   */
+  const temoins = readWitnesses(join(root, RUNS_DIR), runId);
+  const state = laneLedgerState(temoins, laneRead);
+  return ledgerObservation(
+    state,
+    () => construire(root, runId, laneRead),
+    () =>
+      `le registre des lanes est inexploitable (${state}) : ` +
+      `${ledgerFacts(temoins, laneRead, "lanes", LANE_LEDGER_VERSION)}. Aucun état de lane n'est ` +
+      "reconstruit depuis un registre partiel : les événements encore lisibles ne " +
+      "disent pas ce que les autres disaient, et un bilan bâti sur eux affirmerait " +
+      "que ce qu'on ne lit pas ne comptait pas.",
+  );
+}
+
+/** Le snapshot d'un registre exploitable. N'est appelé qu'une fois `state` établi. */
+function construire(root: string, runId: string, laneRead: LaneRead): LaneSnapshot {
 
   const worktrees = openLanes(root)
     .filter((id) => id.startsWith(`${runId}-`))
@@ -125,12 +143,9 @@ export function observeLanes(input: {
   };
 
   return {
-    usable: true,
-    snapshot: {
-      read: laneRead,
-      bases,
-      observations,
-      reconciliation: reconcile(laneRead.events, observations),
-    },
+    read: laneRead,
+    bases,
+    observations,
+    reconciliation: reconcile(laneRead.events, observations),
   };
 }

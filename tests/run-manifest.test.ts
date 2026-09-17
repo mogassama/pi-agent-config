@@ -49,10 +49,19 @@ import {
   archivePath,
   terminerRun,
   LANE_LEDGER_V2,
+  RUNS_DIR,
+  integrationLedgerState,
+  laneLedgerState,
+  ledgerObservation,
+  readWitnesses,
+  type LedgerShape,
+  type LedgerWitnesses,
   type Lease,
   type RunManifest,
 } from "../subagent-only/run-manifest.ts";
 import { parseLaneEventV2, type LaneEventV2 } from "../subagent-only/lane-ledger.ts";
+import { observeLanes } from "../subagent-only/lane-observe.ts";
+import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 
 function dossier(): { dir: string; done: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "pi-run-"));
@@ -1474,7 +1483,7 @@ test("un registre absent n'est pas une erreur", () => {
   try {
     const m = openRun(dir).manifest;
     assert.deepEqual(readLaneEvents(dir, m.runId),
-      { events: [], malformed: 0, malformedLines: [], version: 1 });
+      { events: [], malformed: 0, malformedLines: [], version: 1, present: false });
   } finally {
     done();
   }
@@ -3106,3 +3115,201 @@ export function ecrivainBorneALaV1(dir: string, lease: Lease): void {
   // @ts-expect-error — REVIEWED est une nature v2, que l'écrivain n'a pas le droit d'écrire
   appendLaneEvent(dir, revue, lease);
 }
+
+// ================================================= états C4 : la matrice C4.9 (LOT 2, étape 2)
+
+/*
+ * Chaque ligne de la matrice a son cas, et chaque cas nomme sa ligne. La forme d'un
+ * snapshot se décrit par ce que le lecteur rend : présence, version d'en-tête, nombre
+ * d'événements et de lignes abîmées.
+ */
+const forme = (present: boolean, version: number | undefined, events = 0, abimees = 0): LedgerShape => ({
+  present, version, events: Array(events).fill({}), malformedLines: Array.from({ length: abimees }, (_, i) => i + 2),
+});
+const ABSENT = forme(false, 1);
+const VIDE = forme(true, undefined);
+const SANS_ENTETE = forme(true, undefined, 1);
+const SANS_ENTETE_ABIME = forme(true, undefined, 0, 1);
+const t2 = (ledgers: Record<string, number> = {}): LedgerWitnesses => ({ manifestVersion: 2, ledgers });
+const T1: LedgerWitnesses = { manifestVersion: 1, ledgers: {} };
+
+test("C4.9 lanes : chaque ligne de la matrice porte son état", () => {
+  const cas: Array<[string, LedgerWitnesses | null, LedgerShape, string]> = [
+    ["0  manifeste illisible ou absent", null, forme(true, 1, 1), "UNKNOWN"],
+    ["1  v2, absent, témoin", t2({ lanes: 2 }), ABSENT, "LOST"],
+    ["1  v2, absent, témoin v1", t2({ lanes: 1 }), ABSENT, "LOST"],
+    ["2  v2, absent, sans témoin", t2(), ABSENT, "EMPTY"],
+    ["2  v2, absent, témoin d'un autre registre", t2({ integrations: 1 }), ABSENT, "EMPTY"],
+    ["3  v2, vide", t2(), VIDE, "UNKNOWN"],
+    ["4  v2, sans en-tête", t2(), SANS_ENTETE, "MIGRATION_REQUIRED"],
+    ["4  v2, sans en-tête, témoin", t2({ lanes: 2 }), SANS_ENTETE, "MIGRATION_REQUIRED"],
+    ["4  v2, sans en-tête, lignes abîmées", t2(), SANS_ENTETE_ABIME, "MIGRATION_REQUIRED"],
+    ["5  v2, en-tête v2, sans témoin", t2(), forme(true, 2, 1), "KNOWN"],
+    ["5  v2, en-tête v1, sans témoin (hybride)", t2(), forme(true, 1, 1), "KNOWN"],
+    ["5  v2, en-tête seul", t2(), forme(true, 2), "KNOWN"],
+    ["6  v2, en-tête v2, témoin 2", t2({ lanes: 2 }), forme(true, 2, 1), "KNOWN"],
+    ["6  v2, en-tête v1, témoin 1", t2({ lanes: 1 }), forme(true, 1, 1), "KNOWN"],
+    ["7  v2, en-tête v1, témoin 2", t2({ lanes: 2 }), forme(true, 1, 1), "UNKNOWN"],
+    ["7  v2, en-tête v2, témoin 1", t2({ lanes: 1 }), forme(true, 2, 1), "UNKNOWN"],
+    ["8  v2, en-tête v2, ligne abîmée", t2(), forme(true, 2, 1, 1), "UNKNOWN"],
+    ["8  v2, en-tête v1, ligne abîmée", t2(), forme(true, 1, 1, 1), "UNKNOWN"],
+    ["9  v2, en-tête 99", t2(), forme(true, 99, 1), "UNKNOWN"],
+    ["9  v2, en-tête 99, témoin 99", t2({ lanes: 99 }), forme(true, 99, 1), "UNKNOWN"],
+    ["10 v1, absent", T1, ABSENT, "RUN_WITHOUT_WITNESS"],
+    ["11 v1, vide", T1, VIDE, "UNKNOWN"],
+    ["12 v1, sans en-tête", T1, SANS_ENTETE, "MIGRATION_REQUIRED"],
+    ["13 v1, en-tête v1", T1, forme(true, 1, 1), "KNOWN"],
+    ["13 v1, en-tête seul", T1, forme(true, 1), "KNOWN"],
+    ["14 v1, en-tête v1, ligne abîmée", T1, forme(true, 1, 1, 1), "UNKNOWN"],
+    ["15 v1, en-tête v2", T1, forme(true, 2, 1), "RUN_WITHOUT_WITNESS"],
+    ["15 v1, en-tête 99, ligne abîmée", T1, forme(true, 99, 1, 1), "RUN_WITHOUT_WITNESS"],
+  ];
+  const faux = cas.filter(([, t, lu, attendu]) => laneLedgerState(t, lu) !== attendu)
+    .map(([nom, t, lu, attendu]) => `${nom} : ${laneLedgerState(t, lu)} au lieu de ${attendu}`);
+  assert.deepEqual(faux, []);
+});
+
+test("C4.9 intégrations : chaque ligne de la matrice porte son état", () => {
+  const cas: Array<[string, LedgerWitnesses | null, LedgerShape, string, string]> = [
+    ["0  manifeste illisible ou absent", null, forme(true, 1, 1), "KNOWN", "UNKNOWN"],
+    ["1  lanes LOST", t2(), forme(true, 1, 1), "LOST", "UNKNOWN"],
+    ["1  lanes MIGRATION_REQUIRED", t2(), forme(true, 1, 1), "MIGRATION_REQUIRED", "UNKNOWN"],
+    ["1  lanes RUN_WITHOUT_WITNESS", T1, forme(true, 1, 1), "RUN_WITHOUT_WITNESS", "UNKNOWN"],
+    ["1  lanes UNKNOWN", t2(), ABSENT, "UNKNOWN", "UNKNOWN"],
+    ["2  v2, absent, témoin", t2({ integrations: 1 }), ABSENT, "KNOWN", "LOST"],
+    ["3  v2, absent, sans témoin", t2({ lanes: 2 }), ABSENT, "KNOWN", "EMPTY"],
+    ["3  v2, absent, lanes EMPTY", t2(), ABSENT, "EMPTY", "EMPTY"],
+    ["4  v2, vide", t2(), VIDE, "KNOWN", "UNKNOWN"],
+    ["5  v2, sans en-tête", t2({ integrations: 1 }), SANS_ENTETE, "KNOWN", "MIGRATION_REQUIRED"],
+    ["6  v2, en-tête v1, sans témoin", t2(), forme(true, 1, 1), "KNOWN", "KNOWN"],
+    ["6  v2, en-tête v1, témoin 1", t2({ integrations: 1 }), forme(true, 1, 1), "KNOWN", "KNOWN"],
+    ["7  v2, en-tête v1, témoin 2", t2({ integrations: 2 }), forme(true, 1, 1), "KNOWN", "UNKNOWN"],
+    ["8  v2, ligne abîmée", t2(), forme(true, 1, 1, 1), "KNOWN", "UNKNOWN"],
+    ["8  v2, en-tête 2", t2(), forme(true, 2, 1), "KNOWN", "UNKNOWN"],
+    ["9  v1, absent", T1, ABSENT, "KNOWN", "RUN_WITHOUT_WITNESS"],
+    ["10 v1, vide", T1, VIDE, "KNOWN", "UNKNOWN"],
+    ["11 v1, sans en-tête", T1, SANS_ENTETE, "KNOWN", "MIGRATION_REQUIRED"],
+    ["12 v1, en-tête v1", T1, forme(true, 1, 1), "KNOWN", "KNOWN"],
+    ["13 v1, ligne abîmée", T1, forme(true, 1, 1, 1), "KNOWN", "UNKNOWN"],
+    ["13 v1, en-tête 2 et ligne abîmée", T1, forme(true, 2, 1, 1), "KNOWN", "UNKNOWN"],
+    ["14 v1, en-tête 2", T1, forme(true, 2, 1), "KNOWN", "RUN_WITHOUT_WITNESS"],
+  ];
+  const faux = cas
+    .filter(([, t, lu, lanes, attendu]) => integrationLedgerState(t, lu, lanes as "KNOWN") !== attendu)
+    .map(([nom, t, lu, lanes, attendu]) =>
+      `${nom} : ${integrationLedgerState(t, lu, lanes as "KNOWN")} au lieu de ${attendu}`);
+  assert.deepEqual(faux, []);
+});
+
+test("C4.9 : un snapshot sans présence observée est UNKNOWN, jamais « absent »", () => {
+  const incomplet = { version: 1, events: [], malformedLines: [] } as unknown as LedgerShape;
+  const nonBooleen = { ...ABSENT, present: "non" } as unknown as LedgerShape;
+  for (const lu of [incomplet, nonBooleen]) {
+    assert.equal(laneLedgerState(t2(), lu), "UNKNOWN");
+    assert.equal(laneLedgerState(T1, lu), "UNKNOWN");
+    assert.equal(integrationLedgerState(t2(), lu, "KNOWN"), "UNKNOWN");
+    assert.equal(integrationLedgerState(T1, lu, "KNOWN"), "UNKNOWN");
+  }
+  // Témoin : la même forme, présence renseignée, n'est pas UNKNOWN.
+  assert.equal(laneLedgerState(t2(), ABSENT), "EMPTY");
+  assert.equal(integrationLedgerState(T1, ABSENT, "KNOWN"), "RUN_WITHOUT_WITNESS");
+});
+
+test("C4.9 : la présence est observée par le lecteur, et une erreur de lecture n'est pas une absence", () => {
+  const { dir, done } = dossier();
+  try {
+    assert.equal(readLaneEvents(dir, "r").present, false, "lanes absent");
+    assert.equal(readIntegrationEvents(dir, "r").present, false, "intégrations absent");
+    writeFileSync(laneLedgerPath(dir, "r"), "");
+    writeFileSync(integrationLedgerPath(dir, "r"), "");
+    assert.equal(readLaneEvents(dir, "r").present, true, "lanes vide mais présent");
+    assert.equal(readIntegrationEvents(dir, "r").present, true, "intégrations vide mais présent");
+    // Un répertoire à la place du fichier : une erreur de lecture, qui remonte.
+    mkdirSync(laneLedgerPath(dir, "s"));
+    mkdirSync(integrationLedgerPath(dir, "s"));
+    assert.throws(() => readLaneEvents(dir, "s"), /EISDIR/);
+    assert.throws(() => readIntegrationEvents(dir, "s"), /EISDIR/);
+  } finally {
+    done();
+  }
+});
+
+test("C4.9 ligne 0 : les témoins se relisent du manifeste du même run, sinon null", () => {
+  const { dir, done } = dossier();
+  try {
+    assert.equal(readWitnesses(dir, "r"), null, "manifeste absent");
+    writeFileSync(join(dir, "active-run.json"), "{ illisible");
+    assert.equal(readWitnesses(dir, "r"), null, "manifeste illisible");
+    writeFileSync(join(dir, "active-run.json"),
+      JSON.stringify({ version: 2, runId: "r", status: "active", nextSeq: 1, ledgers: { lanes: 2 } }));
+    assert.equal(readWitnesses(dir, "autre"), null, "manifeste d'un autre run");
+    assert.deepEqual(readWitnesses(dir, "r"), { manifestVersion: 2, ledgers: { lanes: 2 } });
+    writeFileSync(join(dir, "active-run.json"),
+      JSON.stringify({ version: 1, runId: "r", status: "active", nextSeq: 1 }));
+    assert.deepEqual(readWitnesses(dir, "r"), { manifestVersion: 1, ledgers: {} });
+  } finally {
+    done();
+  }
+});
+
+test("P3 : observeLanes relit le manifeste de sa racine, et refuse sans lui", () => {
+  const { dir: root, done } = dossier();
+  try {
+    mkdirSync(join(root, RUNS_DIR));
+    const runs = join(root, RUNS_DIR);
+    const lu = { events: [], malformedLines: [], version: 1, present: false };
+    const observer = (runId: string) => observeLanes({ root, runId, laneRead: lu });
+    let vu = observer("r");
+    assert.deepEqual([vu.state, vu.usable], ["UNKNOWN", false], "manifeste absent");
+    writeFileSync(join(runs, "active-run.json"), "{ illisible");
+    vu = observer("r");
+    assert.deepEqual([vu.state, vu.usable], ["UNKNOWN", false], "manifeste illisible");
+    writeFileSync(join(runs, "active-run.json"),
+      JSON.stringify({ version: 2, runId: "r", status: "active", nextSeq: 1, ledgers: { lanes: 2 } }));
+    vu = observer("autre");
+    assert.deepEqual([vu.state, vu.usable], ["UNKNOWN", false], "manifeste d'un autre run");
+    vu = observer("r");
+    assert.deepEqual([vu.state, vu.usable], ["LOST", false], "témoin présent, registre absent");
+    assert.match(vu.usable ? "" : vu.reason, /inexploitable \(LOST\)/);
+  } finally {
+    done();
+  }
+});
+
+test("P5 : usable découle de state, dans un seul constructeur", () => {
+  const etats = ["EMPTY", "LOST", "UNKNOWN", "MIGRATION_REQUIRED", "KNOWN", "RUN_WITHOUT_WITNESS"] as const;
+  let construits = 0;
+  for (const s of etats) {
+    const o = ledgerObservation(s, () => { construits += 1; return "snapshot"; }, () => "raison");
+    const exploitable = s === "KNOWN" || s === "EMPTY";
+    assert.equal(o.state, s);
+    assert.equal(o.usable, exploitable, s);
+    assert.deepEqual(o.usable ? o.snapshot : o.reason, exploitable ? "snapshot" : "raison", s);
+  }
+  // Le snapshot n'est construit que pour les deux états exploitables.
+  assert.equal(construits, 2);
+});
+
+test("C4.9 ligne 1 : observeIntegrations refuse quand le registre des lanes n'est pas exploitable", () => {
+  const { dir: root, done } = dossier();
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    const runs = join(root, RUNS_DIR);
+    mkdirSync(runs);
+    const manifeste = (ledgers?: Record<string, number>) => writeFileSync(join(runs, "active-run.json"),
+      JSON.stringify({ version: 2, runId: "r", status: "active", nextSeq: 1, ...(ledgers ? { ledgers } : {}) }));
+    const laneRead = { events: [], malformedLines: [], version: 1, present: false };
+    const observer = () => observeIntegrations({ root, runDir: runs, runId: "r", laneRead });
+    // Registre des intégrations absent et sans témoin : seule la ligne 1 peut refuser.
+    manifeste({ lanes: 2 });
+    let vu = observer();
+    assert.deepEqual([vu.state, vu.usable], ["UNKNOWN", false], "lanes LOST");
+    assert.match(vu.usable ? "" : vu.reason, /registre des lanes est inexploitable \(LOST\)/);
+    // Témoin : sans témoin de lanes, les lanes sont EMPTY et les intégrations aussi.
+    manifeste();
+    vu = observer();
+    assert.deepEqual([vu.state, vu.usable], ["EMPTY", true], "lanes EMPTY");
+  } finally {
+    done();
+  }
+});

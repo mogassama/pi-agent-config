@@ -21,6 +21,15 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`.
+ *
+ * Elle est verte sur l'objet corrigé, et elle porte un mutant qui réintroduit le défaut.
+ * Sans ce mutant, elle pourrait verdir grâce à une autre porte que celle qu'elle vise.
+ */
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function propriete(vrai: boolean, message: string): void {
   assert.ok(vrai, `PROPRIÉTÉ — ${message}`);
 }
@@ -31,7 +40,7 @@ test.after(() => { for (const d of aJeter()) rmSync(d, { recursive: true, force:
 
 const laneRead = (dir: string) => {
   const lu = readLaneEvents(dir, RUN);
-  return { events: lu.events, malformedLines: lu.malformedLines, version: lu.version };
+  return { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present };
 };
 const lire = (root: string, dir: string) => {
   try {
@@ -126,7 +135,7 @@ regression("B2-reviewed-chaine", "la chaîne from_tree → tree se reconstruit, 
   );
 });
 
-regression("B2-reviewed-identite", "l'identité du reviewer se lit depuis le registre autoritaire seul", async () => {
+regressionCorrigee("B2-reviewed-identite", "l'identité du reviewer se lit depuis le registre autoritaire seul", async () => {
   const d = depot("l0-b2-identite-");
   manifeste(d.dir, { version: 2, ledgers: { lanes: 2 } });
   const r = new Registre(2);

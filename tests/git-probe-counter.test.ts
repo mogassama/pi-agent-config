@@ -66,6 +66,11 @@ function depot(avecExclusion = true): { root: string; done: () => void } {
 
   ensureLane(root, `${RUN_ID}-W03`);
   mkdirSync(join(root, RUNS), { recursive: true });
+  // Le manifeste v2 du même run : une observation valide exige son témoin relu (P3).
+  writeFileSync(
+    join(root, RUNS, "active-run.json"),
+    `${JSON.stringify({ version: 2, runId: RUN_ID, status: "active", nextSeq: 1 }, null, 2)}\n`,
+  );
 
   const contexte = join(integrationsDir(root), `${RUN_ID}-W03-1`);
   mkdirSync(integrationsDir(root), { recursive: true });
@@ -78,6 +83,7 @@ const lectureVide = {
   events: [],
   malformedLines: [] as number[],
   version: LANE_LEDGER_VERSION,
+  present: false,
 };
 
 /**

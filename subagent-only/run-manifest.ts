@@ -993,20 +993,23 @@ export interface IntegrationLedgerRead {
   malformed: number;
   malformedLines: number[];
   version: number | undefined;
+  /** Le fichier a-t-il été observé ? Même snapshot que le contenu (C4.9). */
+  present: boolean;
 }
 
 /** Lecture libre, comme pour les lanes : observer n'exige pas la propriété. */
 export function readIntegrationEvents(dir: string, runId: string): IntegrationLedgerRead {
   const path = integrationLedgerPath(dir, runId);
-  if (!existsSync(path)) {
-    return { events: [], malformed: 0, malformedLines: [], version: INTEGRATION_LEDGER_VERSION };
+  const contenu = lireSiPresent(path);
+  if (contenu === null) {
+    return { events: [], malformed: 0, malformedLines: [], version: INTEGRATION_LEDGER_VERSION, present: false };
   }
   const events: IntegrationEvent[] = [];
   let version: number | undefined;
   const malformedLines: number[] = [];
   let malformed = 0;
   let numero = 0;
-  for (const ligne of readFileSync(path, "utf-8").split("\n")) {
+  for (const ligne of contenu.split("\n")) {
     numero += 1;
     if (!ligne.trim()) continue;
     try {
@@ -1026,7 +1029,23 @@ export function readIntegrationEvents(dir: string, runId: string): IntegrationLe
       malformedLines.push(numero);
     }
   }
-  return { events, malformed, malformedLines, version };
+  return { events, malformed, malformedLines, version, present: true };
+}
+
+/**
+ * Le contenu d'un registre, ou `null` si le fichier n'existe pas.
+ *
+ * Une seule observation : lire, et conclure à l'absence seulement sur ENOENT. Un
+ * `existsSync` suivi d'une lecture regarderait deux fois, à deux instants. Toute autre
+ * erreur remonte : ne pas avoir pu lire n'est pas avoir vu qu'il n'y avait rien (C4.9).
+ */
+function lireSiPresent(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
 }
 
 /**
@@ -1193,12 +1212,18 @@ export interface LedgerRead {
    * corruption à réparer.
    */
   version?: number;
+  /**
+   * Le fichier a-t-il été observé ? `false` : absence observée. `true` : un fichier,
+   * même vide, réduit à son en-tête ou illisible. Même snapshot que le contenu (C4.9).
+   */
+  present: boolean;
 }
 
 export function readLaneEvents(dir: string, runId: string): LedgerRead {
   const path = laneLedgerPath(dir, runId);
-  if (!existsSync(path)) {
-    return { events: [], malformed: 0, malformedLines: [], version: LANE_LEDGER_VERSION };
+  const contenu = lireSiPresent(path);
+  if (contenu === null) {
+    return { events: [], malformed: 0, malformedLines: [], version: LANE_LEDGER_VERSION, present: false };
   }
   const events: LaneEvent[] = [];
   let version: number | undefined;
@@ -1207,7 +1232,7 @@ export function readLaneEvents(dir: string, runId: string): LedgerRead {
   const malformedLines: number[] = [];
   let malformed = 0;
   let numero = 0;
-  for (const ligne of readFileSync(path, "utf-8").split("\n")) {
+  for (const ligne of contenu.split("\n")) {
     numero += 1;
     if (!ligne.trim()) continue;
     try {
@@ -1267,7 +1292,174 @@ export function readLaneEvents(dir: string, runId: string): LedgerRead {
       malformedLines.push(numero);
     }
   }
-  return { events, malformed, malformedLines, version };
+  return { events, malformed, malformedLines, version, present: true };
+}
+
+// ================================================================ états C4 (C4.2, C4.9)
+
+/** Les six issues d'une lecture de registre. Une décision teste celle-ci, rien d'autre. */
+export type LedgerState =
+  | "EMPTY"
+  | "LOST"
+  | "UNKNOWN"
+  | "MIGRATION_REQUIRED"
+  | "KNOWN"
+  | "RUN_WITHOUT_WITNESS";
+
+/** Les deux issues exploitables. Tout autre état refuse et ne devient jamais un tableau vide. */
+export type UsableLedgerState = "KNOWN" | "EMPTY";
+
+/** L'espace de runs d'une racine : là où vit `active-run.json`. */
+export const RUNS_DIR = ".pi-subagent-runs";
+
+/** Ce que le manifeste atteste des registres : sa version, et sa table partielle de témoins. */
+export interface LedgerWitnesses {
+  manifestVersion: ManifestVersion;
+  ledgers: Readonly<Record<string, number>>;
+}
+
+/**
+ * Les témoins du run `runId`, relus maintenant, ou `null`.
+ *
+ * `null` couvre les trois cas de la ligne 0 de C4.9 : manifeste absent, illisible, ou
+ * d'un autre run. Aucun cache : l'appelant a lu le registre AVANT, et cet ordre est
+ * conservateur par C4.1 — un témoin apparu entre-temps donne au pire un faux LOST.
+ */
+export function readWitnesses(dir: string, runId: string): LedgerWitnesses | null {
+  let m: RunManifest | undefined;
+  try {
+    m = readManifest(dir);
+  } catch {
+    return null;
+  }
+  if (!m || m.runId !== runId) return null;
+  return { manifestVersion: m.version, ledgers: m.ledgers ?? {} };
+}
+
+/** Ce qu'une décision d'état lit d'un snapshot de registre. */
+export interface LedgerShape {
+  present: boolean;
+  version: number | undefined;
+  events: readonly unknown[];
+  malformedLines: readonly number[];
+}
+
+/**
+ * Absent, vide, sans en-tête, ou avec en-tête — observé, jamais déduit d'un second regard.
+ *
+ * « Vide » : aucune ligne non blanche. « Sans en-tête » : au moins une ligne, et la
+ * première n'est pas un en-tête. Un fichier réduit à son en-tête a une version.
+ */
+function formeDe(lu: LedgerShape): "absent" | "vide" | "sans-en-tete" | "en-tete" {
+  if (!lu.present) return "absent";
+  if (lu.version !== undefined) return "en-tete";
+  return lu.events.length === 0 && lu.malformedLines.length === 0 ? "vide" : "sans-en-tete";
+}
+
+/**
+ * L'état du registre des lanes, ligne par ligne de C4.9.
+ *
+ * Un snapshot sans `present` booléen est incomplet : UNKNOWN, jamais « absent ».
+ */
+export function laneLedgerState(temoins: LedgerWitnesses | null, lu: LedgerShape): LedgerState {
+  if (typeof lu.present !== "boolean") return "UNKNOWN";
+  if (temoins === null) return "UNKNOWN"; // 0
+  const forme = formeDe(lu);
+  const lisible = lu.malformedLines.length === 0;
+  if (temoins.manifestVersion === 2) {
+    const temoin = temoins.ledgers.lanes;
+    if (forme === "absent") return temoin === undefined ? "EMPTY" : "LOST"; // 2, 1
+    if (forme === "vide") return "UNKNOWN"; // 3
+    if (forme === "sans-en-tete") return "MIGRATION_REQUIRED"; // 4
+    if (lu.version !== LANE_LEDGER_VERSION && lu.version !== LANE_LEDGER_V2) return "UNKNOWN"; // 9
+    if (!lisible) return "UNKNOWN"; // 8
+    return temoin === undefined || temoin === lu.version ? "KNOWN" : "UNKNOWN"; // 5, 6, 7
+  }
+  if (forme === "absent") return "RUN_WITHOUT_WITNESS"; // 10
+  if (forme === "vide") return "UNKNOWN"; // 11
+  if (forme === "sans-en-tete") return "MIGRATION_REQUIRED"; // 12
+  if (lu.version !== LANE_LEDGER_VERSION) return "RUN_WITHOUT_WITNESS"; // 15
+  return lisible ? "KNOWN" : "UNKNOWN"; // 13, 14
+}
+
+/**
+ * L'état du registre des intégrations, ligne par ligne de C4.9.
+ *
+ * `lanes` est l'état du registre des lanes lu dans le même snapshot : la reconstruction
+ * des tentatives le consomme, et un registre des lanes non exploitable la rend inconnue.
+ */
+export function integrationLedgerState(
+  temoins: LedgerWitnesses | null,
+  lu: LedgerShape,
+  lanes: LedgerState,
+): LedgerState {
+  if (typeof lu.present !== "boolean") return "UNKNOWN";
+  if (temoins === null) return "UNKNOWN"; // 0
+  if (lanes !== "KNOWN" && lanes !== "EMPTY") return "UNKNOWN"; // 1
+  const forme = formeDe(lu);
+  const lisible = lu.malformedLines.length === 0;
+  if (temoins.manifestVersion === 2) {
+    const temoin = temoins.ledgers.integrations;
+    if (forme === "absent") return temoin === undefined ? "EMPTY" : "LOST"; // 3, 2
+    if (forme === "vide") return "UNKNOWN"; // 4
+    if (forme === "sans-en-tete") return "MIGRATION_REQUIRED"; // 5
+    if (lu.version !== INTEGRATION_LEDGER_VERSION || !lisible) return "UNKNOWN"; // 8
+    return temoin === undefined || temoin === INTEGRATION_LEDGER_VERSION ? "KNOWN" : "UNKNOWN"; // 6, 7
+  }
+  if (forme === "absent") return "RUN_WITHOUT_WITNESS"; // 9
+  if (forme === "vide") return "UNKNOWN"; // 10
+  if (forme === "sans-en-tete") return "MIGRATION_REQUIRED"; // 11
+  if (!lisible) return "UNKNOWN"; // 13
+  return lu.version === INTEGRATION_LEDGER_VERSION ? "KNOWN" : "RUN_WITHOUT_WITNESS"; // 12, 14
+}
+
+/**
+ * Une observation de registre : exploitable avec son snapshot, ou refusée avec sa raison.
+ *
+ * `usable` n'est jamais fixé à part : il découle de `state`, ici et nulle part ailleurs,
+ * pour qu'aucun objet ne porte un couple contradictoire (P5). Une décision nouvelle teste
+ * `state` ; `usable` reste pour les consommateurs historiques.
+ */
+export type LedgerObservation<S> =
+  | { state: UsableLedgerState; usable: true; snapshot: S }
+  | { state: Exclude<LedgerState, UsableLedgerState>; usable: false; reason: string };
+
+export function ledgerObservation<S>(
+  state: LedgerState,
+  snapshot: () => S,
+  reason: () => string,
+): LedgerObservation<S> {
+  if (state === "KNOWN" || state === "EMPTY") return { state, usable: true, snapshot: snapshot() };
+  return { state, usable: false, reason: reason() };
+}
+
+/**
+ * Les faits qui expliquent un refus, pour l'opérateur. La décision, elle, a été prise
+ * sur `state` : cette prose n'en fonde aucune.
+ */
+export function ledgerFacts(
+  temoins: LedgerWitnesses | null,
+  lu: LedgerShape,
+  cle: "lanes" | "integrations",
+  ecrite: number,
+): string {
+  const faits: string[] = [];
+  if (typeof lu.present !== "boolean") faits.push("snapshot sans présence observée");
+  if (temoins === null) faits.push(`${MANIFEST} absent, illisible ou d'un autre run`);
+  else if (temoins.manifestVersion === 1) faits.push("manifeste v1, qui ne peut attester aucun registre");
+  const temoin = temoins?.ledgers[cle];
+  if (lu.present === false) {
+    faits.push(temoin === undefined ? "registre absent" : `registre absent, alors que le manifeste l'atteste (${cle}: ${temoin})`);
+  } else if (lu.version === undefined) {
+    faits.push(lu.events.length === 0 && lu.malformedLines.length === 0
+      ? "fichier présent et vide"
+      : "version absente : registre sans en-tête, à migrer");
+  } else {
+    if (lu.version !== ecrite) faits.push(`version ${lu.version} au lieu de ${ecrite}, la seule que ce runtime écrit`);
+    if (temoin !== undefined && temoin !== lu.version) faits.push(`témoin ${cle}: ${temoin} face à un en-tête de version ${lu.version}`);
+  }
+  if (lu.malformedLines.length > 0) faits.push(`ligne(s) ${lu.malformedLines.join(", ")} illisible(s)`);
+  return faits.join(" ; ");
 }
 
 export type LaneLedgerMigration =
