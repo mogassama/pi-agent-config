@@ -294,5 +294,43 @@
       }
     ],
     "runs": 20
+  },
+  {
+    "test": "L0 REG A-P1-F01-succession — le successeur ne devient courant qu'après l'archive de R",
+    "edits": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));",
+        "replace": "  {\n    // épreuve d'ordre : l'ouverture attend qu'une fin tienne une exclusion\n    const fs = process.getBuiltinModule(\"node:fs\");\n    const t0 = Date.now();\n    const courant = (): string | undefined => {\n      try { return JSON.parse(fs.readFileSync(manifestPath(dir), \"utf-8\")).runId; } catch { return undefined; }\n    };\n    const enCours = (): boolean => {\n      const r = courant();\n      return fs.existsSync(join(dir, N_GUARD)) || (r !== undefined && fs.existsSync(guardPath(dir, r)));\n    };\n    while (!enCours() && Date.now() - t0 < 10000) pause(5);\n  }\n  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "    const decision = withRunGuard(dir, observe.runId, () => {",
+        "replace": "    {\n      // épreuve d'ordre : l'ouverture tient N et le dit ; elle ne demande R qu'une fois\n      // que la fin a lâché R — c'est-à-dire abandonné faute d'obtenir N.\n      const fs = process.getBuiltinModule(\"node:fs\");\n      fs.mkdirSync(join(dir, \".course-ouvre\"), { recursive: true });\n      const t0 = Date.now();\n      while (fs.existsSync(guardPath(dir, observe.runId)) && Date.now() - t0 < 10000) pause(5);\n    }\n    const decision = withRunGuard(dir, observe.runId, () => {"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () =>\n    withRunGuard(dir, runId, () => {",
+        "replace": "  return withRunGuard(dir, runId, () =>\n    ((() => { const fs = process.getBuiltinModule(\"node:fs\"); const t0 = Date.now(); while (!fs.existsSync(join(dir, \".course-ouvre\")) && Date.now() - t0 < 10000) pause(5); })(), withSpaceGuard)(dir, () => {"
+      }
+    ],
+    "control": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));",
+        "replace": "  {\n    // épreuve d'ordre : l'ouverture attend qu'une fin tienne une exclusion\n    const fs = process.getBuiltinModule(\"node:fs\");\n    const t0 = Date.now();\n    const courant = (): string | undefined => {\n      try { return JSON.parse(fs.readFileSync(manifestPath(dir), \"utf-8\")).runId; } catch { return undefined; }\n    };\n    const enCours = (): boolean => {\n      const r = courant();\n      return fs.existsSync(join(dir, N_GUARD)) || (r !== undefined && fs.existsSync(guardPath(dir, r)));\n    };\n    while (!enCours() && Date.now() - t0 < 10000) pause(5);\n  }\n  return withSpaceGuard(dir, () => openRunSousGuard(dir, baseCommit));"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "    const decision = withRunGuard(dir, observe.runId, () => {",
+        "replace": "    {\n      // épreuve d'ordre : l'ouverture tient N et le dit ; elle ne demande R qu'une fois\n      // que la fin a lâché R — c'est-à-dire abandonné faute d'obtenir N.\n      const fs = process.getBuiltinModule(\"node:fs\");\n      fs.mkdirSync(join(dir, \".course-ouvre\"), { recursive: true });\n      const t0 = Date.now();\n      while (fs.existsSync(guardPath(dir, observe.runId)) && Date.now() - t0 < 10000) pause(5);\n    }\n    const decision = withRunGuard(dir, observe.runId, () => {"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  return withSpaceGuard(dir, () =>\n    withRunGuard(dir, runId, () => {",
+        "replace": "  return withSpaceGuard(dir, () =>\n    ((() => { const fs = process.getBuiltinModule(\"node:fs\"); const t0 = Date.now(); while (!fs.existsSync(join(dir, \".course-ouvre\")) && Date.now() - t0 < 10000) pause(5); })(), withRunGuard)(dir, runId, () => {"
+      }
+    ],
+    "runs": 20
   }
 ]

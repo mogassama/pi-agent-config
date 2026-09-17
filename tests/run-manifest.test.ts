@@ -3932,3 +3932,39 @@ test("terminerRun completed : un refus de la politique ne modifie rien", () => {
   assert.equal(readFileSync(join(r.dir, "active-run.json"), "utf-8"), avant);
   assert.deepEqual(readdirSync(r.dir).filter((f) => /^[0-9a-f]+-run\.json$/.test(f)), [], "aucune archive");
 });
+
+// ================================================= contrôle 3 au niveau de la primitive (étape 7)
+
+test("terminerRun completed : une lane v2 ouverte hors du plan refuse sans archive ni libération ; fermée, la fin aboutit", () => {
+  const r = sain("te-g3-", [{ unite: "W03", integree: true }, { unite: "W99", ouverte: true }]);
+  sansWorktree(r, `${RUN_FIXTURE}-W99-g1`);
+  planReduit(r, ["W03"]);
+  const actifAvant = readFileSync(join(r.dir, "active-run.json"), "utf-8");
+  assert.throws(() => terminerRun(r.dir, RUN_FIXTURE, { by: "operator", outcome: "completed" }),
+    (err: unknown) => err instanceof RecoveryError &&
+      new RegExp(`^fin refusée : des lanes sont encore ouvertes : ${RUN_FIXTURE}-W99-g1\\.`).test(err.message));
+  assert.equal(readFileSync(join(r.dir, "active-run.json"), "utf-8"), actifAvant, "le run reste actif, octet pour octet");
+  assert.equal(existsSync(join(r.dir, `${RUN_FIXTURE}-run.json`)), false, "aucune archive");
+  // Témoin identique, la lane hors plan fermée : la même fin aboutit.
+  const t = sain("te-g3t-", [{ unite: "W03", integree: true }, { unite: "W99", abandonnee: true }]);
+  planReduit(t, ["W03"]);
+  assert.equal(terminerRun(t.dir, RUN_FIXTURE, { by: "operator", outcome: "completed" }).status, "completed");
+  assert.equal(existsSync(join(t.dir, `${RUN_FIXTURE}-run.json`)), true, "archive publiée");
+  assert.equal(existsSync(join(t.dir, "active-run.json")), false, "active-run.json libéré");
+});
+
+test("terminerRun completed : une seconde génération ouverte refuse sans effet, malgré la première intégrée", () => {
+  const r = sain("te-g3g-");
+  const chemin = join(r.dir, `${RUN_FIXTURE}-lanes.jsonl`);
+  const lignes = readFileSync(chemin, "utf-8").trimEnd().split("\n");
+  const i = lignes.findIndex((l) => l.includes('"event":"INTEGRATED"'));
+  const g2 = { work_unit: "W03", lane: `${RUN_FIXTURE}-W03-g2`, at: AT_FIXTURE, event: "OPENED", base: r.base, generation: 2 };
+  const corps = [...lignes.slice(1, i), JSON.stringify(g2), ...lignes.slice(i)]
+    .map((l, k) => JSON.stringify({ ...JSON.parse(l), event_seq: k + 1 }));
+  writeFileSync(chemin, `${[lignes[0], ...corps].join("\n")}\n`);
+  const actifAvant = readFileSync(join(r.dir, "active-run.json"), "utf-8");
+  assert.throws(() => terminerRun(r.dir, RUN_FIXTURE, { by: "operator", outcome: "completed" }),
+    (err: unknown) => err instanceof RecoveryError && err.message.includes(`${RUN_FIXTURE}-W03-g2`));
+  assert.equal(readFileSync(join(r.dir, "active-run.json"), "utf-8"), actifAvant);
+  assert.equal(existsSync(join(r.dir, `${RUN_FIXTURE}-run.json`)), false);
+});
