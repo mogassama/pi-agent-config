@@ -53,13 +53,26 @@ import {
   integrationLedgerState,
   laneLedgerState,
   ledgerObservation,
+  laneState,
   readWitnesses,
   type LedgerShape,
   type LedgerWitnesses,
   type Lease,
   type RunManifest,
 } from "../subagent-only/run-manifest.ts";
-import { parseLaneEventV2, projectLegacyGenerations, type LaneEvent, type LaneEventV2 } from "../subagent-only/lane-ledger.ts";
+import {
+  integrationCommits,
+  laneLedgerIncoherences,
+  parseLaneEventV2,
+  projectIntegrated,
+  projectLegacyGenerations,
+  projectReviews,
+  projectRisks,
+  projectViolations,
+  riskKey,
+  type LaneEvent,
+  type LaneEventV2,
+} from "../subagent-only/lane-ledger.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
 import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 
@@ -3367,6 +3380,279 @@ test("C4.9 : l'hybride (manifeste v2, registre v1) se lit en g1, et le fichier r
     assert.equal(vu.usable && vu.snapshot.read.version, 1, "la lecture reste v1");
     assert.equal((lu.events[0] as Record<string, unknown>).generation, undefined, "la lecture brute n'est pas modifiée");
     assert.equal(readFileSync(laneLedgerPath(runs, "r"), "utf-8"), brut, "le fichier n'est pas réécrit");
+  } finally {
+    done();
+  }
+});
+
+// ================================================= cohérence P4 et projections (LOT 2, étape 4)
+
+/*
+ * Une histoire v2 cohérente, construite ligne à ligne. Chaque cas part d'elle, n'y change
+ * qu'une chose, et vérifie que l'incohérence est nommée — la même histoire intacte
+ * servant de témoin : aucune incohérence.
+ */
+function histoire(): Array<Record<string, unknown>> {
+  const ev = (seq: number, unite: string, reste: Record<string, unknown>) =>
+    ({ event_seq: seq, work_unit: unite, lane: `${RV2}-${unite}-g1`, at: "t", ...reste });
+  return [
+    ev(1, "W03", { event: "OPENED", base: "b", generation: 1 }),
+    ev(2, "W03", { event: "REVIEWED", from_tree: "t0", tree: "t1", verdict: "approved",
+      reviewer: { delegation_seq: 2, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" } }),
+    ev(3, "W03", { event: "REVIEWED", from_tree: "t1", tree: "t2", verdict: "approved",
+      reviewer: { delegation_seq: 4, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" } }),
+    ev(4, "W03", { event: "FROZEN", commit: "c", parent: "b", tree: "t2", reviewed_event_seq: 3 }),
+    ev(5, "W03", { event: "MERGED", integration_commit: "i", frozen_event_seq: 4 }),
+    ev(6, "W03", { event: "INTEGRATED", integration_commit: "i", status: { outcome: "not-applicable" } }),
+    ev(7, "W09", { event: "OPENED", base: "b", generation: 1 }),
+    ev(8, "W09", { event: "RISK", id: "r1", transition: "opened", by: "reviewer" }),
+    ev(9, "W09", { event: "ABANDONED", by: "operator", reason: "x", generation: 1 }),
+  ];
+}
+const incoherences = (h: Array<Record<string, unknown>>) =>
+  laneLedgerIncoherences(h as unknown as LaneEvent[], RV2);
+function incoherent(modifier: (h: Array<Record<string, unknown>>) => void, motif: RegExp, quoi: string): void {
+  const h = histoire();
+  modifier(h);
+  const faits = incoherences(h);
+  assert.equal(faits.length > 0, true, `${quoi} : une incohérence attendue`);
+  assert.match(faits.join(" | "), motif, `${quoi} : l'incohérence doit être nommée`);
+}
+
+test("P4 : une histoire v2 cohérente n'a aucune incohérence, et chaque ligne passe la grammaire", () => {
+  const h = histoire();
+  assert.deepEqual(incoherences(h), []);
+  assert.deepEqual(h.map((l) => parseLaneEventV2(l) !== null), h.map(() => true));
+});
+
+test("P4 : event_seq strictement croissant et unique", () => {
+  incoherent((h) => { h[2].event_seq = 2; }, /ne suit pas event_seq 2/, "doublon");
+  incoherent((h) => { h[2].event_seq = 1; }, /ne suit pas event_seq 2/, "retour en arrière");
+  // Un trou n'est pas une incohérence : strictement croissant, pas contigu.
+  const trou = histoire();
+  trou[8].event_seq = 20;
+  assert.deepEqual(incoherences(trou), []);
+});
+
+test("P4 : lane cohérente avec (runId, work_unit, generation), et ouverte avant usage", () => {
+  incoherent((h) => { h[0].lane = `${RV2}-W03-g2`; }, /lane run-v2-W03-g2 au lieu de run-v2-W03-g1/, "génération");
+  incoherent((h) => { h[0].lane = `autre-W03-g1`; h[1].lane = "autre-W03-g1"; },
+    /au lieu de run-v2-W03-g1/, "autre run");
+  incoherent((h) => { h[8].generation = 2; }, /ABANDONED \(event_seq 9\) : lane run-v2-W09-g1 au lieu de run-v2-W09-g2/, "abandon");
+  incoherent((h) => { h[1].lane = `${RV2}-W12-g1`; }, /n'a pas été ouverte pour W03/, "lane jamais ouverte");
+  incoherent((h) => { h[7].work_unit = "W03"; }, /run-v2-W09-g1 n'a pas été ouverte pour W03/, "unité différente");
+  incoherent((h) => { h.splice(0, 1); }, /n'a pas été ouverte/, "revue avant ouverture");
+});
+
+test("P4 : la chaîne des revues est continue par lane", () => {
+  incoherent((h) => { h[2].from_tree = "tX"; }, /chaîne rompue sur run-v2-W03-g1, from_tree tX après tree t1/, "rupture");
+  // Deux lanes ont deux chaînes : la première revue d'une lane n'est pas jugée sur l'autre.
+  const deux = histoire();
+  deux.splice(8, 0, { event_seq: 8.5, work_unit: "W09", lane: `${RV2}-W09-g1`, at: "t", event: "REVIEWED",
+    from_tree: "z0", tree: "z1", verdict: "approved",
+    reviewer: { delegation_seq: 6, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" } });
+  assert.deepEqual(incoherences(deux), []);
+});
+
+test("P4 : les renvois désignent une revue ou un gel ANTÉRIEURS de la même lane", () => {
+  incoherent((h) => { h[3].reviewed_event_seq = 1; }, /reviewed_event_seq 1 ne désigne aucune revue/, "vers OPENED");
+  incoherent((h) => { h[3].reviewed_event_seq = 99; }, /reviewed_event_seq 99/, "vers rien");
+  incoherent((h) => { h[4].frozen_event_seq = 3; }, /frozen_event_seq 3 ne désigne aucun gel/, "vers REVIEWED");
+  incoherent((h) => { h[4].frozen_event_seq = 6; }, /frozen_event_seq 6/, "vers un événement postérieur");
+  // Une revue d'une autre lane ne compte pas.
+  incoherent((h) => {
+    h.splice(8, 0, { event_seq: 8.5, work_unit: "W09", lane: `${RV2}-W09-g1`, at: "t", event: "FROZEN",
+      commit: "c", parent: "b", tree: "t2", reviewed_event_seq: 3 });
+  }, /reviewed_event_seq 3 ne désigne aucune revue antérieure de run-v2-W09-g1/, "revue d'une autre lane");
+  incoherent((h) => {
+    h.splice(8, 0, { event_seq: 8.5, work_unit: "W09", lane: `${RV2}-W09-g1`, at: "t", event: "MERGED",
+      integration_commit: "i", frozen_event_seq: 4 });
+  }, /frozen_event_seq 4 ne désigne aucun gel antérieur de run-v2-W09-g1/, "gel d'une autre lane");
+  incoherent((h) => { h[3].event_seq = 3.5; h[3].reviewed_event_seq = 3.5; }, /reviewed_event_seq 3.5/, "vers soi-même");
+});
+
+test("P4 : un événement sans enveloppe dans un registre v2 est une incohérence", () => {
+  const h = histoire();
+  h.push({ event: "OPENED", work_unit: "W12", at: "t", base: "b" });
+  assert.match(incoherences(h).join(" | "), /OPENED sans enveloppe v2/);
+});
+
+test("P4 : laneState rend UNKNOWN un registre v2 incohérent, jamais un v1", () => {
+  const coherent = { present: true, version: 2, events: histoire() as unknown as LaneEvent[], malformedLines: [] };
+  assert.equal(laneState(t2(), coherent, RV2), "KNOWN");
+  const rompu = histoire();
+  rompu[2].from_tree = "tX";
+  assert.equal(laneState(t2(), { ...coherent, events: rompu as unknown as LaneEvent[] }, RV2), "UNKNOWN");
+  // Le même contenu sous un autre runId : lanes incohérentes.
+  assert.equal(laneState(t2(), coherent, "autre"), "UNKNOWN");
+  // Un registre v1 n'est jamais jugé sur l'enveloppe v2.
+  const v1 = { present: true, version: 1, events: [{ event: "OPENED", work_unit: "W03", at: "t", base: "b" }] as LaneEvent[], malformedLines: [] };
+  assert.equal(laneState(t2(), v1, RV2), "KNOWN");
+  // Un état déjà refusé le reste, quelle que soit la cohérence.
+  assert.equal(laneState(t2({ lanes: 1 }), coherent, RV2), "UNKNOWN");
+  assert.equal(laneState(null, coherent, RV2), "UNKNOWN");
+});
+
+test("projections : un projecteur par nature, sur une histoire v2", () => {
+  const h = histoire() as unknown as LaneEvent[];
+  const revues = projectReviews(h);
+  assert.deepEqual([...revues.keys()], [`${RV2}-W03-g1`]);
+  assert.deepEqual(revues.get(`${RV2}-W03-g1`)!.map((r) => [r.from_tree, r.tree, r.reviewer.delegation_seq]),
+    [["t0", "t1", 2], ["t1", "t2", 4]]);
+  assert.deepEqual(projectViolations(h), []);
+  const risques = projectRisks(h, RV2);
+  assert.deepEqual([...risques.keys()], [riskKey(RV2, "W09", "r1")]);
+  assert.equal(risques.get(riskKey(RV2, "W09", "r1"))!.open, true);
+  const integrees = projectIntegrated(h, 2);
+  assert.deepEqual([...integrees.keys()], ["W03"], "seul INTEGRATED intègre ; W09 abandonnée ne l'est pas");
+  assert.deepEqual(integrees.get("W03"),
+    { work_unit: "W03", integration_commit: "i", status: { outcome: "not-applicable" }, event_seq: 6 });
+});
+
+test("projections : ni FROZEN, ni MERGED, ni ABANDONED ne valent INTEGRATED", () => {
+  const h = histoire().filter((e) => e.event !== "INTEGRATED") as unknown as LaneEvent[];
+  assert.deepEqual([...projectIntegrated(h, 2).keys()], []);
+  assert.deepEqual([...integrationCommits(h).keys()], []);
+});
+
+test("projections : un risque se juge sur sa dernière transition, sous (R, unité, id)", () => {
+  const r = (seq: number, unite: string, id: string, transition: string) => ({
+    event_seq: seq, work_unit: unite, lane: `${RV2}-${unite}-g1`, at: "t", event: "RISK", id, transition,
+    ...(transition === "routed" ? { to: "scout" } : { by: "reviewer" }),
+  });
+  const h = [
+    r(1, "W09", "r1", "opened"),
+    r(2, "W03", "r1", "opened"), r(3, "W03", "r1", "resolved"),
+    r(4, "W12", "r2", "opened"), r(5, "W12", "r2", "routed"),
+    r(6, "W14", "r3", "resolved"), r(7, "W14", "r3", "opened"),
+  ] as unknown as LaneEvent[];
+  const risques = projectRisks(h, RV2);
+  const ouverts = [...risques.values()].filter((f) => f.open).map((f) => `${f.work_unit}:${f.id}:${f.transition}`);
+  assert.deepEqual(ouverts, ["W09:r1:opened", "W12:r2:routed", "W14:r3:opened"],
+    "même id sur deux unités : deux risques ; routed reste ouvert ; rouvert après résolution : ouvert");
+  assert.equal(risques.get(riskKey(RV2, "W03", "r1"))!.open, false);
+  // La clé porte le run : le même couple unité/id sous un autre run est un autre risque.
+  assert.notEqual(riskKey(RV2, "W03", "r1"), riskKey("autre", "W03", "r1"));
+  assert.equal(projectRisks(h, "autre").has(riskKey(RV2, "W03", "r1")), false);
+});
+
+test("projections : v1 et v2 convergent vers le même projecteur d'INTEGRATED", () => {
+  const v1 = [
+    { event: "OPENED", work_unit: "W03", at: "t", base: "b" },
+    { event: "INTEGRATED", work_unit: "W03", at: "t", integration_commit: "a" },
+    { event: "INTEGRATED", work_unit: "W03", at: "t", integration_commit: "z" },
+    { event: "INTEGRATED", work_unit: "W09", at: "t" },
+  ] as LaneEvent[];
+  assert.deepEqual([...projectIntegrated(v1, 1).values()], [
+    { work_unit: "W03", integration_commit: "z", status: undefined, event_seq: undefined },
+    { work_unit: "W09", integration_commit: undefined, status: undefined, event_seq: undefined },
+  ], "la dernière intégration gagne, v1 sans statut ni séquence");
+  assert.deepEqual([...integrationCommits(v1)], [["W03", "z"], ["W09", undefined]], "integrationCommits en est la vue");
+});
+
+test("projections : les champs propres à v2 n'ont aucune autorité sous un en-tête v1", () => {
+  const surnumeraire = [{
+    event: "INTEGRATED", work_unit: "W03", at: "t", integration_commit: "i",
+    event_seq: 99,
+    status: { outcome: "committed", decision_id: "d", target_status: "done", status_commit: "s" },
+  }] as unknown as LaneEvent[];
+  assert.deepEqual(projectIntegrated(surnumeraire, 1).get("W03"), {
+    work_unit: "W03", integration_commit: "i", status: undefined, event_seq: undefined,
+  }, "la grammaire v1 tolère les champs surnuméraires sans leur donner l'autorité v2");
+  assert.deepEqual(projectIntegrated(surnumeraire, 2).get("W03"), {
+    work_unit: "W03", integration_commit: "i",
+    status: { outcome: "committed", decision_id: "d", target_status: "done", status_commit: "s" },
+    event_seq: 99,
+  }, "les mêmes champs appartiennent à la projection sous un en-tête v2");
+});
+
+test("observeLanes : le snapshot porte les projections, et la prose d'un refus nomme l'incohérence", () => {
+  const { dir: root, done } = dossier();
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    const runs = join(root, RUNS_DIR);
+    mkdirSync(runs);
+    writeFileSync(join(runs, "active-run.json"),
+      JSON.stringify({ version: 2, runId: RV2, status: "active", nextSeq: 1, ledgers: { lanes: 2 } }));
+    const ecrire = (h: Array<Record<string, unknown>>) =>
+      writeFileSync(laneLedgerPath(runs, RV2), `${['{"ledger":2}', ...h.map((l) => JSON.stringify(l))].join("\n")}\n`);
+    const observer = () => {
+      const lu = readLaneEvents(runs, RV2);
+      return observeLanes({ root, runId: RV2,
+        laneRead: { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present } });
+    };
+    ecrire(histoire());
+    let vu = observer();
+    assert.equal(vu.state, "KNOWN");
+    assert.equal(vu.usable && vu.snapshot.projections.integrated.has("W03"), true);
+    assert.equal(vu.usable && vu.snapshot.projections.risks.size, 1);
+    assert.equal(vu.usable && vu.snapshot.projections.reviews.get(`${RV2}-W03-g1`)!.length, 2);
+    const rompu = histoire();
+    rompu[2].from_tree = "tX";
+    ecrire(rompu);
+    vu = observer();
+    assert.equal(vu.state, "UNKNOWN");
+    assert.match(vu.usable ? "" : vu.reason, /chaîne rompue sur run-v2-W03-g1/);
+  } finally {
+    done();
+  }
+});
+
+test("P4 : observeIntegrations refuse aussi quand les lanes v2 sont incohérentes", () => {
+  const { dir: root, done } = dossier();
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    const runs = join(root, RUNS_DIR);
+    mkdirSync(runs);
+    writeFileSync(join(runs, "active-run.json"),
+      JSON.stringify({ version: 2, runId: RV2, status: "active", nextSeq: 1, ledgers: { lanes: 2 } }));
+    const observer = (h: Array<Record<string, unknown>>) => {
+      writeFileSync(laneLedgerPath(runs, RV2), `${['{"ledger":2}', ...h.map((l) => JSON.stringify(l))].join("\n")}\n`);
+      const lu = readLaneEvents(runs, RV2);
+      return observeIntegrations({ root, runDir: runs, runId: RV2,
+        laneRead: { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present } });
+    };
+    // Témoin : l'histoire cohérente, registre des intégrations absent et sans témoin.
+    let vu = observer(histoire());
+    assert.deepEqual([vu.state, vu.usable], ["EMPTY", true], "lanes cohérentes");
+    const rompu = histoire();
+    rompu[2].from_tree = "tX";
+    vu = observer(rompu);
+    assert.deepEqual([vu.state, vu.usable], ["UNKNOWN", false], "lanes incohérentes");
+    assert.match(vu.usable ? "" : vu.reason, /registre des lanes est inexploitable \(UNKNOWN\)/);
+  } finally {
+    done();
+  }
+});
+
+test("observeLanes transmet la version du snapshot au projecteur d'intégration", () => {
+  const { dir: root, done } = dossier();
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    const runs = join(root, RUNS_DIR);
+    mkdirSync(runs);
+    writeFileSync(join(runs, "active-run.json"),
+      JSON.stringify({ version: 2, runId: RV2, status: "active", nextSeq: 1 }));
+    const statut = { outcome: "committed", decision_id: "d", target_status: "done", status_commit: "s" };
+    const projete = (entete: string, lignes: Array<Record<string, unknown>>) => {
+      writeFileSync(laneLedgerPath(runs, RV2), `${[entete, ...lignes.map((l) => JSON.stringify(l))].join("\n")}\n`);
+      const lu = readLaneEvents(runs, RV2);
+      const vu = observeLanes({ root, runId: RV2,
+        laneRead: { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present } });
+      assert.equal(vu.state, "KNOWN", entete);
+      return vu.usable ? vu.snapshot.projections.integrated.get("W03") : undefined;
+    };
+    // v1 (hybride) : la ligne de Sol, champs v2 surnuméraires compris — sans autorité.
+    const v1 = projete('{"ledger":1}', [
+      { event: "OPENED", work_unit: "W03", at: "t", base: "b" },
+      { event: "INTEGRATED", work_unit: "W03", at: "t", integration_commit: "i", event_seq: 99, status: statut },
+    ]);
+    assert.deepEqual(v1, { work_unit: "W03", integration_commit: "i", status: undefined, event_seq: undefined });
+    // Témoin v2 : les mêmes champs, sous leur en-tête, sont projetés.
+    const h = histoire();
+    h[5].status = statut;
+    const v2 = projete('{"ledger":2}', h);
+    assert.deepEqual(v2, { work_unit: "W03", integration_commit: "i", status: statut, event_seq: 6 });
   } finally {
     done();
   }

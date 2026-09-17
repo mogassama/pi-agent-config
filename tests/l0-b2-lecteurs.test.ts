@@ -70,7 +70,7 @@ function deuxTrees(root: string): { base: string; t1: string; t2: string } {
 
 // ================================================================== la chaîne des revues
 
-regression("B2-reviewed-chaine", "la chaîne from_tree → tree se reconstruit, et sa rupture se voit", async () => {
+regressionCorrigee("B2-reviewed-chaine", "la chaîne from_tree → tree se reconstruit, et sa rupture se voit", async () => {
   const saine = depot("l0-b2-chaine-a-");
   const trees = deuxTrees(saine.root);
   manifeste(saine.dir, { version: 2, ledgers: { lanes: 2 } });

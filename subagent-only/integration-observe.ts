@@ -24,7 +24,7 @@ import {
   INTEGRATION_LEDGER_VERSION,
   LANE_LEDGER_VERSION,
   integrationLedgerState,
-  laneLedgerState,
+  laneState,
   ledgerFacts,
   ledgerObservation,
   readWitnesses,
@@ -104,7 +104,7 @@ export function observeIntegrations(input: {
    */
   const read = readIntegrationEvents(runDir, runId);
   const temoins = readWitnesses(runDir, runId);
-  const lanes = laneLedgerState(temoins, laneRead);
+  const lanes = laneState(temoins, laneRead, runId);
   const state = integrationLedgerState(temoins, read, lanes);
   return ledgerObservation(
     state,

@@ -32,7 +32,7 @@ import {
   readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { parseLaneEventV2, type LaneEvent, type LaneEventV1 } from "./lane-ledger.ts";
+import { laneLedgerIncoherences, parseLaneEventV2, type LaneEvent, type LaneEventV1 } from "./lane-ledger.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
 import { join } from "node:path";
 
@@ -1383,6 +1383,25 @@ export function laneLedgerState(temoins: LedgerWitnesses | null, lu: LedgerShape
 }
 
 /**
+ * L'état du registre des lanes d'un run : la matrice, puis la cohérence de P4.
+ *
+ * « Lisible » inclut, en v2, les contrôles de § F qui portent sur plusieurs lignes : un
+ * registre v2 à l'état KNOWN par sa forme, mais incohérent, est UNKNOWN (ligne 8). Le v1
+ * suit sa grammaire legacy et n'est jamais jugé sur l'enveloppe v2. C'est cette fonction,
+ * et elle seule, que les deux observateurs appellent.
+ */
+export function laneState(temoins: LedgerWitnesses | null, lu: LaneLedgerShape, runId: string): LedgerState {
+  const state = laneLedgerState(temoins, lu);
+  if (state !== "KNOWN" || lu.version !== LANE_LEDGER_V2) return state;
+  return laneLedgerIncoherences(lu.events, runId).length === 0 ? state : "UNKNOWN";
+}
+
+/** Un snapshot du registre des lanes, dont les événements sont typés. */
+export interface LaneLedgerShape extends LedgerShape {
+  events: readonly LaneEvent[];
+}
+
+/**
  * L'état du registre des intégrations, ligne par ligne de C4.9.
  *
  * `lanes` est l'état du registre des lanes lu dans le même snapshot : la reconstruction
@@ -1442,6 +1461,7 @@ export function ledgerFacts(
   lu: LedgerShape,
   cle: "lanes" | "integrations",
   ecrite: number,
+  incoherences: readonly string[] = [],
 ): string {
   const faits: string[] = [];
   if (typeof lu.present !== "boolean") faits.push("snapshot sans présence observée");
@@ -1459,6 +1479,7 @@ export function ledgerFacts(
     if (temoin !== undefined && temoin !== lu.version) faits.push(`témoin ${cle}: ${temoin} face à un en-tête de version ${lu.version}`);
   }
   if (lu.malformedLines.length > 0) faits.push(`ligne(s) ${lu.malformedLines.join(", ")} illisible(s)`);
+  faits.push(...incoherences);
   return faits.join(" ; ");
 }
 

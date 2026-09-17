@@ -294,10 +294,170 @@ export function foldLedger(events: readonly LaneEvent[]): Map<string, LaneStatus
  */
 export function integrationCommits(events: readonly LaneEvent[]): Map<string, string | undefined> {
   const commits = new Map<string, string | undefined>();
-  for (const e of events) {
-    if (e.event === "INTEGRATED") commits.set(e.work_unit, e.integration_commit);
-  }
+  for (const [unit, fait] of projectIntegrated(events, undefined)) commits.set(unit, fait.integration_commit);
   return commits;
+}
+
+// ============================================================ projections communes (P4, § 4.3)
+
+/*
+ * Un projecteur par nature, et un seul. Les lots qui PRODUIRONT ces événements (6, 7, 9)
+ * et les décisions qui les consomment (run-end, la porte) lisent ces vues, jamais les
+ * lignes brutes. Aucun projecteur n'écrit, aucun ne produit.
+ */
+
+/** La dernière intégration de chaque unité. v1 et v2 convergent ici. */
+export interface IntegratedFact {
+  work_unit: string;
+  integration_commit: string | undefined;
+  /** Autoritaire sous un en-tête v2 seulement. */
+  status: IntegrationStatus | undefined;
+  /** Autoritaire sous un en-tête v2 seulement. */
+  event_seq: number | undefined;
+}
+
+/**
+ * Seul INTEGRATED prouve qu'une unité est intégrée : ni ABANDONED, ni FROZEN, ni MERGED
+ * ne lui sont substitués. La dernière intégration gagne — un rework réintégré est
+ * prouvé par sa dernière intégration.
+ *
+ * La version vient du même snapshot que les événements. Le lecteur legacy tolère des
+ * champs surnuméraires : sous un en-tête v1, `status` et `event_seq` n'acquièrent donc
+ * jamais l'autorité de champs v2 par leur seule présence dans l'objet JSON.
+ */
+export function projectIntegrated(
+  events: readonly LaneEvent[],
+  version: number | undefined,
+): Map<string, IntegratedFact> {
+  const faits = new Map<string, IntegratedFact>();
+  for (const e of events) {
+    if (e.event !== "INTEGRATED") continue;
+    faits.set(e.work_unit, {
+      work_unit: e.work_unit,
+      integration_commit: e.integration_commit,
+      status: version === 2 && "status" in e ? e.status : undefined,
+      event_seq: version === 2 && "event_seq" in e ? e.event_seq : undefined,
+    });
+  }
+  return faits;
+}
+
+export type ReviewFact = Extract<LaneEventV2, { event: "REVIEWED" }>;
+
+/** Les revues de chaque lane, dans l'ordre du registre : la chaîne `from_tree → tree`. */
+export function projectReviews(events: readonly LaneEvent[]): Map<string, ReviewFact[]> {
+  const revues = new Map<string, ReviewFact[]>();
+  for (const e of events) {
+    if (e.event !== "REVIEWED") continue;
+    const liste = revues.get(e.lane) ?? [];
+    liste.push(e);
+    revues.set(e.lane, liste);
+  }
+  return revues;
+}
+
+export type ViolationFact = Extract<LaneEventV2, { event: "VIOLATION" }>;
+
+/** Les violations historiques, telles qu'écrites. Un fait lu, jamais produit ici. */
+export function projectViolations(events: readonly LaneEvent[]): ViolationFact[] {
+  const violations: ViolationFact[] = [];
+  for (const e of events) if (e.event === "VIOLATION") violations.push(e);
+  return violations;
+}
+
+/** L'état d'un risque, sous sa clé canonique. */
+export interface RiskFact {
+  runId: string;
+  work_unit: string;
+  id: string;
+  /** La dernière transition : c'est elle qui juge. */
+  transition: RiskTransition;
+  event_seq: number;
+  /** `routed` reste ouvert ; seul `resolved` ferme. */
+  open: boolean;
+}
+
+/** La clé d'un risque : `(R, work_unit, id)`, jamais l'identifiant seul. */
+export function riskKey(runId: string, workUnit: string, id: string): string {
+  return JSON.stringify([runId, workUnit, id]);
+}
+
+/**
+ * Les risques du run, chacun jugé sur sa DERNIÈRE transition. Deux unités portant le même
+ * `id` ont deux risques distincts ; un risque rouvert après résolution est ouvert.
+ */
+export function projectRisks(events: readonly LaneEvent[], runId: string): Map<string, RiskFact> {
+  const risques = new Map<string, RiskFact>();
+  for (const e of events) {
+    if (e.event !== "RISK") continue;
+    risques.set(riskKey(runId, e.work_unit, e.id), {
+      runId,
+      work_unit: e.work_unit,
+      id: e.id,
+      transition: e.transition,
+      event_seq: e.event_seq,
+      open: e.transition !== "resolved",
+    });
+  }
+  return risques;
+}
+
+/**
+ * Ce qu'un registre v2 viole sur plusieurs lignes (P4). Vide : cohérent.
+ *
+ * La forme de chaque ligne est jugée par `parseLaneEventV2` ; ici, ce que seul l'ensemble
+ * permet de voir. Une incohérence rend le registre entier UNKNOWN : les lignes encore
+ * cohérentes ne sont jamais retenues à la place des autres. Aucun objet git n'est
+ * consulté — ce contrôle appartient aux lots 3, 6, 8 et 9.
+ */
+export function laneLedgerIncoherences(events: readonly LaneEvent[], runId: string): string[] {
+  const faits: string[] = [];
+  let precedent = 0;
+  const ouvertes = new Map<string, string>();
+  const dernierArbre = new Map<string, string>();
+  const revues = new Map<number, string>();
+  const gels = new Map<number, string>();
+  for (const e of events) {
+    if (!("event_seq" in e)) {
+      faits.push(`${e.event} sans enveloppe v2`);
+      continue;
+    }
+    const ou = `${e.event} (event_seq ${e.event_seq})`;
+    if (e.event_seq <= precedent) faits.push(`${ou} ne suit pas event_seq ${precedent}`);
+    precedent = Math.max(precedent, e.event_seq);
+    if (e.event === "OPENED" || e.event === "ABANDONED") {
+      const attendue = `${runId}-${e.work_unit}-g${e.generation}`;
+      if (e.lane !== attendue) faits.push(`${ou} : lane ${e.lane} au lieu de ${attendue}`);
+    }
+    if (e.event === "OPENED") {
+      ouvertes.set(e.lane, e.work_unit);
+    } else if (ouvertes.get(e.lane) !== e.work_unit) {
+      faits.push(`${ou} : ${e.lane} n'a pas été ouverte pour ${e.work_unit}`);
+    }
+    switch (e.event) {
+      case "REVIEWED": {
+        const avant = dernierArbre.get(e.lane);
+        if (avant !== undefined && avant !== e.from_tree) {
+          faits.push(`${ou} : chaîne rompue sur ${e.lane}, from_tree ${e.from_tree} après tree ${avant}`);
+        }
+        dernierArbre.set(e.lane, e.tree);
+        revues.set(e.event_seq, e.lane);
+        break;
+      }
+      case "FROZEN":
+        if (revues.get(e.reviewed_event_seq) !== e.lane) {
+          faits.push(`${ou} : reviewed_event_seq ${e.reviewed_event_seq} ne désigne aucune revue antérieure de ${e.lane}`);
+        }
+        gels.set(e.event_seq, e.lane);
+        break;
+      case "MERGED":
+        if (gels.get(e.frozen_event_seq) !== e.lane) {
+          faits.push(`${ou} : frozen_event_seq ${e.frozen_event_seq} ne désigne aucun gel antérieur de ${e.lane}`);
+        }
+        break;
+    }
+  }
+  return faits;
 }
 
 /** Ce que le disque montre, rassemblé par l'appelant. */

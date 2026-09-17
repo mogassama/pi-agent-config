@@ -172,5 +172,11 @@
     "file": "subagent-only/lane-ledger.ts",
     "find": "  if (version !== 1) return [...events];\n",
     "replace": "  return [...events]; // mutant : aucune génération synthétisée\n"
+  },
+  {
+    "test": "L0 REG B2-reviewed-chaine — la chaîne from_tree → tree se reconstruit, et sa rupture se voit",
+    "file": "subagent-only/lane-ledger.ts",
+    "find": "        if (avant !== undefined && avant !== e.from_tree) {\n",
+    "replace": "        if (false) { // mutant : la rupture de chaîne n'est plus vue\n"
   }
 ]

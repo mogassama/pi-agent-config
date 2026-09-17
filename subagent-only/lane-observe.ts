@@ -28,15 +28,25 @@ import { join } from "node:path";
 import {
   reconcile,
   integrationCommits,
+  laneLedgerIncoherences,
+  projectIntegrated,
   projectLegacyGenerations,
+  projectReviews,
+  projectRisks,
+  projectViolations,
+  type IntegratedFact,
+  type ReviewFact,
+  type RiskFact,
+  type ViolationFact,
   type LaneEvent,
   type Observations,
   type Reconciliation,
 } from "./lane-ledger.ts";
 import {
   LANE_LEDGER_VERSION,
+  LANE_LEDGER_V2,
   RUNS_DIR,
-  laneLedgerState,
+  laneState,
   ledgerFacts,
   ledgerObservation,
   readWitnesses,
@@ -65,6 +75,16 @@ export interface LaneSnapshot {
   bases: Map<string, string>;
   observations: Observations;
   reconciliation: Reconciliation;
+  /** Les vues communes du registre (P4, § 4.3). Seules sources des décisions à venir. */
+  projections: LaneProjections;
+}
+
+export interface LaneProjections {
+  reviews: Map<string, ReviewFact[]>;
+  violations: ViolationFact[];
+  /** Sous la clé `riskKey(R, work_unit, id)`. */
+  risks: Map<string, RiskFact>;
+  integrated: Map<string, IntegratedFact>;
 }
 
 export type ObservedLanes = LedgerObservation<LaneSnapshot>;
@@ -83,17 +103,23 @@ export function observeLanes(input: {
    * histoire, et un registre refusé ne rend aucun snapshot.
    */
   const temoins = readWitnesses(join(root, RUNS_DIR), runId);
-  const state = laneLedgerState(temoins, laneRead);
+  const state = laneState(temoins, laneRead, runId);
   return ledgerObservation(
     state,
     () => construire(root, runId, laneRead),
     () =>
       `le registre des lanes est inexploitable (${state}) : ` +
-      `${ledgerFacts(temoins, laneRead, "lanes", LANE_LEDGER_VERSION)}. Aucun état de lane n'est ` +
+      `${ledgerFacts(temoins, laneRead, "lanes", LANE_LEDGER_VERSION, incoherencesV2(laneRead, runId))}. ` +
+      "Aucun état de lane n'est " +
       "reconstruit depuis un registre partiel : les événements encore lisibles ne " +
       "disent pas ce que les autres disaient, et un bilan bâti sur eux affirmerait " +
       "que ce qu'on ne lit pas ne comptait pas.",
   );
+}
+
+/** Les incohérences de P4, pour la prose d'un refus — la décision est déjà prise sur `state`. */
+function incoherencesV2(lu: LaneRead, runId: string): string[] {
+  return lu.version === LANE_LEDGER_V2 && lu.malformedLines.length === 0 ? laneLedgerIncoherences(lu.events, runId) : [];
 }
 
 /**
@@ -154,5 +180,11 @@ function construire(root: string, runId: string, lu: LaneRead): LaneSnapshot {
     bases,
     observations,
     reconciliation: reconcile(laneRead.events, observations),
+    projections: {
+      reviews: projectReviews(laneRead.events),
+      violations: projectViolations(laneRead.events),
+      risks: projectRisks(laneRead.events, runId),
+      integrated: projectIntegrated(laneRead.events, laneRead.version),
+    },
   };
 }
