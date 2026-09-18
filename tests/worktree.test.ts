@@ -159,6 +159,34 @@ test("les changements d'une lane sont ceux de sa branche", () => {
   }
 });
 
+/**
+ * Un chemin COMMITÉ, lui aussi, se lit en records NUL.
+ *
+ * `L0 REG C-P1-F07` n'écrit que des fichiers non suivis : elle éprouve donc la lecture
+ * de `git status`, jamais celle de `git diff`. Sans ce cas, le `-z` posé sur le diff à
+ * l'étape 2 du LOT 3 ne serait atteint par aucune preuve — une modification que rien
+ * ne mesure est une décoration.
+ *
+ * Le saut de ligne est ce qui compte : le quoting se répare aussi avec
+ * `core.quotePath=false`, le découpage par lignes non.
+ */
+test("un chemin commité avec saut de ligne se lit entier, pas en deux morceaux", () => {
+  const { root, done } = repo();
+  try {
+    // La base d'AVANT le commit : sans elle, `laneChanges` compare la lane à son propre
+    // HEAD et un chemin commité est invisible — c'est le chemin `diff` qu'on veut lire.
+    const base = git(root, "rev-parse", "HEAD").trim();
+    const lane = ensureLane(root, "9a6766-W01");
+    const saut = "src/deux\nlignes.py";
+    writeFileSync(join(lane.cwd, saut), "n = 1\n");
+    git(lane.cwd, "add", "-A");
+    git(lane.cwd, "commit", "-qm", "chemin retors");
+    assert.deepEqual(laneChanges(root, "9a6766-W01", base), [saut]);
+  } finally {
+    done();
+  }
+});
+
 // Le diff de la lane est contre sa base, pas contre l'intégration : une lane
 // intégrée entre-temps ne doit pas grossir la review de la suivante.
 test("l'intégration d'une autre lane ne grossit pas la review", () => {

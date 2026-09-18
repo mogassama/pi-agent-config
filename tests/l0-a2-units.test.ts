@@ -141,7 +141,7 @@ regressionCorrigee("F5", "laneChanges distingue une lane sans changement d'une o
 
 // ============================================================ C-P1-F07 — chemins réels
 
-regression("C-P1-F07", "laneChanges rend les chemins réels, accents et espaces compris", () => {
+regressionCorrigee("C-P1-F07", "laneChanges rend les chemins réels, accents et espaces compris", () => {
   const root = suivre(depot("l0-f07-"));
   const { cwd } = ensureLane(root, "R-W03");
   writeFileSync(join(cwd, "src", "ascii.py"), "c = 1\n");

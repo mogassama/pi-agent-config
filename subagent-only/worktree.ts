@@ -202,12 +202,31 @@ export function laneChanges(root: string, laneId: string, base = "HEAD"): string
    * rien. Une lane sale prise pour propre libère son scope pendant que du travail y
    * dort.
    */
-  const { ok, out } = tryGit(cwd, ["diff", "--name-only", base]);
+  /*
+   * `-z`, pour la même raison que `treeState`, et une de plus.
+   *
+   * Sans `-z`, git cite et échappe tout chemin non-ASCII : `src/été.py` revient
+   * `"src/\303\251t\303\251.py"`, qui ne nomme aucun fichier. Ça, `core.quotePath=false`
+   * le réparerait. Mais un chemin qui CONTIENT un saut de ligne est alors découpé en
+   * deux entrées dont aucune n'existe, et aucune option ne répare ça : seul un
+   * séparateur qu'un nom de fichier ne peut pas contenir le peut. Un chemin mal lu
+   * n'est pas un détail d'affichage — c'est une écriture de lane que la revue ne voit
+   * pas, et un scope débordé qui passe.
+   *
+   * Sous `--porcelain -z`, chaque record vaut `XY chemin`, et un renommage émet ses
+   * deux chemins comme deux records séparés — d'où le découpage de l'en-tête à trois
+   * caractères seulement quand il est là, exactement comme dans `treeState`.
+   */
+  const { ok, out } = tryGit(cwd, ["diff", "--name-only", "-z", base]);
   if (!ok) throw new Error(`lane inobservable : git diff a échoué sur ${laneId}`);
-  const committed = out.split("\n").filter(Boolean);
-  const dirty = tryGit(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+  const committed = out.split("\0").filter(Boolean);
+  const dirty = tryGit(cwd, ["status", "--porcelain", "-z", "--untracked-files=all"]);
   if (!dirty.ok) throw new Error(`lane inobservable : git status a échoué sur ${laneId}`);
-  const working = dirty.out.split("\n").filter(Boolean).map((l) => l.slice(3)).filter(Boolean);
+  const working = dirty.out
+    .split("\0")
+    .filter(Boolean)
+    .map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r))
+    .filter(Boolean);
   return [...new Set([...committed, ...working])].sort();
 }
 

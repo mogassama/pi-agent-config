@@ -386,5 +386,20 @@
         "replace": "  const working = dirty.ok\n    ? dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean)\n    : []; // mutant"
       }
     ]
+  },
+  {
+    "test": "L0 REG C-P1-F07 — laneChanges rend les chemins réels, accents et espaces compris",
+    "edits": [
+      {
+        "file": "subagent-only/worktree.ts",
+        "find": "  const dirty = tryGit(cwd, [\"status\", \"--porcelain\", \"-z\", \"--untracked-files=all\"]);",
+        "replace": "  const dirty = tryGit(cwd, [\"status\", \"--porcelain\", \"--untracked-files=all\"]); // mutant"
+      },
+      {
+        "file": "subagent-only/worktree.ts",
+        "find": "  const working = dirty.out\n    .split(\"\\0\")\n    .filter(Boolean)\n    .map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r))\n    .filter(Boolean);",
+        "replace": "  const working = dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean); // mutant"
+      }
+    ]
   }
 ]
