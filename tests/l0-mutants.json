@@ -377,13 +377,13 @@
     "edits": [
       {
         "file": "subagent-only/worktree.ts",
-        "find": "  if (!ok) throw new Error(`lane inobservable : git diff a échoué sur ${laneId}`);\n  const committed = out.split(\"\\n\").filter(Boolean);",
-        "replace": "  const committed = ok ? out.split(\"\\n\").filter(Boolean) : []; // mutant"
+        "find": "  if (!ok) throw new Error(`lane inobservable : git diff a échoué sur ${laneId}`);\n  const committed = out.split(\"\\0\").filter(Boolean);",
+        "replace": "  const committed = ok ? out.split(\"\\0\").filter(Boolean) : []; // mutant"
       },
       {
         "file": "subagent-only/worktree.ts",
-        "find": "  if (!dirty.ok) throw new Error(`lane inobservable : git status a échoué sur ${laneId}`);\n  const working = dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean);",
-        "replace": "  const working = dirty.ok\n    ? dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean)\n    : []; // mutant"
+        "find": "  if (!dirty.ok) throw new Error(`lane inobservable : git status a échoué sur ${laneId}`);\n  const working = dirty.out\n    .split(\"\\0\")\n    .filter(Boolean)\n    .map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r))\n    .filter(Boolean);",
+        "replace": "  const working = dirty.ok\n    ? dirty.out.split(\"\\0\").filter(Boolean).map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r)).filter(Boolean)\n    : []; // mutant"
       }
     ]
   },
@@ -401,5 +401,23 @@
         "replace": "  const working = dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean); // mutant"
       }
     ]
+  },
+  {
+    "test": "L0 REG F9 — ensureLane sur une branche connue rend la base de la branche, pas HEAD de la racine",
+    "file": "subagent-only/worktree.ts",
+    "find": "  const resolu = known ? tete : tryGit(root, [\"rev-parse\", \"--verify\", base]);",
+    "replace": "  const resolu = tryGit(root, [\"rev-parse\", \"--verify\", base]); // mutant : la racine prime sur la branche"
+  },
+  {
+    "test": "L0 REG C-P1-F05b — une lane dont HEAD n'est plus sa base, sans FROZEN, est refusée avant revue et sans reset",
+    "file": "extensions/subagent/index.ts",
+    "find": "          const ecart = laneHorsProvenance(unit, lane.laneId);",
+    "replace": "          const ecart = undefined; void laneHorsProvenance; // mutant : la provenance ne refuse plus"
+  },
+  {
+    "test": "L0 REG C-P1-F05b — une lane dont HEAD n'est plus sa base, sans FROZEN, est refusée avant revue et sans reset",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;",
+    "replace": "  if (frozenExact || integrated) return undefined; // mutant : un ancien INTEGRATED excuse toute tête future"
   }
 ]

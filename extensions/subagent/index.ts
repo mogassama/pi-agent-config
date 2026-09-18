@@ -692,6 +692,86 @@ function noterOuverture(unit: string, lease: Lease, base: string | undefined): v
   );
 }
 
+/**
+ * La lane a-t-elle avancé hors de sa provenance enregistrée ?
+ *
+ * Un worker écrit dans son worktree et ne commite pas : figer est une étape de
+ * l'intégration, pas une commodité du worker. Une lane dont la tête a bougé sans
+ * `FROZEN` exact ni intégration confirmée a donc une histoire que le registre ne raconte
+ * pas — et la reviewer à qui on la donnerait jugerait un changement dont personne ne
+ * sait d'où il part. Le diff se compte depuis la base ouverte ; si la tête n'est plus
+ * dessus et qu'aucune preuve exacte ne l'explique, la frontière de revue est fausse
+ * avant même d'être calculée.
+ *
+ * Le refus est un refus, pas une réparation : `git reset` remettrait la branche sur sa
+ * base et **détruirait** le commit de l'enfant. Ce qu'on ne sait pas situer se tranche
+ * par un opérateur, jamais par un rollback silencieux.
+ *
+ * Le registre est relu ICI plutôt que pris d'un instantané : entre la reconstruction et
+ * cet appel, une autre session a pu figer la lane, et refuser sur une vue périmée
+ * bloquerait une revue légitime.
+ */
+function laneHorsProvenance(unit: string, laneId: string): string | undefined {
+  const lu = readLaneEvents(RUN_DIR, RUN_ID);
+  /*
+   * La boucle, et non `.find()`.
+   *
+   * `LaneEvent` est l'union v1|v2, et `base` n'appartient qu'à `OPENED`. Le prédicat
+   * d'un `.find()` ne restreint pas le type de ce qu'il rend : `ouverture.base` y est un
+   * accès à une propriété que l'union ne porte pas, et S4 l'a refusé — deux diagnostics
+   * nouveaux. La comparaison du discriminant DANS la boucle, elle, restreint ; c'est la
+   * forme qu'emploie déjà `lane-observe.ts` pour lire exactement la même chose.
+  */
+  let base: string | undefined;
+  for (const e of lu.events) {
+    if (e.event === "OPENED" && e.work_unit === unit && typeof e.base === "string") {
+      // Sous v2, l'unité peut avoir plusieurs générations : seule l'ouverture de
+      // cette lane fait autorité. Sous v1 il n'existe pas de champ `lane` et l'unité
+      // reste l'identité legacy unique.
+      if ("lane" in e && e.lane !== laneId) continue;
+      base = e.base;
+      break;
+    }
+  }
+  // Sans ouverture enregistrée, il n'y a pas de provenance à contredire : ce cas-là est
+  // celui des orphelines, que la porte de reprise nomme déjà.
+  if (base === undefined) return undefined;
+  const root = process.cwd();
+  // Branche absente : rien n'a avancé, donc rien à refuser.
+  const tete = laneTip(root, laneId);
+  if (tete === undefined || tete === base) return undefined;
+
+  /*
+   * Un événement ne suffit pas par son seul nom : il doit expliquer CETTE tête.
+   *
+   * Sous v1, `INTEGRATED` ne porte pas l'identité de lane. Git complète alors la
+   * preuve : la branche doit avoir produit au moins un commit depuis sa base ET sa tête
+   * courante doit être ancêtre de HEAD. Une intégration ancienne n'excuse donc jamais
+   * un commit ajouté ensuite sur la branche. Sous v2, l'enveloppe doit en plus nommer la
+   * lane courante.
+   *
+   * `FROZEN`, quand le LOT 9 l'écrira, porte déjà les deux éléments exacts : la lane et
+   * le commit gelé. Accepter seulement leur égalité évite qu'un gel ancien dispense
+   * toutes les têtes futures de provenance.
+   */
+  let integrated = false;
+  let frozenExact = false;
+  for (const e of lu.events) {
+    if (e.work_unit !== unit) continue;
+    if (e.event === "INTEGRATED") {
+      if (!("lane" in e) || e.lane === laneId) integrated = true;
+    } else if (e.event === "FROZEN" && e.lane === laneId && e.commit === tete) {
+      frozenExact = true;
+    }
+  }
+  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;
+
+  return (
+    `la lane de ${unit} est en ${tete.slice(0, 7)}, sa base enregistrée est ` +
+    `${base.slice(0, 7)}, et aucun FROZEN exact ni INTEGRATED confirmé n'explique l'écart`
+  );
+}
+
 function reconstruire(): void {
   /*
    * La fenêtre de mesure : avant la première lecture, après la seconde
@@ -2060,6 +2140,33 @@ export default function (pi: ExtensionAPI) {
                   `son ouverture n'a pas pu être écrite au registre — ${quoi}\n` +
                   `Il apparaîtra comme « worktree-orphelin » à la prochaine lecture : ` +
                   `l'adopter ou le retirer avec bin/subagent-recover.`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        /*
+         * Avant de calculer quoi que ce soit : la lane est-elle encore là où son
+         * ouverture la situe ?
+         *
+         * La frontière de revue se compte depuis la base ouverte. Une tête qui a bougé
+         * sans gel la rend fausse, et la calculer d'abord reviendrait à mesurer un
+         * changement depuis un point qui n'est plus. Le refus précède donc le calcul,
+         * la délégation, et toute écriture — la lane et sa branche sont conservées
+         * telles quelles.
+         */
+        if (unit && !roleGlobal && params.agent === "reviewer" && lane?.laneId) {
+          const ecart = laneHorsProvenance(unit, lane.laneId);
+          if (ecart) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `Refused: ${ecart}.\n` +
+                  `Rien n'a été modifié : la branche et le worktree sont conservés. Un commit ` +
+                  `que le registre n'explique pas se tranche avec bin/subagent-recover, pas par ` +
+                  `un rollback.`,
               }],
               isError: true,
             };

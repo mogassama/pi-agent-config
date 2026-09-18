@@ -123,10 +123,6 @@ export function ensureLane(
   const branch = laneBranch(laneId);
   if (existsSync(cwd)) return { cwd, branch, created: false };
 
-  const known = tryGit(root, ["rev-parse", "--verify", branch]).ok;
-  const args = known
-    ? ["worktree", "add", cwd, branch]
-    : ["worktree", "add", "-b", branch, cwd, base];
   /*
    * Le commit d'où **cette lane** part, résolu avant de la créer.
    *
@@ -135,11 +131,35 @@ export function ensureLane(
    * du run y trouve ceux de l'unité précédente, et une lane qui n'a rien fait
    * passe pour intégrée. Le défaut d'origine, simplement retardé jusqu'au
    * premier merge.
+   *
+   * ET LA BRANCHE PRIME SUR LA RACINE, quand elle existe déjà.
+   *
+   * Une branche de lane survit au retrait de son worktree : c'est le contrat. À la
+   * reprise, `git worktree add <cwd> <branche>` repart donc de la TÊTE DE LA BRANCHE,
+   * pendant que la racine a pu avancer. Résoudre `base` — `HEAD` par défaut — rendait
+   * alors un commit que cette lane n'a jamais eu, et l'`OPENED` écrit avec lui aurait
+   * menti sur sa provenance : le diff de la lane se compterait depuis un point qui
+   * n'est pas le sien, et le travail d'une autre unité entrerait dans sa revue.
+   *
+   * `created` suit la même vérité : la lane n'est pas créée, elle est retrouvée. Seul
+   * son répertoire de travail est neuf, et c'est `created` qui commande d'écrire un
+   * `OPENED` — en le laissant à `true` ici, on en écrirait un second pour une lane qui
+   * n'a été ouverte qu'une fois.
    */
-  const resolu = tryGit(root, ["rev-parse", "--verify", base]);
+  const tete = tryGit(root, ["rev-parse", "--verify", branch]);
+  const known = tete.ok;
+  const args = known
+    ? ["worktree", "add", cwd, branch]
+    : ["worktree", "add", "-b", branch, cwd, base];
+  const resolu = known ? tete : tryGit(root, ["rev-parse", "--verify", base]);
   const added = tryGit(root, args);
   if (!added.ok) throw new Error(`worktree ${laneId}: ${added.out.trim()}`);
-  return { cwd, branch, created: true, base: resolu.ok ? resolu.out.trim() : undefined };
+  return {
+    cwd,
+    branch,
+    created: !known,
+    base: resolu.ok ? resolu.out.trim() : undefined,
+  };
 }
 
 /**

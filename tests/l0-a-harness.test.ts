@@ -246,7 +246,7 @@ couverture("C-P1-F04-m10", "une revue après un worker qui n'a rien écrit est r
 
 // ================================================================== C1.6 — C-P1-F05b
 
-regression("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FROZEN, est refusée avant revue et sans reset", async () => {
+regressionCorrigee("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FROZEN, est refusée avant revue et sans reset", async () => {
   // Scope a.py + b.py : le commit de l'enfant reste dans le scope, pour qu'aucune
   // porte de scope ne puisse rendre cette preuve verte à la place de C1.6.
   const h = await monter({
@@ -275,6 +275,80 @@ regression("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FROZEN, est
     propriete(lire(h.root, "src/a.py") === "a = 1" && lire(h.root, "src/b.py") === "b = 1", "la racine doit rester inchangée");
     propriete(lanes(h.root).includes(laneId), "la lane doit être conservée");
   } finally { h.fin(); }
+
+  /*
+   * Contre-exemple de l'exception INTEGRATED.
+   *
+   * L'intégration légitime fait avancer la branche au-delà de sa base et doit être
+   * admise : c'est ce qui maintient B3 mordante. Mais son événement ne donne pas un
+   * blanc-seing à toutes les têtes futures. Après un nouveau commit non intégré, la
+   * branche n'est plus ancêtre de HEAD ; la même garde doit donc refuser avant revue.
+   */
+  const h2 = await monter({
+    version: 1,
+    work_units: [
+      { id: "W03", goal: "g", depends_on: [], expected_write_scope: ["src/a.py"] },
+      { id: "W09", goal: "g", depends_on: [], expected_write_scope: ["src/b.py"] },
+    ],
+  });
+  try {
+    PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
+    await h2.outil.execute("1", tache("W03"));
+    PILOTE.pendant = undefined;
+    await h2.outil.execute("2", revue("W03"));
+    PILOTE.resultat = undefined;
+    precondition(
+      evenements(h2).some((e) => e.event === "INTEGRATED" && e.work_unit === "W03"),
+      "la première tentative doit être intégrée et enregistrée",
+    );
+    precondition(lire(h2.root, "src/a.py") === "a = 2", "la première intégration doit être dans la racine");
+
+    const laneId = `${h2.runId}-W03`;
+    const branche = `pi-lane/${laneId}`;
+    const shaIntegre = git(h2.root, "rev-parse", branche).trim();
+    /*
+     * La branche avancée par une main extérieure, et pas par un worker de reprise.
+     *
+     * Mesuré, et c'est ce qui décide de la forme de ce cas : après l'intégration, le
+     * runtime retire le worktree et conserve la branche. Aucune reprise ne peut alors
+     * faire avancer cette branche ET atteindre une revue — trois gardes ANTÉRIEURES à
+     * la provenance l'interceptent : un worktree sale sous une unité intégrée est
+     * « residu-sale » et la porte de reprise refuse ; un worker qui commit tout laisse
+     * l'arbre propre, rapporte `changedFiles: []`, et la garde de changement matériel
+     * refuse ; et la réouverture d'une unité déjà intégrée casse sur `noterOuverture`,
+     * faute de base. Une branche avancée hors du run — autre session, opérateur,
+     * script — est le seul chemin qui mène la tête déplacée jusqu'à cette garde, et
+     * c'est aussi le cas qu'elle existe pour attraper.
+     */
+    const dehors = mkdtempSync(join(tmpdir(), "pi-l0a-dehors-"));
+    git(h2.root, "worktree", "add", "-q", dehors, branche);
+    writeFileSync(join(dehors, "src", "a.py"), "a = 3\n");
+    git(dehors, "add", "-A");
+    git(dehors, "commit", "-qm", "commit postérieur à INTEGRATED");
+    git(h2.root, "worktree", "remove", "--force", dehors);
+    const shaAvant = git(h2.root, "rev-parse", branche).trim();
+    precondition(shaAvant !== shaIntegre, "la branche doit avoir avancé au-delà du commit intégré");
+
+    /*
+     * Un worker sur une AUTRE unité, et il est nécessaire : la garde de changement
+     * matériel lit l'historique du run, pas celui de l'unité. Sans écriture rapportée
+     * depuis la dernière revue, elle refuserait celle-ci en amont et le cas serait vert
+     * sans jamais atteindre la provenance.
+     */
+    PILOTE.pendant = ecrire("src/b.py", "b = 2\n");
+    await h2.outil.execute("3", tache("W09"));
+    PILOTE.pendant = undefined;
+    precondition(compter("worker") === 2, "le worker de W09 doit être admis");
+
+    await h2.outil.execute("4", revue("W03"));
+    PILOTE.resultat = undefined;
+    propriete(
+      compter("reviewer") === 1,
+      `INTEGRATED ne doit pas excuser un commit postérieur non intégré ; lancés : ${agents().join(", ")}`,
+    );
+    propriete(git(h2.root, "rev-parse", branche).trim() === shaAvant, "la branche ne doit pas bouger");
+    propriete(lire(h2.root, "src/a.py") === "a = 2", "le commit postérieur ne doit pas atteindre la racine");
+  } finally { h2.fin(); }
 });
 
 // ================================================================== C3 — violations

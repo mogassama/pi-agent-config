@@ -162,7 +162,7 @@ regressionCorrigee("C-P1-F07", "laneChanges rend les chemins réels, accents et 
 
 // ============================================================ F9 — base d'une lane reprise
 
-regression("F9", "ensureLane sur une branche connue rend la base de la branche, pas HEAD de la racine", () => {
+regressionCorrigee("F9", "ensureLane sur une branche connue rend la base de la branche, pas HEAD de la racine", () => {
   const root = suivre(depot("l0-f9-"));
   const premiere = ensureLane(root, "R-W03");
   const teteBranche = git(root, "rev-parse", "pi-lane/R-W03").trim();
