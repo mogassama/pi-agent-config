@@ -332,5 +332,38 @@
       }
     ],
     "runs": 20
+  },
+  {
+    "test": "L0 PRES B3-jamais-deux-merges — une unité déjà intégrée ne se remerge pas après rechargement",
+    "edits": [
+      {
+        "file": "subagent-only/lane-ledger.ts",
+        "find": "      case \"INTEGRATED\":\n        etats.set(e.work_unit, \"integrated\");\n        break;",
+        "replace": "      case \"INTEGRATED\":\n        etats.delete(e.work_unit);\n        break;"
+      },
+      {
+        "file": "subagent-only/lane-observe.ts",
+        "find": ".filter(([u, b]) => isMerged(root, `${runId}-${u}`, b))",
+        "replace": ".filter(() => false)"
+      },
+      {
+        "file": "subagent-only/lane-observe.ts",
+        "find": "    runBranches: runBranches(root, runId),",
+        "replace": "    runBranches: [],"
+      }
+    ],
+    "control": [
+      {
+        "file": "subagent-only/lane-ledger.ts",
+        "find": "      case \"INTEGRATED\":\n        etats.set(e.work_unit, \"integrated\");\n        break;",
+        "replace": "      case \"INTEGRATED\":\n        etats.delete(e.work_unit);\n        break;"
+      },
+      {
+        "file": "subagent-only/lane-observe.ts",
+        "find": "    runBranches: runBranches(root, runId),",
+        "replace": "    runBranches: [],"
+      }
+    ],
+    "runs": 20
   }
 ]

@@ -402,10 +402,37 @@ preservation("B3-jamais-deux-merges", "une unité déjà intégrée ne se remerg
     // Une reprise après rechargement, puis une seconde : rien ne doit remerger.
     const neuve = await h.recharger();
     await issue(() => integrer(neuve, "W09", "b = 2", "2"));
-    // Une tentative complète sur une unité déjà intégrée : worker puis revue. Une simple
-    // revue serait refusée par la garde de streak, et le mutant ne mordrait pas.
+    /*
+     * Une tentative complète sur une unité déjà intégrée : worker puis revue. Une simple
+     * revue serait refusée par la garde de streak, et le mutant ne mordrait pas.
+     *
+     * Elle est écrite ici plutôt que confiée à `integrer`, parce que sa PRÉCONDITION lui
+     * est propre : le worker doit être ADMIS. `integrer` sert cinq autres preuves qui
+     * n'ont pas à porter cette exigence, et l'imposer dans le helper la rendrait globale.
+     *
+     * Pourquoi cette précondition. La propriété ne dit que « un seul merge, racine
+     * propre » — deux faits vrais de TOUT run qui refuse toute délégation. Sans elle, une
+     * mutation qui paralyse le run à la porte de reprise laisserait la preuve verte pour
+     * une raison étrangère à ce qu'elle affirme. Un worker admis établit que le run est
+     * vivant ; ce qui suit mesure alors quelque chose.
+     *
+     * Elle n'affirme rien sur la revue : sur l'objet intact, le refus de la revue par
+     * `residu-sale` est légitime, et c'est lui qui empêche le second merge.
+     */
     const encore = await neuve.recharger();
-    await issue(() => integrer(encore, "W03", "a = 3", "3"));
+    PILOTE.pendant = ecrire("src/a.py", "a = 3\n");
+    const worker: unknown = await encore.outil.execute("3a", tache("W03"));
+    PILOTE.pendant = undefined;
+    const admis =
+      typeof worker === "object" && worker !== null &&
+      (worker as { isError?: unknown }).isError === false;
+    precondition(
+      admis,
+      `le worker de la seconde tentative doit être admis — un run paralysé ne prouve rien ; ` +
+        `${JSON.stringify(worker).slice(0, 250)}`,
+    );
+    await issue(() => encore.outil.execute("3b", revue("W03")));
+    PILOTE.resultat = undefined;
 
     const mergesApres = mergesDe(encore.root, "W03");
     propriete(
