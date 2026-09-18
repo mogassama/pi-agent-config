@@ -112,7 +112,7 @@ test.after(() => { for (const d of jetable) rmSync(d, { recursive: true, force: 
 
 // ============================================================ C-P1-F08 · F5 — T1
 
-regression("C-P1-F08", "treeState distingue un arbre vide d'une observation impossible", () => {
+regressionCorrigee("C-P1-F08", "treeState distingue un arbre vide d'une observation impossible", () => {
   const propre = suivre(depot("l0-f08-"));
   const sansGit = neuf("l0-f08-nongit-");
   const observable = issue(() => treeState(propre));
@@ -124,7 +124,7 @@ regression("C-P1-F08", "treeState distingue un arbre vide d'une observation impo
   );
 });
 
-regression("F5", "laneChanges distingue une lane sans changement d'une observation impossible", () => {
+regressionCorrigee("F5", "laneChanges distingue une lane sans changement d'une observation impossible", () => {
   const root = suivre(depot("l0-f5-"));
   ensureLane(root, "R-W03");
   ensureLane(root, "R-W09");

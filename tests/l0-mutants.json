@@ -365,5 +365,26 @@
       }
     ],
     "runs": 20
+  },
+  {
+    "test": "L0 REG C-P1-F08 — treeState distingue un arbre vide d'une observation impossible",
+    "file": "subagent-only/tree.ts",
+    "find": "    throw new Error(\n      `arbre inobservable dans ${cwd} : ${err instanceof Error ? err.message : String(err)}`,\n    );",
+    "replace": "    return files; // mutant : l'inobservable se déguise en arbre propre"
+  },
+  {
+    "test": "L0 REG F5 — laneChanges distingue une lane sans changement d'une observation impossible",
+    "edits": [
+      {
+        "file": "subagent-only/worktree.ts",
+        "find": "  if (!ok) throw new Error(`lane inobservable : git diff a échoué sur ${laneId}`);\n  const committed = out.split(\"\\n\").filter(Boolean);",
+        "replace": "  const committed = ok ? out.split(\"\\n\").filter(Boolean) : []; // mutant"
+      },
+      {
+        "file": "subagent-only/worktree.ts",
+        "find": "  if (!dirty.ok) throw new Error(`lane inobservable : git status a échoué sur ${laneId}`);\n  const working = dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean);",
+        "replace": "  const working = dirty.ok\n    ? dirty.out.split(\"\\n\").filter(Boolean).map((l) => l.slice(3)).filter(Boolean)\n    : []; // mutant"
+      }
+    ]
   }
 ]

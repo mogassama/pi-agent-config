@@ -48,8 +48,22 @@ export function treeState(cwd: string): Map<string, string> {
     });
     const records = out.split("\0").filter(Boolean);
     names = records.map((r) => (/^[ MADRCU?!]{2} /.test(r) ? r.slice(3) : r)).filter(Boolean);
-  } catch {
-    return files;
+  } catch (err) {
+    /*
+     * Ne pas avoir pu regarder n'est pas avoir vu qu'il n'y a rien.
+     *
+     * Une Map vide rendue ici était indiscernable d'un arbre propre. Les deux appelants
+     * la comparent à un second instantané pour en déduire ce qu'un agent a écrit : un
+     * `git status` en échec rendait donc « rien n'a changé » sur un arbre que personne
+     * n'avait pu lire, et l'écriture d'un worker devenait invisible.
+     *
+     * L'appelant qui veut vraiment traiter l'inobservable comme du vide doit le dire, en
+     * attrapant. Aucun ne le fait aujourd'hui, et c'est la bonne valeur par défaut :
+     * l'échec remonte plutôt que de se déguiser en constat.
+     */
+    throw new Error(
+      `arbre inobservable dans ${cwd} : ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   for (const name of names) {
     let hash = GONE;

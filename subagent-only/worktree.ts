@@ -185,13 +185,29 @@ export function openLanes(root: string): string[] {
  */
 export function laneChanges(root: string, laneId: string, base = "HEAD"): string[] {
   const cwd = join(lanesDir(root), laneId);
+  /*
+   * Un worktree absent n'est PAS une observation impossible.
+   *
+   * Une lane sans répertoire de travail n'a rien écrit dans un répertoire de travail :
+   * c'est un fait connu, pas un trou. Le verbe `discard` d'une branche sans worktree en
+   * dépend — le rendre inobservable faisait échouer deux preuves d'un autre lot, ce que
+   * la mesure a montré avant que ce code ne soit écrit.
+   */
   if (!existsSync(cwd)) return [];
+  /*
+   * En revanche, git qui ne répond pas SUR UN WORKTREE EXISTANT est un trou, et il se
+   * dit. Les deux replis `: []` rendaient « la lane n'a rien écrit » quand la vérité
+   * était « je n'ai pas pu lire ce qu'elle a écrit ». C4.9 et T2 disent la même chose
+   * partout ailleurs : ne rien avoir pu observer n'est pas avoir observé qu'il n'y a
+   * rien. Une lane sale prise pour propre libère son scope pendant que du travail y
+   * dort.
+   */
   const { ok, out } = tryGit(cwd, ["diff", "--name-only", base]);
-  const committed = ok ? out.split("\n").filter(Boolean) : [];
+  if (!ok) throw new Error(`lane inobservable : git diff a échoué sur ${laneId}`);
+  const committed = out.split("\n").filter(Boolean);
   const dirty = tryGit(cwd, ["status", "--porcelain", "--untracked-files=all"]);
-  const working = dirty.ok
-    ? dirty.out.split("\n").filter(Boolean).map((l) => l.slice(3)).filter(Boolean)
-    : [];
+  if (!dirty.ok) throw new Error(`lane inobservable : git status a échoué sur ${laneId}`);
+  const working = dirty.out.split("\n").filter(Boolean).map((l) => l.slice(3)).filter(Boolean);
   return [...new Set([...committed, ...working])].sort();
 }
 

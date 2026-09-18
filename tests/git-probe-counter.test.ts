@@ -212,10 +212,17 @@ test("un lancement qui n'aboutit pas compte aussi : l'unité est l'invocation te
    * décision qu'un autre, et la borne haute est celle qu'on veut surveiller.
    *
    * L'écart est mesurable, donc il est écrit ici plutôt que sous-entendu.
+   *
+   * `treeState` LÈVE désormais sur un arbre inobservable, au lieu de rendre une Map vide
+   * (LOT 3, étape 1) : le compteur s'observe donc autour d'une tentative qui échoue. Ce
+   * que la preuve affirme n'a pas bougé d'un iota — une invocation tentée compte pour
+   * une, et l'oracle ne voit que les processus réels.
    */
   const absent = join(tmpdir(), "pi-probe-inexistant-0123456789");
   assert.equal(existsSync(absent), false);
-  const { lancements, delta } = sousOracle(() => treeState(absent));
+  const { lancements, delta } = sousOracle(() => {
+    try { treeState(absent); } catch { /* l'échec est le sujet : seul le compteur est mesuré */ }
+  });
   assert.equal(delta, 1, "une tentative, un incrément");
   assert.equal(lancements, 0, "et rien n'a tourné : l'oracle ne voit que les processus réels");
 });
