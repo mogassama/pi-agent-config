@@ -58,8 +58,9 @@ import {
 import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
 import {
   SchedulerInputError,
-  admit,
+  admettre,
   runLanes,
+  type Admission,
   type Candidate,
 } from "../../subagent-only/scheduler.js";
 import {
@@ -783,6 +784,27 @@ function ouvrirLanes(unites: readonly string[], lease: Lease): Map<string, Ouver
   const ouvertes = allocateLanes(RUN_DIR, lease, (lu) => unites.map((u) => deciderLane(u, lu)));
   for (const o of ouvertes) OPEN_UNITS.add(o.lane.workUnitId);
   return new Map(ouvertes.map((o) => [o.lane.workUnitId, o]));
+}
+
+/**
+ * Le contexte d'admission de l'appel, sur les projections que la reconstruction vient de
+ * poser (PLAN-LOT4 § 4, L4-Q3) — jamais sur le registre brut.
+ *
+ * `joins` est la décision ouvre/rejoint de l'appel, prise une fois par l'appelant et
+ * transmise telle quelle au chemin simple, au pré-filtre du lot et à `runLanes`.
+ * `owners` est une copie : l'ouverture des lanes d'un lot ajoute ses unités à `OPEN_UNITS`
+ * après la décision, et ne doit pas la réécrire en cours de route.
+ */
+function contexteAdmission(joins: ReadonlySet<string>): Admission {
+  const planifie = plan();
+  const units = planifie.status === "usable" ? planifie.units : [];
+  return {
+    units,
+    integrated: INTEGRATED,
+    collide: scopesCollide,
+    owners: units.filter((u) => OPEN_UNITS.has(u.id)),
+    joins,
+  };
 }
 
 /**
@@ -2201,6 +2223,49 @@ export default function (pi: ExtensionAPI) {
         }
 
         /*
+         * Ouvre ou rejoint : décidé ICI, une fois, pour toutes les unités de l'appel
+         * (PLAN-LOT4 § 4).
+         *
+         * Après la reconstruction et ses portes fail-closed : `OPEN_UNITS` et `INTEGRATED`
+         * sont les projections réconciliées de cet appel. Une unité qui n'est dans aucune
+         * des deux ouvrira une lane — jamais ouverte, ou génération suivant un ABANDONED —
+         * et c'est exactement ce que `deciderLane` conclura : une unité ouverte au registre
+         * sans worktree, ou l'inverse, est un conflit qui a déjà fermé le run plus haut.
+         * Une lane ouverte, ou la lane historique d'une unité intégrée, se rejoint sans
+         * admission (C1.5).
+         */
+        const unitesLiees = !isLaneBound(roleJoue)
+          ? []
+          : hasBatch
+            ? (params.batch as unknown as ReadonlyArray<{ work_unit: string }>).map((b) => b.work_unit)
+            : unit ? [unit] : [];
+        const jonctions: ReadonlySet<string> = new Set(
+          unitesLiees.filter((u) => OPEN_UNITS.has(u) || INTEGRATED.has(u)),
+        );
+
+        /*
+         * L'admission du chemin simple (C1.5, C-P1-F02), sur la décision commune.
+         *
+         * Avant la séquence, la lane, l'OPENED et toute délégation : un refus ne laisse
+         * rien derrière lui. Aucun `await` d'ici à `ouvrirLanes` : la décision et
+         * l'ouverture tiennent dans le même tour du processus, et le bail exclut les autres.
+         * Un appel simple ne met rien en file : « EN FILE » dit l'issue d'admission, et
+         * « rien n'est parti » ce qu'il en a été.
+         */
+        if (!hasBatch && unit && unitesLiees.length > 0 && plan().status === "usable") {
+          const admission = contexteAdmission(jonctions);
+          const tache = (params as unknown as { task?: string }).task ?? "";
+          const decision = admettre({ workUnitId: unit, task: tache }, admission, admission.owners ?? []);
+          if (decision.issue !== "admise") {
+            const texte = decision.issue === "refusee"
+              ? `REFUSÉE : ${decision.reason}`
+              : `EN FILE : ${decision.reason} — rien n'est parti`;
+            logRefusal(RUN_ID, agent.name, texte);
+            return { content: [{ type: "text" as const, text: texte }], isError: true };
+          }
+        }
+
+        /*
          * Le bilan de reprise, dit une seule fois.
          *
          * Une session qui reprend un run interrompu doit savoir sur quoi elle
@@ -2485,15 +2550,10 @@ export default function (pi: ExtensionAPI) {
             task: b.task,
           }));
           const rows: DelegationRecord[] = [];
-          const admission = {
-            units: plan().units,
-            integrated: INTEGRATED,
-            collide: scopesCollide,
-            // Toute lane ouverte et non intégrée possède encore ses fichiers,
-            // y compris celles d'un appel précédent : le scheduler ne les
-            // verrait pas autrement.
-            owners: plan().units.filter((u) => OPEN_UNITS.has(u.id)),
-          };
+          // Toute lane ouverte et non intégrée possède encore ses fichiers, y compris
+          // celles d'un appel précédent : le scheduler ne les verrait pas autrement.
+          // `jonctions` est la décision ouvre/rejoint prise plus haut, transmise telle quelle.
+          const admission = contexteAdmission(jonctions);
           /*
            * Les lanes du lot, allouées en UNE section critique sous R (PLAN-LOT3 § 4).
            *
@@ -2505,12 +2565,8 @@ export default function (pi: ExtensionAPI) {
            */
           let lanesDuLot = new Map<string, OuvertureDeLane>();
           if (new Set(candidates.map((c) => c.workUnitId)).size === candidates.length) {
-            const partantes = candidates.flatMap((c) => {
-              const v = admit(c, admission);
-              if (!v.ok) return [];
-              const bloquee = admission.owners.some((o) => o.id !== v.unit.id && scopesCollide(o, v.unit));
-              return bloquee ? [] : [c.workUnitId];
-            });
+            const partantes = candidates.flatMap((c) =>
+              admettre(c, admission, admission.owners ?? []).issue === "admise" ? [c.workUnitId] : []);
             try {
               lanesDuLot = ouvrirLanes(partantes, lease);
             } catch (err) {

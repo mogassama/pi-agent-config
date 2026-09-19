@@ -18,7 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
-import { readManifest } from "../subagent-only/run-manifest.ts";
+import { planHash, readLaneEvents, readManifest } from "../subagent-only/run-manifest.ts";
+import { observeLanes } from "../subagent-only/lane-observe.ts";
 import { loadAgents } from "../subagent-only/agents.ts";
 import { buildSpawnPlan } from "../subagent-only/spawn-args.ts";
 
@@ -95,8 +96,9 @@ async function charger(root: string) {
   generation += 1;
   const module = await import(`../extensions/subagent/index.ts?l0a2=${generation}`);
   let outil: { execute: (id: string, params: unknown, ctx?: unknown) => Promise<unknown> } | undefined;
+  const handlers = new Map<string, (...a: unknown[]) => unknown>();
   module.default({
-    on: () => {},
+    on: (nom: string, h: (...a: unknown[]) => unknown) => { handlers.set(nom, h); },
     registerTool: (t: unknown) => { outil = t as typeof outil; },
     registerCommand: () => {},
     ui: { setStatus: () => {}, setFooter: () => {} },
@@ -108,6 +110,7 @@ async function charger(root: string) {
     runDir: join(root, RUNS),
     runId: manifeste!.runId,
     outil: outil!,
+    evenement: (nom: string) => handlers.get(nom),
     fin: () => { process.chdir(REPO); rmSync(root, { recursive: true, force: true }); },
   };
 }
@@ -256,6 +259,101 @@ preservation("C-P1-F02", "un rework et sa revue rejoignent la lane déjà ouvert
     PILOTE.resultat = undefined;
     propriete(compter("reviewer") === 2, "la revue du rework doit être admise elle aussi");
   } finally { h.fin(); }
+});
+
+/**
+ * Le plan de la préservation sœur : identique à `PLAN`, sauf que W09 dépend de W03.
+ */
+const PLAN_W09_DEPEND_DE_W03 = {
+  version: 1,
+  work_units: PLAN.work_units.map((u) => (u.id === "W09" ? { ...u, depends_on: ["W03"] } : u)),
+};
+
+/**
+ * Fixture d'état historique (PLAN-LOT4 § 2, L4-Q1) — pas une procédure offerte à l'opérateur.
+ *
+ * Une lane ouverte dont l'unité ne serait plus admissible à l'ouverture : le runtime corrigé
+ * ne sait pas la fabriquer, c'est ce qu'il empêche. On l'obtient en fermant la session puis
+ * en présentant au redémarrage un plan où W09 dépend de W03, avec le `planHash` du texte
+ * exact écrit. Rien d'autre n'est touché : ni registre, ni worktree, ni branche.
+ */
+async function redemarrerAvecPlan(h: Awaited<ReturnType<typeof monter>>, plan: unknown) {
+  await h.evenement("session_shutdown")?.();
+  const textePlan = JSON.stringify(plan);
+  writeFileSync(join(h.runDir, `${h.runId}-plan.json`), textePlan);
+  const manifeste = readManifest(h.runDir)!;
+  writeFileSync(
+    join(h.runDir, "active-run.json"),
+    `${JSON.stringify({ ...manifeste, planHash: planHash(textePlan) }, null, 2)}\n`,
+  );
+  process.chdir(REPO);
+  return await charger(h.root);
+}
+
+preservation("C-P1-F02", "une lane déjà ouverte se rejoint même quand son unité ne serait plus admissible à l'ouverture", async () => {
+  const h = await monter();
+  let h2: Awaited<ReturnType<typeof monter>> | undefined;
+  try {
+    PILOTE.pendant = ecrire("src/b.py", "b = 2\n");
+    await h.outil.execute("1", tache("W09"));
+    PILOTE.pendant = undefined;
+    const laneId = `${h.runId}-W09-g1`;
+    precondition(lanes(h.root).includes(laneId), "la lane W09 doit être ouverte sous le premier plan");
+    precondition(compter("worker") === 1, "le premier worker de W09 doit être parti avant le redémarrage");
+
+    // Le redémarrage remet le relevé des appels à zéro : ce qui suit ne compte que la
+    // seconde session.
+    h2 = await redemarrerAvecPlan(h, PLAN_W09_DEPEND_DE_W03);
+    const charge = JSON.parse(readFileSync(join(h.runDir, `${h.runId}-plan.json`), "utf-8")) as typeof PLAN;
+    precondition(
+      (charge.work_units.find((u) => u.id === "W09")?.depends_on as string[] | undefined)?.includes("W03") === true &&
+        readManifest(h.runDir)?.planHash === planHash(JSON.stringify(PLAN_W09_DEPEND_DE_W03)),
+      "le plan autoritaire du redémarrage doit déclarer W09 depends_on W03, sous un planHash cohérent",
+    );
+    const lu = readLaneEvents(h.runDir, h.runId);
+    const vu = observeLanes({
+      root: h.root,
+      runId: h.runId,
+      laneRead: { events: lu.events, malformedLines: lu.malformedLines, version: lu.version, present: lu.present },
+    });
+    precondition(
+      !evenements(h).some((e) => e.event === "INTEGRATED") &&
+        vu.usable && !vu.snapshot.reconciliation.integrated.has("W03"),
+      "W03 ne doit pas être intégrée : aucun INTEGRATED au registre, W03 absente des intégrées du bilan",
+    );
+
+    PILOTE.pendant = ecrire("src/b.py", "b = 3\n");
+    const rework = await h2.outil.execute("2", {
+      agent: "worker",
+      batch: [{ work_unit: "W09", task: "reprendre W09" }],
+    });
+    PILOTE.pendant = undefined;
+    // Relevé avant la revue : une revue approuvée intègre, et l'intégration retire le worktree.
+    const lanesApresRework = lanes(h.root);
+    const revueW09 = await h2.outil.execute("3", revue("W09"));
+    PILOTE.resultat = undefined;
+
+    const ouvertures = evenements(h).filter((e) => e.event === "OPENED").length;
+    propriete(
+      compter("worker") === 1 && compter("reviewer") === 1,
+      `le rework par lot et sa revue doivent partir — deux workers et une revue au total ; ` +
+        `lancés depuis le redémarrage : ${agents().join(", ")} ; ` +
+        `rework : ${texte(rework)} ; revue : ${texte(revueW09)}`,
+    );
+    propriete(
+      APPELS[0]?.cwd === join(h.root, ".git", "pi-lanes", laneId),
+      "le rework doit travailler dans la lane existante de W09",
+    );
+    propriete(
+      JSON.stringify(lanesApresRework) === JSON.stringify([laneId]) && ouvertures === 1,
+      `une seule lane et un seul OPENED pour W09 ; lanes après le rework : ` +
+        `${JSON.stringify(lanesApresRework)}, OPENED : ${ouvertures}`,
+    );
+  } finally {
+    PILOTE.pendant = undefined;
+    PILOTE.resultat = undefined;
+    (h2 ?? h).fin();
+  }
 });
 
 // ============================================================ A-P1-F07a — câblage de role-guard

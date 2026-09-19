@@ -150,7 +150,7 @@ const ecrire = (rel: string, contenu: string) => (a: { cwd?: string }) => {
 
 // ================================================================== C1.5 — C-P1-F02
 
-regression("C-P1-F02", "le chemin simple refuse une unité dont la dépendance n'est pas intégrée", async () => {
+regressionCorrigee("C-P1-F02", "le chemin simple refuse une unité dont la dépendance n'est pas intégrée", async () => {
   const h = await monter({
     version: 1,
     work_units: [
@@ -166,7 +166,7 @@ regression("C-P1-F02", "le chemin simple refuse une unité dont la dépendance n
   } finally { h.fin(); }
 });
 
-regression("C-P1-F02", "le chemin simple refuse une unité dont le scope est détenu par une lane ouverte", async () => {
+regressionCorrigee("C-P1-F02", "le chemin simple refuse une unité dont le scope est détenu par une lane ouverte", async () => {
   const h = await monter({
     version: 1,
     work_units: [

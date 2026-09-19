@@ -433,5 +433,23 @@
     "file": "extensions/subagent/index.ts",
     "find": "  if (connue && !abandonnee) {",
     "replace": "  if (connue && !abandonnee && false) { // mutant F-generation-ordre : toute délégation alloue une génération"
+  },
+  {
+    "test": "L0 REG C-P1-F02 — le chemin simple refuse une unité dont la dépendance n'est pas intégrée",
+    "file": "subagent-only/scheduler.ts",
+    "find": "  const verdict = admit(candidate, ctx);",
+    "replace": "  const verdict = admit(candidate, { ...ctx, integrated: new Set(ctx.units.map((u) => u.id)) }); // mutant C-P1-F02 dépendance : toute dépendance tenue pour intégrée"
+  },
+  {
+    "test": "L0 REG C-P1-F02 — le chemin simple refuse une unité dont le scope est détenu par une lane ouverte",
+    "file": "subagent-only/scheduler.ts",
+    "find": "  const owner = owners.find((o) => o.id !== verdict.unit.id && ctx.collide(o, verdict.unit));",
+    "replace": "  const owner = owners.find((o) => false && o.id !== verdict.unit.id && ctx.collide(o, verdict.unit)); // mutant C-P1-F02 scope : collision ignorée"
+  },
+  {
+    "test": "L0 PRES C-P1-F02 — une lane déjà ouverte se rejoint même quand son unité ne serait plus admissible à l'ouverture",
+    "file": "subagent-only/scheduler.ts",
+    "find": "  if (ctx.joins?.has(candidate.workUnitId)) {",
+    "replace": "  if (false && ctx.joins?.has(candidate.workUnitId)) { // mutant C-P1-F02 jonction : l'admission est rejouée à toute jonction"
   }
 ]

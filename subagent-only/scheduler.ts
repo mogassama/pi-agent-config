@@ -89,6 +89,35 @@ export interface Admission {
    * rien connaître de git ni des chemins.
    */
   collide: (a: WorkUnit, b: WorkUnit) => boolean;
+  /**
+   * Les unités dont l'appel REJOINT une lane existante — ouverte, ou lane historique d'une
+   * unité intégrée — plutôt qu'il n'en ouvre une (C1.5, PLAN-LOT4 § 4).
+   *
+   * Décidé une fois par l'appelant, sur l'état qu'il vient de reconstruire, et transmis tel
+   * quel : ni ce module ni aucun autre appelant ne le recalcule. Absent, aucune candidate ne
+   * rejoint : toutes ouvrent, ce qui est le cas d'un lot sur des unités neuves.
+   */
+  joins?: ReadonlySet<string>;
+}
+
+/**
+ * L'issue d'une admission : une décision, trois réponses.
+ *
+ *     admise    l'unité peut partir : elle ouvre une lane admissible, ou elle rejoint la sienne
+ *     refusee   une faute d'admission — unité hors plan, dépendance non intégrée
+ *     detenue   une unité légale dont le scope est tenu par une autre lane : elle attend
+ *
+ * Une jonction légitime est une issue `admise`, pas un quatrième cas : ce qui la distingue
+ * est de ne pas avoir été jugée, pas d'avoir été jugée autrement.
+ */
+export type IssueAdmission =
+  | { issue: "admise"; unit: WorkUnit }
+  | { issue: "refusee"; reason: string }
+  | { issue: "detenue"; unit: WorkUnit; owner: WorkUnit; reason: string };
+
+/** La raison d'une attente sur scope, dite à l'identique par le lot et le chemin simple. */
+export function raisonDetenue(owner: WorkUnit): string {
+  return `scope détenu par ${owner.id}, pas encore intégrée`;
 }
 
 export interface LaneOutcome<T> {
@@ -133,6 +162,42 @@ export function admit(
     };
   }
   return { ok: true, unit };
+}
+
+/**
+ * L'admission d'une candidate, la même pour le chemin simple, le pré-filtre d'un lot et
+ * `runLanes` (PLAN-LOT4 § 3).
+ *
+ * Une candidate qui REJOINT sa lane (`ctx.joins`) est `admise` sans que ses dépendances ni
+ * ses collisions soient évaluées : l'admission s'applique à l'ouverture d'une lane, pas aux
+ * rôles qui la rejoignent (C1.5). Un rework dont l'unité ne serait plus admissible à
+ * l'ouverture — une lane ouverte avant que l'admission ne s'applique partout — reprend sa
+ * lane ; le refuser l'échouerait sans rien protéger, puisque la lane existe déjà.
+ *
+ * Une candidate qui OUVRE une lane — unité jamais ouverte, ou génération suivant un
+ * `ABANDONED` — passe `admit`, puis la collision contre `owners` : les unités qui détiennent
+ * un scope au moment de la décision. Une unité ne se bloque jamais sur elle-même.
+ *
+ * `owners` est passé à part et non lu dans `ctx` : `runLanes` fait évoluer le sien au fil de
+ * ses départs, et c'est ce contexte courant, et lui seul, qu'il fournit à la décision.
+ */
+export function admettre(
+  candidate: Candidate,
+  ctx: Admission,
+  owners: readonly WorkUnit[],
+): IssueAdmission {
+  if (ctx.joins?.has(candidate.workUnitId)) {
+    const unit = ctx.units.find((u) => u.id === candidate.workUnitId);
+    if (!unit) {
+      return { issue: "refusee", reason: `${candidate.workUnitId} ne figure pas dans le plan gelé` };
+    }
+    return { issue: "admise", unit };
+  }
+  const verdict = admit(candidate, ctx);
+  if (!verdict.ok) return { issue: "refusee", reason: verdict.reason };
+  const owner = owners.find((o) => o.id !== verdict.unit.id && ctx.collide(o, verdict.unit));
+  if (owner) return { issue: "detenue", unit: verdict.unit, owner, reason: raisonDetenue(owner) };
+  return { issue: "admise", unit: verdict.unit };
 }
 
 /**
@@ -188,15 +253,21 @@ export async function runLanes<T>(
 
   const outcomes = new Map<string, LaneOutcome<T>>();
   const waiting: Array<{ candidate: Candidate; unit: WorkUnit }> = [];
+  const owned: WorkUnit[] = [...(ctx.owners ?? [])];
 
+  /*
+   * Un refus est définitif pour l'appel ; une détention ne l'est pas, elle dépend des
+   * propriétaires du moment. Les deux viennent de la même décision (`admettre`), jamais
+   * d'un calcul à part.
+   */
   for (const c of candidates) {
-    const verdict = admit(c, ctx);
-    if (!verdict.ok) {
-      outcomes.set(c.workUnitId, { workUnitId: c.workUnitId, state: "refused", reason: verdict.reason });
+    const decision = admettre(c, ctx, owned);
+    if (decision.issue === "refusee") {
+      outcomes.set(c.workUnitId, { workUnitId: c.workUnitId, state: "refused", reason: decision.reason });
       continue;
     }
     outcomes.set(c.workUnitId, { workUnitId: c.workUnitId, state: "queued", reason: "" });
-    waiting.push({ candidate: c, unit: verdict.unit });
+    waiting.push({ candidate: c, unit: decision.unit });
   }
 
   /*
@@ -216,7 +287,6 @@ export async function runLanes<T>(
    * appel séparé — donc ce qui est possédé ici le reste jusqu'au retour.
    */
   const running = new Map<string, { unit: WorkUnit; done: Promise<string> }>();
-  const owned: WorkUnit[] = [...(ctx.owners ?? [])];
 
   const startable = (): number => {
     /*
@@ -231,24 +301,18 @@ export async function runLanes<T>(
      * L'ordre des candidats reste la règle de départage entre plusieurs
      * compatibles ; il ne l'est pas entre compatible et bloqué.
      */
-    return waiting.findIndex(({ unit }) => blockedBy(unit) === undefined);
+    return waiting.findIndex(({ candidate }) => admettre(candidate, ctx, owned).issue === "admise");
   };
 
-  /**
-   * Le propriétaire qui empêche cette unité de démarrer, s'il existe.
+  /*
+   * Une unité possède son scope **contre les autres**, jamais contre elle-même, et une
+   * candidate qui rejoint sa lane n'est pas rejugée : un rework reprend la même lane — même
+   * worktree, même branche, même état. Il est éligible immédiatement, et peut partager un
+   * lot avec une unité indépendante. Les deux règles vivent dans `admettre`.
    *
-   * Une unité possède son scope **contre les autres**, jamais contre
-   * elle-même : sinon un rework se bloquerait sur sa propre lane, alors que
-   * c'est exactement la même lane qu'il vient reprendre — même worktree, même
-   * branche, même état. Le rework est éligible immédiatement, et peut partager
-   * un lot avec une unité indépendante.
-   *
-   * Le propriétaire est nommé plutôt que constaté : pour l'orchestrateur, savoir
-   * quelle lane intégrer est ce qui lui permet d'agir, et « une lane non
-   * intégrée » ne le lui dit pas.
+   * Le propriétaire est nommé plutôt que constaté : pour l'orchestrateur, savoir quelle lane
+   * intégrer est ce qui lui permet d'agir, et « une lane non intégrée » ne le lui dit pas.
    */
-  const blockedBy = (unit: WorkUnit): WorkUnit | undefined =>
-    owned.find((o) => o.id !== unit.id && ctx.collide(o, unit));
 
   while (waiting.length > 0 || running.size > 0) {
     while (running.size < maxParallel) {
@@ -294,14 +358,10 @@ export async function runLanes<T>(
        * et non une faute d'admission, et la maquiller en refus enverrait
        * l'orchestrateur corriger un plan qui n'a rien.
        */
-      for (const { unit } of waiting) {
-        const owner = blockedBy(unit);
-        if (owner) {
-          outcomes.set(unit.id, {
-            workUnitId: unit.id,
-            state: "queued",
-            reason: `scope détenu par ${owner.id}, pas encore intégrée`,
-          });
+      for (const { candidate, unit } of waiting) {
+        const decision = admettre(candidate, ctx, owned);
+        if (decision.issue === "detenue") {
+          outcomes.set(unit.id, { workUnitId: unit.id, state: "queued", reason: decision.reason });
         }
       }
       if (owned.length === 0) {
