@@ -15,7 +15,7 @@ import {
   existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync,
   writeFileSync,
 } from "node:fs";
-import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1741,6 +1741,138 @@ test("écrivain : un registre v1 refuse toute ouverture et continue ses lanes", 
     assert.deepEqual(entete, { ledger: 1 });
     assert.deepEqual(abandon, { event: "ABANDONED", work_unit: "W03", at: "y", reason: "fin" });
     assert.equal(readManifest(dir)?.ledgers, undefined, "aucun témoin v2 pour un registre v1");
+  } finally {
+    done();
+  }
+});
+
+// ------------------------------------------------ l'allocation sous R, entre processus (étape 5)
+
+const RUN_MANIFEST = join(import.meta.dirname, "..", "subagent-only", "run-manifest.ts");
+const drapeaux = (): string[] =>
+  Number(process.versions.node.split(".")[0]) < 23 ? ["--experimental-strip-types"] : [];
+/** Un enfant qui exécute `code` (module ES) ; sa sortie est rendue entière. */
+function enfantR(code: string): Promise<{ status: number | null; sortie: string }> {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [...drapeaux(), "--input-type=module", "-e", code]);
+    let sortie = "";
+    p.stdout.setEncoding("utf-8");
+    p.stderr.setEncoding("utf-8");
+    p.stdout.on("data", (d: string) => { sortie += d; });
+    p.stderr.on("data", (d: string) => { sortie += d; });
+    p.on("close", (status: number | null) => resolve({ status, sortie }));
+  });
+}
+const attendreR = async (condition: () => boolean, msMax = 20_000): Promise<boolean> => {
+  for (let i = 0; i * 10 < msMax; i++) {
+    if (condition()) return true;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return condition();
+};
+/*
+ * La décision d'un enfant : rejoindre la lane courante de W03, ou allouer la suivante si
+ * elle est abandonnée. `signal` est écrit une fois la relecture faite, sous R ; `lache`
+ * doit exister pour que la décision rende.
+ */
+const decisionEnfant = (dir: string, runId: string, lease: Lease, signal: string, lache: string): string =>
+  `import * as fs from "node:fs";\n` +
+  `import { allocateLanes } from ${JSON.stringify(RUN_MANIFEST)};\n` +
+  `try {\n` +
+  `  const v = allocateLanes(${JSON.stringify(dir)}, ${JSON.stringify(lease)}, (lu) => {\n` +
+  `    const ouv = lu.events.filter((e) => e.event === "OPENED" && e.work_unit === "W03");\n` +
+  `    const der = ouv[ouv.length - 1];\n` +
+  `    const abandonnee = lu.events.some((e) => e.event === "ABANDONED" && e.lane === der.lane);\n` +
+  `    fs.writeFileSync(${JSON.stringify(signal)}, "");\n` +
+  `    while (!fs.existsSync(${JSON.stringify(lache)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);\n` +
+  `    if (!abandonnee) return [{ value: { lane: der.lane, nouvelle: false } }];\n` +
+  `    const g = der.generation + 1;\n` +
+  `    const lane = ${JSON.stringify(runId)} + "-W03-g" + g;\n` +
+  `    return [{ opened: { event: "OPENED", work_unit: "W03", at: "x", base: "b", lane, generation: g },\n` +
+  `      value: { lane, nouvelle: true } }];\n` +
+  `  });\n` +
+  `  console.log(JSON.stringify({ ok: v[0] }));\n` +
+  `} catch (e) { console.log(JSON.stringify({ err: e.constructor.name, message: e.message })); }`;
+
+/*
+ * R est acquis AVANT la relecture. Deux processus qui allouent la même unité abandonnée :
+ * le second attend le premier, relit l'état qu'il a publié, et rejoint sa lane au lieu
+ * d'en allouer une seconde fois la même génération.
+ */
+test("R : la décision concurrente relit l'état que le premier a publié", async () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "1", base: "b", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
+    appendLaneEvent(dir, { event: "ABANDONED", work_unit: "W03", at: "2", reason: "essai" }, bail);
+    const f = (n: string) => join(dir, n);
+    const a = enfantR(decisionEnfant(dir, m.runId, bail, f("dedans-A"), f("lache-A")));
+    assert.ok(await attendreR(() => existsSync(f("dedans-A"))), "A doit tenir R, relecture faite");
+    // B démarre pendant que A tient R ; sa propre décision passe dès qu'il y entre.
+    writeFileSync(f("lache-B"), "");
+    const b = enfantR(decisionEnfant(dir, m.runId, bail, f("dedans-B"), f("lache-B")));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(existsSync(f("dedans-B")), false, "B ne décide pas tant que A tient R");
+    writeFileSync(f("lache-A"), "");
+    const [ra, rb] = await Promise.all([a, b]);
+    const sa = JSON.parse(ra.sortie.trim().split("\n").pop()!);
+    const sb = JSON.parse(rb.sortie.trim().split("\n").pop()!);
+    assert.deepEqual(sa.ok, { lane: `${m.runId}-W03-g2`, nouvelle: true }, ra.sortie);
+    assert.deepEqual(sb.ok, { lane: `${m.runId}-W03-g2`, nouvelle: false }, `B doit rejoindre g2 : ${rb.sortie}`);
+    const ouvertures = readLaneEvents(dir, m.runId).events.filter((e) => e.event === "OPENED");
+    assert.equal(ouvertures.length, 2);
+  } finally {
+    done();
+  }
+});
+
+/*
+ * R est tenu jusqu'après le dernier OPENED. Un premier processus alloue un lot assez long
+ * pour que ses écritures durent ; un second, qui obtient R ensuite, relit le registre à
+ * l'entrée et à la sortie de sa propre section critique : rien ne doit s'y être écrit
+ * entre les deux.
+ */
+test("R : aucun OPENED d'une allocation ne s'écrit après que R est relâché", async () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    const f = (n: string) => join(dir, n);
+    const N = 150;
+    const premier =
+      `import * as fs from "node:fs";\n` +
+      `import { allocateLanes } from ${JSON.stringify(RUN_MANIFEST)};\n` +
+      `try {\n` +
+      `  allocateLanes(${JSON.stringify(dir)}, ${JSON.stringify(bail)}, () => {\n` +
+      `    fs.writeFileSync(${JSON.stringify(f("dedans-A"))}, "");\n` +
+      `    while (!fs.existsSync(${JSON.stringify(f("lache-A"))})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);\n` +
+      `    return Array.from({ length: ${N} }, (_, i) => ({ value: i, opened: { event: "OPENED", work_unit: "U" + i,\n` +
+      `      at: "x", base: "b", lane: ${JSON.stringify(m.runId)} + "-U" + i + "-g1", generation: 1 } }));\n` +
+      `  });\n` +
+      `  console.log("ok");\n` +
+      `} catch (e) { console.log("err " + e.message); }`;
+    const second =
+      `import * as fs from "node:fs";\n` +
+      `import { allocateLanes } from ${JSON.stringify(RUN_MANIFEST)};\n` +
+      `const p = ${JSON.stringify(laneLedgerPath(dir, m.runId))};\n` +
+      `const lire = () => fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : "";\n` +
+      `const v = allocateLanes(${JSON.stringify(dir)}, ${JSON.stringify(bail)}, () => {\n` +
+      `  const entree = lire();\n` +
+      `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);\n` +
+      `  return [{ value: { entree: entree.split("\\n").length, sortie: lire().split("\\n").length } }];\n` +
+      `});\n` +
+      `console.log(JSON.stringify(v[0]));`;
+    const a = enfantR(premier);
+    assert.ok(await attendreR(() => existsSync(f("dedans-A"))), "A doit tenir R");
+    const b = enfantR(second);
+    await new Promise((r) => setTimeout(r, 200));
+    writeFileSync(f("lache-A"), "");
+    const [ra, rb] = await Promise.all([a, b]);
+    assert.match(ra.sortie, /^ok/, ra.sortie);
+    const vu = JSON.parse(rb.sortie.trim().split("\n").pop()!);
+    assert.equal(vu.entree, vu.sortie, `le registre a changé pendant que B tenait R : ${rb.sortie}`);
+    assert.equal(vu.entree, N + 2, "B entre après le lot entier de A : en-tête, N lignes, fin");
   } finally {
     done();
   }

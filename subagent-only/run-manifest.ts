@@ -1325,41 +1325,115 @@ function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<st
 export function appendLaneEvent(dir: string, event: LaneWrite, lease: Lease): void {
   withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.work_unit}`);
-    const path = laneLedgerPath(dir, lease.runId);
-    if (!existsSync(path)) creerRegistreV2(dir, lease, path);
-    const lu = readLaneEvents(dir, lease.runId);
-    if (lu.malformedLines.length > 0) {
-      throw new RecoveryError(
-        `registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
-      );
-    }
-    if (lu.version === LANE_LEDGER_V2) {
-      appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
-      return;
-    }
-    if (lu.version !== LANE_LEDGER_VERSION) {
-      const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
-      throw new RecoveryError(
-        `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
-      );
-    }
-    if (event.event === "OPENED") {
-      throw new LegacyLaneLedgerError(
-        `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : aucune nouvelle lane ne ` +
-          "s'ouvre dans un run legacy ; le terminer ou l'abandonner, puis ouvrir un nouveau run",
-      );
-    }
-    const legacy: LaneEventV1 = event.event === "INTEGRATED"
-      ? {
-        event: "INTEGRATED", work_unit: event.work_unit, at: event.at,
-        ...(event.integration_commit ? { integration_commit: event.integration_commit } : {}),
-      }
-      : {
-        event: "ABANDONED", work_unit: event.work_unit, at: event.at,
-        ...(event.reason ? { reason: event.reason } : {}),
-      };
-    appendFileSync(path, `${JSON.stringify(legacy)}\n`);
+    ajouterSousR(dir, event, lease);
   });
+}
+
+/**
+ * Une lane dont l'artefact existe et dont l'ouverture n'a pas pu être enregistrée.
+ *
+ * C0 la classe inconnue : un worktree sans `OPENED`, que la lecture suivante nommera
+ * « worktree-orphelin » et qu'un opérateur tranchera. Distincte d'un échec de création,
+ * parce que ce que l'opérateur doit faire n'est pas le même.
+ */
+export class LaneOpeningNotRecordedError extends RecoveryError {}
+
+/** Une décision d'allocation : l'ouverture à enregistrer s'il y en a une, et ce qu'elle rend. */
+export interface LaneAllocation<T> {
+  opened?: Extract<LaneWrite, { event: "OPENED" }>;
+  value: T;
+}
+
+/**
+ * Allouer des lanes sous l'exclusion R du run, en une seule section critique.
+ *
+ * L'ordre est celui de PLAN-LOT3 § 4 et il n'est pas décoratif :
+ *
+ *   acquérir R → relire le registre → décider et créer les artefacts → écrire les OPENED
+ *   (et le témoin d'un registre neuf) → relâcher R
+ *
+ * Relire AVANT d'avoir R laisserait deux processus décider sur le même instantané ; relâcher
+ * R entre l'artefact et son `OPENED` laisserait un second décider sans voir le premier. Un
+ * lot passe par UNE acquisition : ses décisions voient toutes le même état, et personne ne
+ * s'intercale entre elles.
+ *
+ * `decide` reçoit la relecture faite sous R, crée ce qu'il faut et rend ses décisions. Une
+ * erreur de `decide` ou d'un enregistrement laisse au pire un artefact sans preuve — ni
+ * réutilisé en silence, ni alloué deux fois.
+ */
+export function allocateLanes<T>(
+  dir: string,
+  lease: Lease,
+  decide: (lu: LedgerRead) => ReadonlyArray<LaneAllocation<T>>,
+): T[] {
+  SECTIONS_D_ALLOCATION += 1;
+  return withRunGuard(dir, lease.runId, () => {
+    assertOwner(dir, lease, "allouer des lanes");
+    const decisions = decide(readLaneEvents(dir, lease.runId));
+    for (const d of decisions) {
+      if (!d.opened) continue;
+      try {
+        ajouterSousR(dir, d.opened, lease);
+      } catch (err) {
+        throw new LaneOpeningNotRecordedError(
+          `${d.opened.lane ?? d.opened.work_unit} : ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return decisions.map((d) => d.value);
+  });
+}
+
+/**
+ * Le nombre de sections critiques d'allocation ouvertes par ce processus.
+ *
+ * « Un lot, une acquisition » est une propriété de structure : deux acquisitions
+ * successives rendent le même état final tant que personne ne s'intercale, et un
+ * intercalage se provoque mal. Le compte la rend observable, comme
+ * `readGitInvocationCount` rend observable le coût d'une reconstruction. Lu par
+ * différence, jamais remis à zéro.
+ */
+let SECTIONS_D_ALLOCATION = 0;
+export function laneAllocationSections(): number {
+  return SECTIONS_D_ALLOCATION;
+}
+
+/** Le corps de `appendLaneEvent`, R déjà tenu et le bail déjà vérifié. */
+function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
+  const path = laneLedgerPath(dir, lease.runId);
+  if (!existsSync(path)) creerRegistreV2(dir, lease, path);
+  const lu = readLaneEvents(dir, lease.runId);
+  if (lu.malformedLines.length > 0) {
+    throw new RecoveryError(
+      `registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
+    );
+  }
+  if (lu.version === LANE_LEDGER_V2) {
+    appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
+    return;
+  }
+  if (lu.version !== LANE_LEDGER_VERSION) {
+    const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
+    throw new RecoveryError(
+      `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
+    );
+  }
+  if (event.event === "OPENED") {
+    throw new LegacyLaneLedgerError(
+      `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : aucune nouvelle lane ne ` +
+        "s'ouvre dans un run legacy ; le terminer ou l'abandonner, puis ouvrir un nouveau run",
+    );
+  }
+  const legacy: LaneEventV1 = event.event === "INTEGRATED"
+    ? {
+      event: "INTEGRATED", work_unit: event.work_unit, at: event.at,
+      ...(event.integration_commit ? { integration_commit: event.integration_commit } : {}),
+    }
+    : {
+      event: "ABANDONED", work_unit: event.work_unit, at: event.at,
+      ...(event.reason ? { reason: event.reason } : {}),
+    };
+  appendFileSync(path, `${JSON.stringify(legacy)}\n`);
 }
 
 /**

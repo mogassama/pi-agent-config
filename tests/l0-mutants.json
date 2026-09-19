@@ -413,8 +413,8 @@
   {
     "test": "L0 REG F-generation-lot — un lot réalloue deux unités sans croiser générations, lanes ni worktrees",
     "file": "extensions/subagent/index.ts",
-    "find": "                noterOuverture(workUnit.id, lease, ouverture);",
-    "replace": "                noterOuverture(workUnit.id, lease, { ...ouverture, nouvelle: ouverture.nouvelle && ouverture.generation === 1 }); // mutant F-generation-lot : le lot n'enregistre pas ses réallocations"
+    "find": "  const ouvertes = allocateLanes(RUN_DIR, lease, (lu) => unites.map((u) => deciderLane(u, lu)));",
+    "replace": "  const ouvertes = allocateLanes(RUN_DIR, lease, (lu) => unites.map((u) => deciderLane(u, unites.length > 1 ? { ...lu, events: lu.events.filter((e) => e.event !== \"ABANDONED\") } : lu))); // mutant F-generation-lot : le lot décide sans voir les abandons, et ne réalloue rien"
   },
   {
     "test": "L0 PRES F-generation-serialisee — deux délégations sur la même unité s'allouent l'une après l'autre",

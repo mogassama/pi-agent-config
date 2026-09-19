@@ -28,6 +28,7 @@ import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
 import {
   acquireRunOwnership,
   appendLaneEvent,
+  laneAllocationSections,
   planHash,
   readManifest,
   releaseRunOwnership,
@@ -3342,6 +3343,31 @@ test("la file garde la queue d'un successeur quand un tour plus ancien se termin
     await c;
     PILOTE.pendant = undefined;
     assert.equal(pendantB, 2, "la troisième doit attendre la deuxième");
+  } finally {
+    PILOTE.pendant = undefined;
+    h.done();
+  }
+});
+
+/*
+ * Un lot alloue ses lanes en UNE section critique sous R (PLAN-LOT3 § 4, étape 5) : toutes
+ * ses décisions voient le même état, et personne ne s'intercale entre deux d'entre elles.
+ */
+test("un lot alloue toutes ses lanes en une seule section critique", async () => {
+  const h = await monter();
+  try {
+    PILOTE.pendant = (a) => {
+      if (a.cwd) writeFileSync(join(a.cwd, "src", a.task.includes("W03") ? "a.py" : "b.py"), "x = 2\n");
+    };
+    const avant = laneAllocationSections();
+    const r = await h.outil.execute("1", {
+      agent: "worker",
+      batch: [{ work_unit: "W03", task: "écrire pour W03" }, { work_unit: "W09", task: "écrire pour W09" }],
+    });
+    PILOTE.pendant = undefined;
+    assert.equal(enErreur(r), false, texte(r));
+    assert.deepEqual(lanes(h.root).sort(), [`${h.runId}-W03-g1`, `${h.runId}-W09-g1`]);
+    assert.equal(laneAllocationSections() - avant, 1, "deux lanes, une section");
   } finally {
     PILOTE.pendant = undefined;
     h.done();

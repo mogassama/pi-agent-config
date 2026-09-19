@@ -35,7 +35,11 @@ import {
   RunBusyError,
   LANE_LEDGER_VERSION,
   LANE_LEDGER_V2,
+  LaneOpeningNotRecordedError,
   acquireRunOwnership,
+  allocateLanes,
+  type LaneAllocation,
+  type LedgerRead,
   appendIntegrationEvent,
   appendLaneEvent,
   readManifest,
@@ -54,6 +58,7 @@ import {
 import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
 import {
   SchedulerInputError,
+  admit,
   runLanes,
   type Candidate,
 } from "../../subagent-only/scheduler.js";
@@ -680,44 +685,6 @@ let INTEGRATION_CONFLICTS: readonly IntegrationConflict[] = [];
  *
  * Purement en lecture. Une réparation reste une opération opérateur explicite.
  */
-/**
- * Enregistre l'ouverture d'une lane, une fois qu'elle existe.
- *
- * Après `openLane`, jamais avant : le registre enregistre des faits accomplis.
- * Un `OPENED` écrit d'abord pourrait décrire une ouverture qui n'a jamais eu
- * lieu, et un registre qui affirme faux falsifie la provenance de tout le run.
- * L'ordre retenu laisse au pire un worktree sans provenance — visible, nommé
- * « orphelin », et adoptable explicitement.
- *
- * Seulement à la création : un rework rouvre la même lane, et le registre décrit
- * sa vie, pas chacune de ses utilisations.
- */
-function noterOuverture(unit: string, lease: Lease, ouverture: OuvertureDeLane): void {
-  OPEN_UNITS.add(unit);
-  if (!ouverture.nouvelle) return;
-  const { base } = ouverture;
-  if (!base) {
-    // Sans base, l'ouverture ne serait pas prouvable et le registre la
-    // refuserait comme malformée. Mieux vaut ne pas ouvrir du tout : un
-    // worktree sans provenance se voit et se tranche, une ouverture bancale se
-    // découvre après le merge.
-    throw new RecoveryError(
-      `impossible de déterminer la base de ${unit} : la lane n'est pas ouvrable`,
-    );
-  }
-  appendLaneEvent(
-    RUN_DIR,
-    {
-      event: "OPENED",
-      work_unit: unit,
-      at: new Date().toISOString(),
-      base,
-      lane: ouverture.lane.laneId,
-      generation: ouverture.generation,
-    },
-    lease,
-  );
-}
 
 /**
  * La file de chaque unité : la dernière délégation entrée, dont la suivante attend la fin.
@@ -749,7 +716,7 @@ async function entrerFileUnites(unites: readonly string[]): Promise<() => void> 
   };
 }
 
-/** Une lane rendue par `ouvrirLaneDe`, et ce qu'il faut pour enregistrer son ouverture. */
+/** Une lane rendue par `deciderLane`, et ce qu'il faut pour enregistrer son ouverture. */
 interface OuvertureDeLane {
   lane: LaneContext;
   base: string | undefined;
@@ -759,36 +726,26 @@ interface OuvertureDeLane {
 }
 
 /**
- * La lane d'une unité, telle que le registre la nomme — ou la première, s'il n'en nomme
- * aucune.
+ * La lane d'une unité, telle que le registre relu SOUS R la nomme — ou la suivante.
  *
  * L'identité vient de l'`OPENED` autoritaire (`laneOfUnit`), jamais de l'unité seule :
- * dès g1, `${RUN_ID}-${unit}` ne désigne plus aucune lane. Une unité déjà ouverte
+ * dès g1, `${RUN_ID}-${unit}` ne désigne plus aucune lane. Une unité ouverte ou intégrée
  * rejoint sa lane — rework, revue, reprise après intégration — sans nouvelle ouverture.
- * Une unité que le registre ne connaît pas reçoit g1.
+ * Une lane abandonnée ne se rejoint pas : C0 § F alloue g(n+1) après l'ABANDONED de g(n),
+ * et ne réutilise ni génération ni branche. Une unité inconnue du registre reçoit g1.
  *
- * Un registre v1 n'arrive jamais jusqu'à la création : `refusLegacy` l'a arrêté avant
- * toute séquence. L'écrivain le refuserait de toute façon, mais après le worktree.
+ * Appelée seulement depuis `ouvrirLanes`, donc sous R : la décision et l'artefact
+ * qu'elle crée précèdent l'`OPENED` dans la même section critique.
  */
-function ouvrirLaneDe(unit: string): OuvertureDeLane {
+function deciderLane(unit: string, lu: LedgerRead): LaneAllocation<OuvertureDeLane> {
   const root = process.cwd();
-  const lu = readLaneEvents(RUN_DIR, RUN_ID);
   const connue = laneOfUnit(lu.events, laneGrammar(lu), RUN_ID, unit);
-  /*
-   * Une lane abandonnée ne se rejoint pas : C0 § F n'alloue g(n+1) qu'après l'ABANDONED
-   * de g(n), et ne réutilise ni génération ni branche. Intégrée, elle se rejoint — un
-   * travail repris après intégration reste celui de sa lane, sans nouvelle ouverture.
-   */
   const abandonnee = connue !== undefined && lu.events.some((e) =>
     e.event === "ABANDONED" && "lane" in e && e.lane === connue.laneId);
   if (connue && !abandonnee) {
     const l = ensureLane(root, connue.laneId);
-    return {
-      lane: { laneId: connue.laneId, workUnitId: unit, cwd: l.cwd, branch: l.branch },
-      base: l.base,
-      generation: connue.generation,
-      nouvelle: false,
-    };
+    const lane = { laneId: connue.laneId, workUnitId: unit, cwd: l.cwd, branch: l.branch };
+    return { value: { lane, base: l.base, generation: connue.generation, nouvelle: false } };
   }
   const generation = connue ? connue.generation + 1 : 1;
   let base: string | undefined;
@@ -797,7 +754,35 @@ function ouvrirLaneDe(unit: string): OuvertureDeLane {
     base = l.base;
     return l;
   }, generation);
-  return { lane, base, generation, nouvelle: true };
+  if (!base) {
+    // Sans base, l'ouverture ne serait pas prouvable et le registre la refuserait comme
+    // malformée. Le worktree existe déjà : c'est un artefact sans preuve, que la lecture
+    // suivante nommera, et non une ouverture bancale découverte après le merge.
+    throw new LaneOpeningNotRecordedError(
+      `impossible de déterminer la base de ${unit} : la lane n'est pas ouvrable`,
+    );
+  }
+  return {
+    opened: {
+      event: "OPENED", work_unit: unit, at: new Date().toISOString(),
+      base, lane: lane.laneId, generation,
+    },
+    value: { lane, base, generation, nouvelle: true },
+  };
+}
+
+/**
+ * Ouvrir les lanes de ces unités — une pour le chemin simple, toutes celles d'un lot —
+ * en UNE section critique sous R (`allocateLanes`).
+ *
+ * Deux échecs distincts, et l'appelant les dit différemment : la création a échoué, rien
+ * n'existe ; ou l'artefact existe et son ouverture n'a pas pu être écrite
+ * (`LaneOpeningNotRecordedError`), ce qu'un opérateur tranche.
+ */
+function ouvrirLanes(unites: readonly string[], lease: Lease): Map<string, OuvertureDeLane> {
+  const ouvertes = allocateLanes(RUN_DIR, lease, (lu) => unites.map((u) => deciderLane(u, lu)));
+  for (const o of ouvertes) OPEN_UNITS.add(o.lane.workUnitId);
+  return new Map(ouvertes.map((o) => [o.lane.workUnitId, o]));
 }
 
 /**
@@ -2303,11 +2288,22 @@ export default function (pi: ExtensionAPI) {
 
         let lane: LaneContext | undefined;
         if (unit && !roleGlobal) {
-          let ouverture: OuvertureDeLane;
           try {
-            ouverture = ouvrirLaneDe(unit);
-            lane = ouverture.lane;
+            lane = ouvrirLanes([unit], lease).get(unit)!.lane;
           } catch (err) {
+            if (err instanceof LaneOpeningNotRecordedError) {
+              return {
+                content: [{
+                  type: "text" as const,
+                  text:
+                    `[run: ouverture non enregistrée] le worktree de ${unit} existe, ` +
+                    `son ouverture n'a pas pu être écrite au registre — ${err.message}\n` +
+                    `Il apparaîtra comme « worktree-orphelin » à la prochaine lecture : ` +
+                    `l'adopter ou le retirer avec bin/subagent-recover.`,
+                }],
+                isError: true,
+              };
+            }
             return {
               content: [{
                 type: "text" as const,
@@ -2317,30 +2313,6 @@ export default function (pi: ExtensionAPI) {
             };
           }
 
-          /*
-           * L'ouverture a eu lieu ; c'est son enregistrement qui peut refuser.
-           *
-           * Les deux échecs étaient sous le même `catch`, avec le même message
-           * « cannot open lane » — alors que le worktree existe déjà et que le
-           * problème est ailleurs. Dire lequel des deux a échoué décide de ce que
-           * l'opérateur doit faire : rien, ou trancher un orphelin.
-           */
-          try {
-            noterOuverture(unit, lease, ouverture);
-          } catch (err) {
-            const quoi = err instanceof Error ? err.message : String(err);
-            return {
-              content: [{
-                type: "text" as const,
-                text:
-                  `[run: ouverture non enregistrée] le worktree de ${unit} existe, ` +
-                  `son ouverture n'a pas pu être écrite au registre — ${quoi}\n` +
-                  `Il apparaîtra comme « worktree-orphelin » à la prochaine lecture : ` +
-                  `l'adopter ou le retirer avec bin/subagent-recover.`,
-              }],
-              isError: true,
-            };
-          }
         }
 
         /*
@@ -2513,19 +2485,53 @@ export default function (pi: ExtensionAPI) {
             task: b.task,
           }));
           const rows: DelegationRecord[] = [];
+          const admission = {
+            units: plan().units,
+            integrated: INTEGRATED,
+            collide: scopesCollide,
+            // Toute lane ouverte et non intégrée possède encore ses fichiers,
+            // y compris celles d'un appel précédent : le scheduler ne les
+            // verrait pas autrement.
+            owners: plan().units.filter((u) => OPEN_UNITS.has(u.id)),
+          };
+          /*
+           * Les lanes du lot, allouées en UNE section critique sous R (PLAN-LOT3 § 4).
+           *
+           * Avant le premier départ, et seulement pour les candidates qui partiront dans cet
+           * appel : admises, et qu'aucune lane déjà ouverte hors du lot ne bloque. Une
+           * refusée n'a pas de lane (C1.5) ; une candidate bloquée par une lane extérieure
+           * ne partira pas avant la fin de l'appel, et n'en reçoit pas non plus. Un lot
+           * invalide — une unité deux fois — n'alloue rien : le scheduler le refuse.
+           */
+          let lanesDuLot = new Map<string, OuvertureDeLane>();
+          if (new Set(candidates.map((c) => c.workUnitId)).size === candidates.length) {
+            const partantes = candidates.flatMap((c) => {
+              const v = admit(c, admission);
+              if (!v.ok) return [];
+              const bloquee = admission.owners.some((o) => o.id !== v.unit.id && scopesCollide(o, v.unit));
+              return bloquee ? [] : [c.workUnitId];
+            });
+            try {
+              lanesDuLot = ouvrirLanes(partantes, lease);
+            } catch (err) {
+              const quoi = err instanceof Error ? err.message : String(err);
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: err instanceof LaneOpeningNotRecordedError
+                    ? `[run: ouverture non enregistrée] ${quoi}\nUn worktree existe sans son ouverture : ` +
+                      `l'adopter ou le retirer avec bin/subagent-recover. Aucune délégation n'a été lancée.`
+                    : `Refused: cannot open the batch lanes — ${quoi}`,
+                }],
+                isError: true,
+              };
+            }
+          }
           let outcomes;
           try {
             outcomes = await runLanes(
               candidates,
-              {
-                units: plan().units,
-                integrated: INTEGRATED,
-                collide: scopesCollide,
-                // Toute lane ouverte et non intégrée possède encore ses fichiers,
-                // y compris celles d'un appel précédent : le scheduler ne les
-                // verrait pas autrement.
-                owners: plan().units.filter((u) => OPEN_UNITS.has(u.id)),
-              },
+              admission,
               MAX_PARALLEL_LANES,
               async (candidate, workUnit) => {
                 /*
@@ -2538,9 +2544,9 @@ export default function (pi: ExtensionAPI) {
                  * worktree créé après la perte de propriété coûte cher.
                  */
                 const seq = allocateSeq(RUN_DIR, lease).seq;
-                const ouverture = ouvrirLaneDe(workUnit.id);
+                const ouverture = lanesDuLot.get(workUnit.id);
+                if (!ouverture) throw new Error(`${workUnit.id} n'a pas de lane allouée pour ce lot`);
                 const lane = ouverture.lane;
-                noterOuverture(workUnit.id, lease, ouverture);
                 const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
                   ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd },
                   seq,
