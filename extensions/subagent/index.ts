@@ -384,6 +384,33 @@ function laneView(laneId: string | undefined): Delegation[] {
 }
 
 /**
+ * La vue de C1 pour le garde de revue d'un rôle lié à une lane (C1.7, PLAN-LOT4 § 4).
+ *
+ * Les délégations de la lane courante de l'unité, plus les délégations globales
+ * explicitement readOnly — un scout qui rapporte les fichiers qu'une revue a demandés.
+ * Jamais les écritures inline de l'orchestrateur : elles n'appartiennent à aucune lane et
+ * ne changent rien à ce que la revue d'une lane lira. Sans lane connue, l'historique
+ * entier (C1).
+ *
+ * L'identité vient du snapshot que la reconstruction de CET appel a posé
+ * (`LAST_LANES.read`), jamais d'une relecture du registre. Une lane courante abandonnée ne
+ * sera pas rejointe — l'appel en ouvrira la génération suivante, qui n'a encore aucune
+ * délégation : sa vue ne garde que les globales readOnly.
+ */
+function vueDeRevue(unit: string): Delegation[] {
+  const read = LAST_LANES?.read;
+  if (!read) return HISTORY;
+  const connue = laneOfUnit(read.events, laneGrammar(read), RUN_ID, unit);
+  if (!connue) return HISTORY;
+  const abandonnee = read.events.some((e) =>
+    e.event === "ABANDONED" && "lane" in e && e.lane === connue.laneId);
+  const laneId = abandonnee ? undefined : connue.laneId;
+  return HISTORY.filter((d) =>
+    (laneId !== undefined && d.laneId === laneId) ||
+    (d.laneId === undefined && d.readOnly && d.agent !== "orchestrator"));
+}
+
+/**
  * Ce qui empêche une lane d'être intégrée, et que l'orchestrateur ne peut pas
  * oublier de signaler.
  *
@@ -640,11 +667,13 @@ let RECOVERY_CONFLICTS = new Map<string, Conflict>();
 /**
  * Ce que la dernière reconstruction a vu, et ce qu'elle a coûté.
  *
- * Gardé pour le relevé, et pour lui seul : aucune décision ne le lit. Le relevé
- * ne doit pas reconstruire de son côté — il consommerait `observeLanes` et
- * `observeIntegrations` une seconde fois, à un autre instant, et publierait un
- * état que le runtime n'a jamais eu. C'est la divergence de 3c.1, transposée
- * d'un outil à un rapport.
+ * Gardé pour le relevé, et pour une seule décision : la vue de revue d'un rôle lié à
+ * une lane (`vueDeRevue`, PLAN-LOT4 § 4) lit dans `LAST_LANES.read` l'identité de la
+ * lane courante, sur le snapshot que la reconstruction de l'appel vient de poser —
+ * jamais par une relecture du registre. Le relevé ne doit pas reconstruire de son côté
+ * — il consommerait `observeLanes` et `observeIntegrations` une seconde fois, à un
+ * autre instant, et publierait un état que le runtime n'a jamais eu. C'est la
+ * divergence de 3c.1, transposée d'un outil à un rapport.
  *
  * `undefined` quand le registre correspondant était inexploitable : on ne garde
  * pas la vue précédente, qui décrirait un disque qu'on vient de renoncer à lire.
@@ -1290,9 +1319,15 @@ function checkScoutInput(params: { find?: string | string[]; scope?: string[] })
   );
 }
 
-function refuse(agentName: string, tools: readonly string[]): string | null {
-  const last = HISTORY[HISTORY.length - 1];
-  const before = HISTORY[HISTORY.length - 2];
+/**
+ * `view` est la séquence que les trois règles lisent : `HISTORY` entier pour les rôles
+ * globaux et le régime libre, la vue de C1 (`vueDeRevue`) pour un rôle lié à une lane en
+ * régime planifié (C1.7). Dans cette vue, une globale readOnly ne compte pas comme une
+ * écriture et ne crée ni ne prolonge le streak d'un reviewer de la lane.
+ */
+function refuse(agentName: string, tools: readonly string[], view: readonly Delegation[] = HISTORY): string | null {
+  const last = view[view.length - 1];
+  const before = view[view.length - 2];
 
   // Unconditional on the verdict: no worker has run, so not one line of code
   // differs. Reading the verdict would make the guard depend on an envelope
@@ -1317,9 +1352,9 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
   // the same review. pi-subagents states the criterion as "run another review
   // round only when it made material changes"; changed_files is what makes it
   // computable rather than a judgement call.
-  const sinceReview = [...HISTORY].reverse().findIndex((d) => d.agent === "reviewer");
+  const sinceReview = [...view].reverse().findIndex((d) => d.agent === "reviewer");
   if (agentName === "reviewer" && sinceReview > 0) {
-    const between = HISTORY.slice(HISTORY.length - sinceReview);
+    const between = view.slice(view.length - sinceReview);
     // A writer that wrote nothing leaves the tree as the last review found it.
     // A scout does too, and that is not the same thing: reviewer.md tells a
     // reviewer to put a where-question in `open_risks` and promises it "comes
@@ -1352,7 +1387,7 @@ function refuse(agentName: string, tools: readonly string[]): string | null {
   // fan-out, including one whose question came out of a `gaps` the fan-out
   // itself reported. The mechanism meant to stop three unread inventories would
   // have punished the batching this batch exists to encourage.
-  const streak = streakOf(HISTORY, agentName);
+  const streak = streakOf([...view], agentName);
   if (isReadOnly(tools) && streak >= 2) {
     return (
       `Refused: ${streak} ${agentName} delegations already ran back to back, and the role ` +
@@ -1918,9 +1953,24 @@ export default function (pi: ExtensionAPI) {
         // Before anything is spawned. A refusal costs one tool result; the
         // delegation it replaces cost between 28k and 306k tokens on the
         // measured run.
+        //
+        // Pour un rôle lié à une lane en régime planifié, les trois issues de la désignation
+        // décident du garde (C1.7, L4-Q5, PLAN-LOT4 § 4) :
+        //   none      aucune lane : garde immédiat, ici, sur l'historique entier (C1)
+        //   unit      garde différé, après la reconstruction, sur la vue de cette lane
+        //   conflict  aucun garde de revue : l'appel est invalide, et la résolution de
+        //             l'unité rendra son refus de provenance avant toute politique de revue
+        // Les rôles globaux et le régime libre gardent le garde global, ici. La désignation
+        // se lit comme la file la lit (`unitesDeLAppel`) : `targetWorkUnit` est pur, rien
+        // n'est résolu deux fois différemment.
+        const designe = params as unknown as { work_unit?: string; for_risks?: string[] };
+        const designation = isLaneBound(agent.envelopeRole ?? agent.name) && plan().status === "usable"
+          ? targetWorkUnit(designe.work_unit, designe.for_risks ?? [], RISKS).kind
+          : "none";
+        const gardeDiffere = designation === "unit";
         const blocked =
           (params.agent === "scout" ? checkScoutInput(params) : null) ??
-          refuse(params.agent, agent.tools);
+          (designation === "none" ? refuse(params.agent, agent.tools) : null);
         if (blocked) {
           logRefusal(RUN_ID, params.agent, blocked);
           return { content: [{ type: "text" as const, text: blocked }], isError: true };
@@ -2148,6 +2198,24 @@ export default function (pi: ExtensionAPI) {
             }],
             isError: true,
           };
+        }
+
+        /*
+         * Le garde de revue d'un rôle lié à une lane (C1.7, L4-Q5).
+         *
+         * Après les validations de l'appel, après la reconstruction et ses refus
+         * fail-closed ; sur l'unité résolue par `targetWorkUnit`, `for_risks` compris, et
+         * sur le snapshot que la reconstruction vient de poser ; avant la prise du bail,
+         * toute reprise d'atterrissage, séquence, ouverture ou lancement — un refus ne
+         * prend ni ne laisse rien, comme le garde global. Sans unité résolue,
+         * l'historique entier (C1).
+         */
+        if (gardeDiffere) {
+          const refusRevue = refuse(agent.name, agent.tools, unit ? vueDeRevue(unit) : HISTORY);
+          if (refusRevue) {
+            logRefusal(RUN_ID, agent.name, refusRevue);
+            return { content: [{ type: "text" as const, text: refusRevue }], isError: true };
+          }
         }
 
         const propriete = ensureOwnership();

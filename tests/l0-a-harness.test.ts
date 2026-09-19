@@ -188,7 +188,7 @@ regressionCorrigee("C-P1-F02", "le chemin simple refuse une unité dont le scope
 
 // ================================================================== C1.7 — C-P1-F01
 
-regression("C-P1-F01", "la revue d'une lane part après la revue d'une autre lane", async () => {
+regressionCorrigee("C-P1-F01", "la revue d'une lane part après la revue d'une autre lane", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = (a) => {
@@ -210,7 +210,7 @@ regression("C-P1-F01", "la revue d'une lane part après la revue d'une autre lan
   } finally { h.fin(); }
 });
 
-regression("C-P1-F01", "une écriture globale de l'orchestrateur entre deux revues ne rouvre pas la revue d'une lane inchangée", async () => {
+regressionCorrigee("C-P1-F01", "une écriture globale de l'orchestrateur entre deux revues ne rouvre pas la revue d'une lane inchangée", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
@@ -225,6 +225,51 @@ regression("C-P1-F01", "une écriture globale de l'orchestrateur entre deux revu
     await h.outil.execute("3", revue("W03"));
     PILOTE.resultat = undefined;
     propriete(compter("reviewer") === 1, `aucune seconde revue ne doit partir sur la lane inchangée ; lancés : ${agents().join(", ")}`);
+  } finally { h.fin(); }
+});
+
+/**
+ * Le streak de revue d'une lane se compte dans la vue de la lane (C1.7, PLAN-LOT4 L4-Q2).
+ *
+ * Sur l'objet, la règle 1 refusait déjà la deuxième revue : aucune REG ne pouvait voir que
+ * le streak comptait les revues de TOUTES les lanes. Une fois la vue corrigée, la troisième
+ * lane se heurtait encore à « 2 reviewer delegations already ran back to back ».
+ */
+couverture("C1.7", "la revue d'une troisième lane part après les revues de deux autres lanes", async () => {
+  const h = await monter({
+    version: 1,
+    work_units: [
+      { id: "W03", goal: "g", depends_on: [], expected_write_scope: ["src/a.py"] },
+      { id: "W09", goal: "g", depends_on: [], expected_write_scope: ["src/b.py"] },
+      { id: "W10", goal: "g", depends_on: [], expected_write_scope: ["src/c.py"] },
+    ],
+  });
+  try {
+    PILOTE.pendant = (a) => {
+      if (!a.cwd) return;
+      const cible = a.task.includes("W03") ? "a.py" : a.task.includes("W09") ? "b.py" : "c.py";
+      writeFileSync(join(a.cwd, "src", cible), "x = 2\n");
+    };
+    await h.outil.execute("1", {
+      agent: "worker",
+      batch: [
+        { work_unit: "W03", task: "écrire pour W03" },
+        { work_unit: "W09", task: "écrire pour W09" },
+        { work_unit: "W10", task: "écrire pour W10" },
+      ],
+    });
+    PILOTE.pendant = undefined;
+    precondition(compter("worker") === 3, `les trois workers du lot doivent être partis ; lancés : ${agents().join(", ")}`);
+    await h.outil.execute("2", revue("W03"));
+    await h.outil.execute("3", revue("W09"));
+    precondition(compter("reviewer") === 2, `les revues de W03 et de W09 doivent être parties ; lancés : ${agents().join(", ")}`);
+    const r = await h.outil.execute("4", revue("W10"));
+    PILOTE.resultat = undefined;
+    const dit = ((r as { content?: Array<{ text?: string }> }).content ?? []).map((c) => c.text ?? "").join("");
+    propriete(
+      compter("reviewer") === 3,
+      `la revue de W10 doit partir après celles de deux autres lanes ; lancés : ${agents().join(", ")} ; réponse : ${dit}`,
+    );
   } finally { h.fin(); }
 });
 
@@ -330,15 +375,18 @@ regressionCorrigee("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FRO
     precondition(shaAvant !== shaIntegre, "la branche doit avoir avancé au-delà du commit intégré");
 
     /*
-     * Un worker sur une AUTRE unité, et il est nécessaire : la garde de changement
-     * matériel lit l'historique du run, pas celui de l'unité. Sans écriture rapportée
-     * depuis la dernière revue, elle refuserait celle-ci en amont et le cas serait vert
-     * sans jamais atteindre la provenance.
+     * Un scout global entre la première revue et celle-ci, et il est nécessaire.
+     *
+     * Depuis le LOT 4, le garde de revue d'une lane lit la vue de C1 (C1.7). Le worker
+     * d'une AUTRE unité, qui franchissait ici la garde de changement matériel quand elle
+     * lisait l'historique du run, n'est plus dans la vue de W03 : « a review already ran »
+     * refusait la revue en amont, et la preuve restait verte sans atteindre la provenance
+     * (mesuré au LOT 4). Un scout global appartient à la vue sans y écrire, et
+     * reviewer → scout → reviewer reste permis (L4-Q6) : la revue atteint la garde
+     * qu'elle éprouve.
      */
-    PILOTE.pendant = ecrire("src/b.py", "b = 2\n");
-    await h2.outil.execute("3", tache("W09"));
-    PILOTE.pendant = undefined;
-    precondition(compter("worker") === 2, "le worker de W09 doit être admis");
+    await h2.outil.execute("3", { agent: "scout", find: "où est défini a", scope: ["src"], task: "localiser a" });
+    precondition(compter("scout") === 1, "le scout global doit être parti");
 
     await h2.outil.execute("4", revue("W03"));
     PILOTE.resultat = undefined;

@@ -451,5 +451,23 @@
     "file": "subagent-only/scheduler.ts",
     "find": "  if (ctx.joins?.has(candidate.workUnitId)) {",
     "replace": "  if (false && ctx.joins?.has(candidate.workUnitId)) { // mutant C-P1-F02 jonction : l'admission est rejouée à toute jonction"
+  },
+  {
+    "test": "L0 REG C-P1-F01 — la revue d'une lane part après la revue d'une autre lane",
+    "file": "extensions/subagent/index.ts",
+    "find": "    (laneId !== undefined && d.laneId === laneId) ||",
+    "replace": "    (laneId !== undefined && d.laneId !== undefined) || // mutant C-P1-F01 deux lanes : la vue garde les autres lanes"
+  },
+  {
+    "test": "L0 REG C-P1-F01 — une écriture globale de l'orchestrateur entre deux revues ne rouvre pas la revue d'une lane inchangée",
+    "file": "extensions/subagent/index.ts",
+    "find": "    (d.laneId === undefined && d.readOnly && d.agent !== \"orchestrator\"));",
+    "replace": "    (d.laneId === undefined && (d.readOnly || d.agent === \"orchestrator\"))); // mutant C-P1-F01 inline : la vue garde l'orchestrateur"
+  },
+  {
+    "test": "L0 COUV C1.7 — la revue d'une troisième lane part après les revues de deux autres lanes",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const streak = streakOf([...view], agentName);",
+    "replace": "  const streak = streakOf(HISTORY, agentName); void view; // mutant C1.7 streak : relu sur HISTORY"
   }
 ]
