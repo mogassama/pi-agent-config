@@ -30,6 +30,13 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`, et un
+ * mutant qui réintroduit le défaut.
+ */
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
 }
@@ -190,7 +197,7 @@ function abandonEcrit(h: { root: string; runDir: string; runId: string }, unite:
 
 // ================================================================== l'allocation
 
-regression("F-generation-allocation", "après l'abandon durable d'une lane, l'unité en reçoit une nouvelle", async () => {
+regressionCorrigee("F-generation-allocation", "après l'abandon durable d'une lane, l'unité en reçoit une nouvelle", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
@@ -225,7 +232,7 @@ regression("F-generation-allocation", "après l'abandon durable d'une lane, l'un
   } finally { h.fin(); }
 });
 
-regression("F-generation-lot", "un lot réalloue deux unités sans croiser générations, lanes ni worktrees", async () => {
+regressionCorrigee("F-generation-lot", "un lot réalloue deux unités sans croiser générations, lanes ni worktrees", async () => {
   const h = await monter();
   try {
     /*

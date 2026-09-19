@@ -20,6 +20,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  LegacyLaneLedgerError,
   NotOwnerError,
   RecoveryError,
   RunBusyError,
@@ -1369,7 +1370,10 @@ test("écrire au registre demande le bail courant", () => {
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
-    const evt = { event: "OPENED" as const, work_unit: "W03", at: new Date().toISOString(), base: "abc123" };
+    const evt = {
+      event: "OPENED" as const, work_unit: "W03", at: new Date().toISOString(), base: "abc123",
+      lane: `${m.runId}-W03-g1`, generation: 1,
+    };
 
     appendLaneEvent(dir, evt, bail);
     assert.deepEqual(readLaneEvents(dir, m.runId).events.map((e) => e.work_unit), ["W03"]);
@@ -1409,9 +1413,9 @@ test("le registre garde l'ordre des faits", () => {
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W01", at: "1", base: "b1" }, bail);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "2", base: "b3" }, bail);
-    appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W01", at: "3" }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W01", at: "1", base: "b1", lane: `${m.runId}-W01-g1`, generation: 1 }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "2", base: "b3", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
+    appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W01", at: "3", integration_commit: "c1" }, bail);
     assert.deepEqual(
       readLaneEvents(dir, m.runId).events.map((e) => `${e.event}:${e.work_unit}`),
       ["OPENED:W01", "OPENED:W03", "INTEGRATED:W01"],
@@ -1433,7 +1437,7 @@ test("une ligne illisible est comptée, pas sautée", () => {
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "abc" }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "abc", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
     writeFileSync(laneLedgerPath(dir, m.runId),
       `${readFileSync(laneLedgerPath(dir, m.runId), "utf-8")}{ceci n'est pas du json\n`);
 
@@ -1521,12 +1525,14 @@ test("un registre neuf porte sa version", () => {
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "b" }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "b", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
 
+    // Un run neuf écrit en v2 (C4.9, LOT 3), et son témoin suit l'en-tête (C4.1).
     const premiere = readFileSync(laneLedgerPath(dir, m.runId), "utf-8").split("\n")[0];
-    assert.deepEqual(JSON.parse(premiere), { ledger: 1 });
-    assert.equal(readLaneEvents(dir, m.runId).version, 1);
+    assert.deepEqual(JSON.parse(premiere), { ledger: 2 });
+    assert.equal(readLaneEvents(dir, m.runId).version, 2);
     assert.equal(readLaneEvents(dir, m.runId).events.length, 1);
+    assert.deepEqual(readManifest(dir)?.ledgers, { lanes: 2 });
   } finally {
     done();
   }
@@ -1537,8 +1543,8 @@ test("l'en-tête n'est écrit qu'une fois", () => {
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W01", at: "1", base: "b" }, bail);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "2", base: "b" }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W01", at: "1", base: "b", lane: `${m.runId}-W01-g1`, generation: 1 }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "2", base: "b", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
     const lignes = readFileSync(laneLedgerPath(dir, m.runId), "utf-8").trim().split("\n");
     assert.equal(lignes.length, 3);
     assert.equal(readLaneEvents(dir, m.runId).events.length, 2);
@@ -1631,7 +1637,7 @@ test("un commit d'intégration traverse l'écriture et la relecture", () => {
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
-    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "abc" }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "abc", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
     appendLaneEvent(
       dir,
       { event: "INTEGRATED", work_unit: "W03", at: "x", integration_commit: "deadbeef" },
@@ -1646,15 +1652,113 @@ test("un commit d'intégration traverse l'écriture et la relecture", () => {
   }
 });
 
+// ------------------------------------------------ l'écrivain v2 (LOT 3)
+
+/** Les lignes du registre, en-tête compris, telles qu'elles sont sur le disque. */
+const lignesRegistre = (dir: string, runId: string): Array<Record<string, unknown>> =>
+  readFileSync(laneLedgerPath(dir, runId), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+
+/*
+ * L'enveloppe ne vient pas de l'appelant : séquence, lane et génération se déduisent du
+ * registre relu sous la garde. Un événement de vie relève de la dernière lane ouverte de
+ * son unité.
+ */
+test("écrivain v2 : l'enveloppe est déduite du registre, jamais fournie", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "1", base: "b", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
+    appendLaneEvent(dir, { event: "ABANDONED", work_unit: "W03", at: "2", reason: "essai" }, bail);
+    appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "3", base: "b", lane: `${m.runId}-W03-g2`, generation: 2 }, bail);
+    appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W03", at: "4", integration_commit: "c0ffee" }, bail);
+    const [entete, ...corps] = lignesRegistre(dir, m.runId);
+    assert.deepEqual(entete, { ledger: 2 });
+    assert.deepEqual(corps.map((e) => e.event_seq), [1, 2, 3, 4]);
+    assert.deepEqual(corps[1], {
+      event_seq: 2, work_unit: "W03", lane: `${m.runId}-W03-g1`, at: "2",
+      event: "ABANDONED", by: "operator", reason: "essai", generation: 1,
+    });
+    // La forme historique de C0 v1.8 : le commit exact, aucun status.
+    assert.deepEqual(corps[3], {
+      event_seq: 4, work_unit: "W03", lane: `${m.runId}-W03-g2`, at: "4",
+      event: "INTEGRATED", integration_commit: "c0ffee",
+    });
+    const lu = readLaneEvents(dir, m.runId);
+    assert.deepEqual(lu.malformedLines, []);
+  } finally {
+    done();
+  }
+});
+
+/*
+ * Chaque refus précède l'écriture : ce que C0 exige et que l'appelant ne fournit pas ne
+ * se complète pas.
+ */
+test("écrivain v2 : ce qui ne tient pas dans la grammaire est refusé avant écriture", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    const g1 = { event: "OPENED" as const, work_unit: "W03", at: "1", base: "b", lane: `${m.runId}-W03-g1`, generation: 1 };
+    appendLaneEvent(dir, g1, bail);
+    const avant = readFileSync(laneLedgerPath(dir, m.runId), "utf-8");
+    const refus: Array<[string, Parameters<typeof appendLaneEvent>[1]]> = [
+      ["ouverture sans lane", { event: "OPENED", work_unit: "W09", at: "x", base: "b" }],
+      ["lane d'une autre génération", { ...g1, work_unit: "W09", lane: `${m.runId}-W09-g2`, generation: 1 }],
+      ["génération réutilisée", g1],
+      ["intégration sans commit", { event: "INTEGRATED", work_unit: "W03", at: "x" }],
+      ["abandon sans raison", { event: "ABANDONED", work_unit: "W03", at: "x" }],
+      ["unité jamais ouverte", { event: "ABANDONED", work_unit: "W09", at: "x", reason: "r" }],
+    ];
+    for (const [quoi, evt] of refus) {
+      assert.throws(() => appendLaneEvent(dir, evt, bail), RecoveryError, quoi);
+      assert.equal(readFileSync(laneLedgerPath(dir, m.runId), "utf-8"), avant, `${quoi} : rien n'est écrit`);
+    }
+  } finally {
+    done();
+  }
+});
+
+/*
+ * PLAN-LOT3 § 1 (b) : un registre v1 reste continuable pour ses lanes, mais aucune ne
+ * s'y ouvre plus. Le fichier n'est ni réécrit ni migré.
+ */
+test("écrivain : un registre v1 refuse toute ouverture et continue ses lanes", () => {
+  const { dir, done } = dossier();
+  try {
+    const m = openRun(dir).manifest;
+    const bail = own(dir, m.runId);
+    const legacy = `${JSON.stringify({ ledger: 1 })}\n${JSON.stringify({ event: "OPENED", work_unit: "W03", at: "x", base: "b" })}\n`;
+    writeFileSync(laneLedgerPath(dir, m.runId), legacy);
+    assert.throws(
+      () => appendLaneEvent(dir, { event: "OPENED", work_unit: "W09", at: "x", base: "b", lane: `${m.runId}-W09-g1`, generation: 1 }, bail),
+      LegacyLaneLedgerError,
+    );
+    assert.equal(readFileSync(laneLedgerPath(dir, m.runId), "utf-8"), legacy, "rien n'est écrit");
+    appendLaneEvent(dir, { event: "ABANDONED", work_unit: "W03", at: "y", reason: "fin" }, bail);
+    const [entete, , abandon] = lignesRegistre(dir, m.runId);
+    assert.deepEqual(entete, { ledger: 1 });
+    assert.deepEqual(abandon, { event: "ABANDONED", work_unit: "W03", at: "y", reason: "fin" });
+    assert.equal(readManifest(dir)?.ledgers, undefined, "aucun témoin v2 pour un registre v1");
+  } finally {
+    done();
+  }
+});
+
+// En continuation legacy : sous v1, et seulement sous v1, le commit reste facultatif.
 test("une intégration sans commit reste lisible", () => {
   const { dir, done } = dossier();
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
+    writeFileSync(laneLedgerPath(dir, m.runId),
+      `${JSON.stringify({ ledger: 1 })}\n${JSON.stringify({ event: "OPENED", work_unit: "W03", at: "x", base: "b" })}\n`);
     appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W03", at: "x" }, bail);
     const lu = readLaneEvents(dir, m.runId);
     assert.equal(lu.malformed, 0);
-    assert.equal(lu.events.length, 1);
+    assert.equal(lu.events.length, 2);
+    assert.equal(lu.version, 1, "le registre legacy n'est jamais réécrit");
   } finally {
     done();
   }
@@ -2990,7 +3094,7 @@ test("registre v2 : champs obligatoires et types exacts, nature par nature", () 
     ["RISK", "id"], ["RISK", "transition"],
     ["FROZEN", "commit"], ["FROZEN", "parent"], ["FROZEN", "tree"], ["FROZEN", "reviewed_event_seq"],
     ["MERGED", "integration_commit"], ["MERGED", "frozen_event_seq"],
-    ["INTEGRATED", "integration_commit"], ["INTEGRATED", "status"],
+    ["INTEGRATED", "integration_commit"],
     ["ABANDONED", "by"], ["ABANDONED", "reason"], ["ABANDONED", "generation"],
   ];
   for (const [nature, champ] of cas) {
@@ -3002,6 +3106,19 @@ test("registre v2 : champs obligatoires et types exacts, nature par nature", () 
   refuse(enveloppe(2, { ...valides.FROZEN, reviewed_event_seq: 0 }), "renvoi REVIEWED nul");
   refuse(enveloppe(2, { ...valides.MERGED, frozen_event_seq: "5" }), "renvoi FROZEN chaîne");
   refuse(enveloppe(2, { ...valides.OPENED, base: "" }), "base vide");
+});
+
+/*
+ * C0 v1.8 : la forme historique d'INTEGRATED, écrite par les LOTS 3 à 8 pour une unité
+ * sans design_update. `status` ABSENT se lit, à demeure ; présent, il doit être l'une des
+ * trois issues — `null` ou une issue inventée ne sont pas l'absence.
+ */
+test("registre v2 : INTEGRATED sans status est la forme historique de C0 v1.8, et elle seule", () => {
+  const complet = valides.INTEGRATED;
+  accepte(enveloppe(2, sans(complet, "status")), "INTEGRATED historique, sans status");
+  refuse(enveloppe(2, { ...complet, status: null }), "status null");
+  refuse(enveloppe(2, { ...complet, status: { outcome: "pending" } }), "issue inventée");
+  refuse(enveloppe(2, sans(sans(complet, "status"), "integration_commit")), "historique sans commit");
 });
 
 test("registre v2 : l'identité du reviewer et le mode de preuve", () => {

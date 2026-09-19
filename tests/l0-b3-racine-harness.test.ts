@@ -42,6 +42,13 @@ const PLAN_DEUX = planAvecDesign([
   { id: "W03", design_update: { decision_id: "D-001", from_status: "proposé", to_status: "en cours" } },
   { id: "W09", design_update: { decision_id: "D-002", from_status: "proposé", to_status: "en cours" } },
 ]);
+/*
+ * Le même dépôt, sans décision à traiter : la propriété de C5.1 — une racine sale refuse
+ * toute intégration — ne dépend d'aucun Statut. Pendant les LOTS 3 à 8, C0 v1.8 ferme
+ * avant le merge toute unité qui porte un `design_update` ; avec `PLAN_DEUX`, la preuve
+ * verdissait pour cette raison-là, étrangère à la sienne (PLAN-LOT3 Q13).
+ */
+const PLAN_SANS_DECISION = planAvecDesign([{ id: "W03" }, { id: "W09" }]);
 
 async function integrer(h: Awaited<ReturnType<typeof monter>>, unite: string, valeur: string, seq: string) {
   const fichier = unite === "W03" ? "src/a.py" : "src/b.py";
@@ -68,7 +75,7 @@ regression("B3-racine-sale", "une racine sale fait refuser toute intégration", 
       ["DESIGN.md", (root: string) => writeFileSync(join(root, "DESIGN.md"), `${DESIGN}\n<!-- sale -->\n`)],
     ] as const) {
       const cas = `${chemin} · ${quoi}`;
-      const h = await monter({ bundle: true, design: DESIGN, plan: PLAN_DEUX });
+      const h = await monter({ bundle: true, design: DESIGN, plan: PLAN_SANS_DECISION });
       try {
         PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
         await h.outil.execute("1", tache("W03"));

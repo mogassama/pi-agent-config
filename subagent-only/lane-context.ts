@@ -47,9 +47,14 @@ export interface LaneRoots {
  * L'identifiant d'une lane. Porte le run, comme les identifiants de risque :
  * deux runs ne se marchent pas dessus et la provenance se lit sans table de
  * correspondance.
+ *
+ * Et sa génération, dès la première (C0 § F) : `<R>-<unit>-g1`, `<R>-<unit>-g2`, …
+ * `<R>-<unit>` pour g1 puis `-g2` ensuite entretiendrait deux grammaires, et entrerait
+ * en collision avec une unité dont l'identifiant finit lui-même par `-g<n>`.
+ * L'identifiant reste opaque : la génération fait foi dans `OPENED`, pas ici.
  */
-export function laneIdFor(workUnitId: string, runId: string): string {
-  return `${runId}-${workUnitId}`;
+export function laneIdFor(workUnitId: string, runId: string, generation = 1): string {
+  return `${runId}-${workUnitId}-g${generation}`;
 }
 
 /** Ce qu'il faut savoir faire pour ouvrir une lane : créer ou retrouver son worktree. */
@@ -86,8 +91,9 @@ export function openLane(
   workUnitId: string,
   roots: LaneRoots,
   ensure: EnsureLane,
+  generation = 1,
 ): LaneContext {
-  const laneId = laneIdFor(workUnitId, roots.runId);
+  const laneId = laneIdFor(workUnitId, roots.runId, generation);
   const { cwd, branch } = ensure(roots.root, laneId);
   return { laneId, workUnitId, cwd, branch };
 }

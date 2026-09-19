@@ -48,7 +48,7 @@ regression("B2-violation-reload", "une violation constatée survit à une nouvel
       await h.outil.execute("1", tache("W03"));
       PILOTE.pendant = undefined;
       precondition(
-        existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03`, nature.fichier)),
+        existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`, nature.fichier)),
         `${nature.kind} : le fichier gelé doit être dans la lane`,
       );
 
@@ -117,7 +117,7 @@ regression("B2-violation-retablie", "rétablir le fichier gelé ne lève pas la 
       PILOTE.resultat = undefined;
       await h.outil.execute("3", tache("W03"));
       PILOTE.pendant = undefined;
-      const cheminLane = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`, nature.fichier);
+      const cheminLane = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`, nature.fichier);
       precondition(
         readFileSync(cheminLane, "utf-8") === `# ${nature.fichier}\n`,
         `${nature.kind} : le rework doit avoir rétabli le fichier`,

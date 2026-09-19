@@ -152,7 +152,7 @@ async function vestige(avecLane: boolean) {
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
-    precondition(lanes(h.root).includes(`${h.runId}-W03`), "la lane W03 doit être ouverte avant le vestige");
+    precondition(lanes(h.root).includes(`${h.runId}-W03-g1`), "la lane W03 doit être ouverte avant le vestige");
   }
   const verrou = join(h.runDir, `${h.runId}.guard`);
   mkdirSync(verrou, { recursive: true });
@@ -233,7 +233,7 @@ preservation("C-P1-F02", "un rework et sa revue rejoignent la lane déjà ouvert
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
-    const laneId = `${h.runId}-W03`;
+    const laneId = `${h.runId}-W03-g1`;
     precondition(lanes(h.root).includes(laneId), "la lane W03 doit être ouverte");
     await h.outil.execute("2", revue("W03", { verdict: "needs_rework" }));
     PILOTE.resultat = undefined;

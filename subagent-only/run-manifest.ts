@@ -1168,38 +1168,197 @@ export const LANE_LEDGER_VERSION = 1;
 /**
  * La version du registre des lanes que C0 § F décrit : `{"ledger":2}`.
  *
- * LUE seulement. L'écrivain reste en version 1 jusqu'au lot qui écrit les identités g1
- * (C4.9) : `appendLaneEvent` continue de refuser tout registre qui n'est pas de sa
- * version, et aucune ligne v2 n'est produite ici.
+ * ÉCRITE depuis le LOT 3, avec les identités g1 (C4.9) : un run neuf crée son registre
+ * en v2, et un registre v1 existant n'est jamais réécrit ni migré vers elle.
  */
 export const LANE_LEDGER_V2 = 2;
 
-export function appendLaneEvent(dir: string, event: LaneEventV1, lease: Lease): void {
+/**
+ * Ce qu'un appelant demande d'enregistrer. L'enveloppe n'en fait pas partie.
+ *
+ * `event_seq`, `lane` d'un événement de vie et `generation` d'un abandon se DÉDUISENT
+ * du registre relu sous la garde du run, pas de ce que l'appelant croit savoir : une
+ * séquence ou une lane fournie de l'extérieur serait une seconde vérité, et deux
+ * écrivains qui la calculeraient chacun de leur côté produiraient deux fois la même.
+ *
+ * Seule l'ouverture nomme sa lane et sa génération : c'est l'allocation qui les décide,
+ * et l'écrivain vérifie seulement qu'elles se tiennent.
+ */
+export type LaneWrite =
+  | { event: "OPENED"; work_unit: string; at: string; base: string; lane?: string; generation?: number }
+  | { event: "INTEGRATED"; work_unit: string; at: string; integration_commit?: string }
+  | { event: "ABANDONED"; work_unit: string; at: string; reason?: string; by?: string };
+
+/**
+ * Une ouverture refusée dans un run legacy (PLAN-LOT3 § 1, lecture (b)).
+ *
+ * Un registre v1 reste lisible, clôturable et continuable pour ses lanes déjà ouvertes ;
+ * aucune nouvelle lane n'y naît, parce qu'elle y naîtrait sous une grammaire que C0 ne
+ * crée plus. Levée AVANT toute écriture : rien n'est ajouté au fichier.
+ */
+export class LegacyLaneLedgerError extends RecoveryError {}
+
+/**
+ * La lane d'une unité dans un registre v2 : celle de sa DERNIÈRE ouverture, et sa génération.
+ *
+ * C'est la lane dont un `INTEGRATED` ou un `ABANDONED` écrit ensuite relève — y compris
+ * l'abandon d'une lane que le registre dit intégrée sans que git le confirme. Rien ici ne
+ * lit un worktree ni une branche : le registre dit quelle lane est celle de l'unité.
+ */
+export function lastLaneOfUnit(
+  events: readonly LaneEvent[],
+  workUnit: string,
+): { lane: string; generation: number } | undefined {
+  let derniere: { lane: string; generation: number } | undefined;
+  for (const e of events) {
+    if (e.work_unit === workUnit && e.event === "OPENED" && "lane" in e) {
+      derniere = { lane: e.lane, generation: e.generation };
+    }
+  }
+  return derniere;
+}
+
+/**
+ * Crée le registre v2 d'un run neuf, puis publie son témoin.
+ *
+ * L'ordre de C4.1 : l'en-tête d'abord, rendu durable — fichier puis répertoire — et
+ * seulement ensuite le témoin `ledgers.lanes = 2`. Un crash entre les deux laisse un
+ * registre sans témoin, que C4.9 (ligne 5) lit KNOWN ; l'ordre inverse laisserait un
+ * témoin sans registre, lu LOST, donc un run fermé sur un fichier qui n'a jamais existé.
+ *
+ * Réservé à un manifeste v2 : un manifeste v1 ne peut porter aucun témoin (C4.7), et y
+ * créer un registre v2 fabriquerait la ligne 15 de C4.9.
+ */
+function creerRegistreV2(dir: string, lease: Lease, path: string): void {
+  const manifeste = mutable(dir, lease, "créer le registre des lanes");
+  if (manifeste.version !== 2) {
+    throw new RecoveryError(
+      `registre ${lease.runId} : un manifeste v${String(manifeste.version)} ne peut attester ` +
+        "aucun registre, aucun n'est créé",
+    );
+  }
+  const fd = openSync(path, "wx");
+  try {
+    writeFileSync(fd, `${JSON.stringify({ ledger: LANE_LEDGER_V2 })}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  synchroniserChemin(dir);
+  const temoins = manifeste.ledgers ?? {};
+  if (temoins.lanes === LANE_LEDGER_V2) return;
+  if (temoins.lanes !== undefined) {
+    throw new RecoveryError(
+      `registre ${lease.runId} : le manifeste atteste déjà lanes: ${String(temoins.lanes)}`,
+    );
+  }
+  writeManifest(dir, { ...manifeste, ledgers: { ...temoins, lanes: LANE_LEDGER_V2 } });
+}
+
+/**
+ * L'événement v2 complet, enveloppe déduite du registre relu.
+ *
+ * Chaque refus précède l'écriture. Ce que C0 exige d'un événement v2 et que l'appelant ne
+ * peut pas fournir — une lane pour une unité qui n'en a pas d'ouverte, un commit
+ * d'intégration absent — ne se complète pas : il se refuse.
+ */
+function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<string, unknown> {
+  const seq = lu.events.reduce((m, e) => ("event_seq" in e ? Math.max(m, e.event_seq) : m), 0) + 1;
+  const quoi = `${event.event} sur ${event.work_unit}`;
+  if (event.event === "OPENED") {
+    const { lane, generation } = event;
+    if (lane === undefined || generation === undefined || !Number.isSafeInteger(generation) || generation < 1) {
+      throw new RecoveryError(`${quoi} : une ouverture v2 porte sa lane et sa génération`);
+    }
+    /*
+     * La grammaire de C0 § F, redite ici et non importée : c'est un CONTRÔLE de ce que
+     * l'allocation a produit, le même que celui du lecteur (`laneLedgerIncoherences`). Le
+     * lui emprunter à `lane-context.ts` ferait entrer ce module et ses dépendances dans le
+     * programme de `bin/subagent-recover`, qui n'en a pas besoin.
+     */
+    if (lane !== `${runId}-${event.work_unit}-g${generation}`) {
+      throw new RecoveryError(`${quoi} : ${lane} n'est pas la lane de g${generation}`);
+    }
+    if (lu.events.some((e) => e.event === "OPENED" && "lane" in e && e.lane === lane)) {
+      throw new RecoveryError(`${quoi} : ${lane} a déjà été ouverte, aucune génération n'est réutilisée`);
+    }
+    return { event_seq: seq, work_unit: event.work_unit, lane, at: event.at, event: "OPENED", base: event.base, generation };
+  }
+  const ouverte = lastLaneOfUnit(lu.events, event.work_unit);
+  if (!ouverte) {
+    throw new RecoveryError(`${quoi} : le registre n'a jamais ouvert de lane pour ${event.work_unit}`);
+  }
+  const enveloppe = { event_seq: seq, work_unit: event.work_unit, lane: ouverte.lane, at: event.at };
+  if (event.event === "INTEGRATED") {
+    /*
+     * La forme historique de C0 v1.8, et elle seule : le commit exact, aucun `status`.
+     * L'appelant a déjà refusé avant le merge toute unité portant un `design_update` ;
+     * l'écrivain ne voit pas le plan et n'invente pas d'issue de Statut.
+     */
+    if (!event.integration_commit) {
+      throw new RecoveryError(`${quoi} : sous v2, une intégration porte son commit exact`);
+    }
+    return { ...enveloppe, event: "INTEGRATED", integration_commit: event.integration_commit };
+  }
+  if (!event.reason) throw new RecoveryError(`${quoi} : un abandon v2 porte sa raison`);
+  return {
+    ...enveloppe,
+    event: "ABANDONED",
+    by: event.by ?? "operator",
+    reason: event.reason,
+    generation: ouverte.generation,
+  };
+}
+
+/**
+ * Enregistre un événement de vie de lane, dans la grammaire de la version réellement lue.
+ *
+ * L'aiguillage se fait sur l'en-tête relu sous la garde du run, jamais sur une supposition :
+ *
+ *   registre absent   run neuf : création v2 (en-tête durable, puis témoin), événement v2
+ *   registre v2       événement v2 complet, enveloppe déduite
+ *   registre v1       continuation legacy des lanes déjà ouvertes ; aucune ouverture
+ *
+ * Tout autre en-tête, ou une ligne illisible, refuse : écrire à la suite d'un registre
+ * qu'on ne sait pas lire en entier ajouterait un fait à une histoire inconnue.
+ */
+export function appendLaneEvent(dir: string, event: LaneWrite, lease: Lease): void {
   withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.work_unit}`);
     const path = laneLedgerPath(dir, lease.runId);
-    if (!existsSync(path)) {
-      appendFileSync(path, `${JSON.stringify({ ledger: LANE_LEDGER_VERSION })}\n`);
-    } else {
-      /*
-       * La version fait partie de l'invariant d'écriture, pas seulement de la
-       * porte `task`. Un nouvel appelant ne doit jamais pouvoir mélanger des
-       * événements v1 dans un registre legacy, futur ou amputé.
-       */
-      const lu = readLaneEvents(dir, lease.runId);
-      if (lu.version !== LANE_LEDGER_VERSION) {
-        const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
-        throw new RecoveryError(
-          `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
-        );
-      }
-      if (lu.malformedLines.length > 0) {
-        throw new RecoveryError(
-          `registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
-        );
-      }
+    if (!existsSync(path)) creerRegistreV2(dir, lease, path);
+    const lu = readLaneEvents(dir, lease.runId);
+    if (lu.malformedLines.length > 0) {
+      throw new RecoveryError(
+        `registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
+      );
     }
-    appendFileSync(path, `${JSON.stringify(event)}\n`);
+    if (lu.version === LANE_LEDGER_V2) {
+      appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
+      return;
+    }
+    if (lu.version !== LANE_LEDGER_VERSION) {
+      const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
+      throw new RecoveryError(
+        `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
+      );
+    }
+    if (event.event === "OPENED") {
+      throw new LegacyLaneLedgerError(
+        `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : aucune nouvelle lane ne ` +
+          "s'ouvre dans un run legacy ; le terminer ou l'abandonner, puis ouvrir un nouveau run",
+      );
+    }
+    const legacy: LaneEventV1 = event.event === "INTEGRATED"
+      ? {
+        event: "INTEGRATED", work_unit: event.work_unit, at: event.at,
+        ...(event.integration_commit ? { integration_commit: event.integration_commit } : {}),
+      }
+      : {
+        event: "ABANDONED", work_unit: event.work_unit, at: event.at,
+        ...(event.reason ? { reason: event.reason } : {}),
+      };
+    appendFileSync(path, `${JSON.stringify(legacy)}\n`);
   });
 }
 

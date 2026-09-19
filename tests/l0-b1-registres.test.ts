@@ -291,7 +291,7 @@ couverture("C4-demarrage", "aucun registre n'est créé au simple démarrage d'u
 
 // ================================================================== § F — générations
 
-regression("F-generation", "l'identité d'une lane porte sa génération dès la première", () => {
+regressionCorrigee("F-generation", "l'identité d'une lane porte sa génération dès la première", () => {
   const id = issue(() => laneIdFor("W03", RUN));
   precondition(id.kind === "returned", `laneIdFor doit rendre un identifiant ; rendu : ${montrer(id)}`);
   propriete(

@@ -42,6 +42,7 @@ import {
   appendLaneEvent,
   decideUnderLease,
   LANE_LEDGER_VERSION,
+  LANE_LEDGER_V2,
   migrateLaneLedger,
   readLaneEvents,
   readManifest,
@@ -51,7 +52,7 @@ import {
   TransitionLockedError,
 } from "../subagent-only/run-manifest.ts";
 import { describeConflicts } from "../subagent-only/lane-ledger.ts";
-import { observeLanes } from "../subagent-only/lane-observe.ts";
+import { laneGrammar, laneOfUnit, observeLanes, unitOfLane } from "../subagent-only/lane-observe.ts";
 import { isActive } from "../subagent-only/integration-ledger.ts";
 import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 import { closeAttempt, removeIntegration } from "../subagent-only/integration.ts";
@@ -101,6 +102,29 @@ const runId = manifest.runId;
 function etat() {
   const laneRead = readLaneEvents(dir, runId);
   return { laneRead, vu: observeLanes({ root, runId, laneRead }) };
+}
+
+/**
+ * La lane d'une unité, telle que le runtime la nomme.
+ *
+ * L'`OPENED` autoritaire d'abord (`laneOfUnit`) : dès g1, `${runId}-${unite}` ne désigne
+ * plus aucune lane. Sans ouverture, l'artefact que le disque montre pour cette unité —
+ * c'est lui qu'on tranche. Sous v1, et seulement sous v1, l'identité legacy à défaut.
+ */
+// Les valeurs par défaut ne servent qu'au typage : ce fichier est du JavaScript, et
+// c'est ainsi que le compilateur de S4 connaît le type de ses paramètres.
+function laneDe(unite = "", lu = readLaneEvents(dir, runId)) {
+  const g = laneGrammar(lu);
+  const connue = laneOfUnit(lu.events, g, runId, unite);
+  if (connue) return connue.laneId;
+  const artefacts = [...new Set([...openLanes(root), ...runBranches(root, runId).map((b) => `${runId}-${b}`)])]
+    .filter((id) => unitOfLane(id, lu.events, g, runId) === unite);
+  if (artefacts.length === 1) return artefacts[0];
+  if (artefacts.length > 1) {
+    console.error(`  refus : plusieurs artefacts désignent ${unite} (${artefacts.join(", ")}) ; aucun n'est choisi.`);
+    process.exit(1);
+  }
+  return g === LANE_LEDGER_V2 ? undefined : `${runId}-${unite}`;
 }
 
 /** Sortir si le registre des lanes interdit toute reconstruction. */
@@ -213,9 +237,9 @@ if (process.argv.includes("--migrate-ledger")) {
  * Le confondre ferait proposer de corriger des lignes là où il faut migrer.
  */
 function refuserSiAutreVersion(version) {
-  if (version === LANE_LEDGER_VERSION) return;
+  if (version === LANE_LEDGER_VERSION || version === LANE_LEDGER_V2) return;
   const trouve = version === undefined ? "aucune version déclarée" : `version ${version}`;
-  console.error(`registre d'une autre version : ${trouve}, ce runtime lit ${LANE_LEDGER_VERSION}.`);
+  console.error(`registre d'une autre version : ${trouve}, ce runtime lit ${LANE_LEDGER_VERSION} et ${LANE_LEDGER_V2}.`);
   console.error("  ce n'est pas une corruption ; ne pas corriger ses lignes à la main.");
   console.error("  migrer avec : bin/subagent-recover --migrate-ledger");
   process.exit(1);
@@ -233,9 +257,9 @@ function refuserSiAmpute(lignes) {
 if (!unite) {
   const { laneRead, vu } = etat();
   console.log(`run ${runId} · ${manifest.status}`);
-  if (laneRead.version !== LANE_LEDGER_VERSION) {
+  if (laneRead.version !== LANE_LEDGER_VERSION && laneRead.version !== LANE_LEDGER_V2) {
     const trouve = laneRead.version === undefined ? "aucune version" : `version ${laneRead.version}`;
-    console.log(`registre d'une autre version : ${trouve} (ce runtime lit ${LANE_LEDGER_VERSION})`);
+    console.log(`registre d'une autre version : ${trouve} (ce runtime lit ${LANE_LEDGER_VERSION} et ${LANE_LEDGER_V2})`);
     console.log("  migrer avec : bin/subagent-recover --migrate-ledger");
     process.exit(0);
   }
@@ -349,8 +373,9 @@ function afficherPlan(plan) {
 
   console.log("à retirer :");
   if (rien) console.log("  rien");
-  for (const u of plan.laneWorktrees) console.log(`  worktree  ${runId}-${u}`);
-  for (const u of plan.laneBranches) console.log(`  branche   pi-lane/${runId}-${u}`);
+  const luA = readLaneEvents(dir, runId);
+  for (const u of plan.laneWorktrees) console.log(`  worktree  ${laneDe(u, luA) ?? `${runId}-${u}`}`);
+  for (const u of plan.laneBranches) console.log(`  branche   pi-lane/${laneDe(u, luA) ?? `${runId}-${u}`}`);
   for (const id of plan.integrationContexts) console.log(`  contexte  ${id}`);
 
   if (plan.retained.length > 0) {
@@ -524,7 +549,8 @@ if (args[0] === "cleanup") {
         console.log();
       }
       if (afficherPlan(plan)) return;
-      bilanCleanup = applyCleanup(root, runId, plan);
+      const luC = readLaneEvents(dir, runId);
+      bilanCleanup = applyCleanup(root, runId, plan, undefined, (u) => laneDe(u, luC) ?? `${runId}-${u}`);
     },
     release: () => {
       if (leaseC) releaseRunOwnership(dir, leaseC);
@@ -863,6 +889,19 @@ if (action !== "discard" && horsPlan) {
   process.exit(1);
 }
 
+/*
+ * `integrated` sous v2 : refus, sans effet (C0 v1.8).
+ *
+ * Un INTEGRATED v2 porte son commit d'intégration exact ; `isMerged` établit que la
+ * branche est dans HEAD, pas lequel des commits de HEAD l'y a mise. Le reconstituer
+ * serait le fabriquer. Sous v1, le verbe reste ce qu'il était.
+ */
+if (action === "integrated" && laneGrammar(laneRead) === LANE_LEDGER_V2) {
+  console.error("  refus : sous le registre v2, une intégration porte son commit exact, que cet");
+  console.error("  outil n'observe pas. Rien n'a été écrit ; la branche reste sa preuve.");
+  process.exit(1);
+}
+
 // Prendre le bail, ou le reprendre s'il est périmé — un run à trancher est
 // souvent un run dont la session est morte.
 const sessionId = `recover-${process.pid}`;
@@ -887,7 +926,7 @@ if (pris.ok) {
  * outil — observer, acquérir, relire, vérifier, agir, enregistrer.
  */
 const { laneRead: apresRead, vu: apresVu } = etat();
-if (apresRead.version !== LANE_LEDGER_VERSION) {
+if (apresRead.version !== LANE_LEDGER_VERSION && apresRead.version !== LANE_LEDGER_V2) {
   releaseRunOwnership(dir, lease);
   refuserSiAutreVersion(apresRead.version);
 }
@@ -920,16 +959,28 @@ if (encore.kind !== conflit.kind) {
  */
 // La base de la lane, pas celle du run : la seconde donne la mauvaise réponse
 // dès qu'une autre unité a été intégrée entre-temps.
-const evenements = readLaneEvents(dir, runId).events;
-const ouverture = evenements.find((e) => e.event === "OPENED" && e.work_unit === unite);
+const luAction = readLaneEvents(dir, runId);
+const laneUnite = laneDe(unite, luAction);
+const ouverture = luAction.events.find((e) =>
+  e.event === "OPENED" && e.work_unit === unite &&
+  (!("lane" in e) || e.lane === laneUnite));
 const base = ouverture?.base;
-if (action === "integrated" && !(base && isMerged(root, `${runId}-${unite}`, base))) {
+/*
+ * Sous v2, un artefact qui ne porte aucune identité de ce run n'a pas de lane : il n'y a
+ * rien à adopter, intégrer ou abandonner. Seul `discard` le tranche, et il le nomme.
+ */
+if (laneUnite === undefined) {
+  console.error(`  refus : aucun artefact de lane de ce run ne désigne ${unite}.`);
+  releaseRunOwnership(dir, lease);
+  process.exit(1);
+}
+if (action === "integrated" && !(base && isMerged(root, laneUnite, base))) {
   console.error("  refus : git ne montre aucune intégration pour cette unité.");
   console.error("  « integrated » enregistre un merge, il ne le fabrique pas.");
   releaseRunOwnership(dir, lease);
   process.exit(1);
 }
-if (action === "abandoned" && base && isMerged(root, `${runId}-${unite}`, base)) {
+if (action === "abandoned" && base && isMerged(root, laneUnite, base)) {
   console.error("  refus : git montre cette unité comme intégrée.");
   releaseRunOwnership(dir, lease);
   process.exit(1);
@@ -939,7 +990,7 @@ if (action === "abandoned" && base && isMerged(root, `${runId}-${unite}`, base))
  * `adopt` veut dire « ce worktree existe et je lui donne sa provenance ».
  * L'écrire sans worktree fabriquerait une ouverture qui n'a jamais eu lieu.
  */
-if (action === "adopt" && !openLanes(root).includes(`${runId}-${unite}`)) {
+if (action === "adopt" && !openLanes(root).includes(laneUnite)) {
   console.error("  refus : aucun worktree à adopter pour cette unité.");
   releaseRunOwnership(dir, lease);
   process.exit(1);
@@ -952,7 +1003,7 @@ if (action === "adopt" && !openLanes(root).includes(`${runId}-${unite}`)) {
  */
 if (
   action === "discard" && conflit.kind !== "residu-sale" &&
-  base && isMerged(root, `${runId}-${unite}`, base)
+  base && isMerged(root, laneUnite, base)
 ) {
   console.error("  refus : git montre cette unité comme intégrée ; « integrated » convient.");
   releaseRunOwnership(dir, lease);
@@ -965,7 +1016,7 @@ if (
  * perte irréversible ne doit pas tenir à une faute de frappe.
  */
 if (action === "discard") {
-  const perdus = laneChanges(root, `${runId}-${unite}`);
+  const perdus = laneChanges(root, laneUnite);
   if (perdus.length > 0) {
     console.log(`  ${perdus.length} fichier(s) seront perdus :`);
     for (const f of perdus) console.log(`    ${f}`);
@@ -983,8 +1034,8 @@ if (action === "discard") {
    */
   const supprimeBranche = conflit.kind === "branche-sans-provenance" || horsPlan;
   if (supprimeBranche) {
-    const n = laneUnmergedCommitCount(root, `${runId}-${unite}`);
-    const tip = laneTip(root, `${runId}-${unite}`);
+    const n = laneUnmergedCommitCount(root, laneUnite);
+    const tip = laneTip(root, laneUnite);
     if (n === undefined || !tip) {
       console.error("  refus : impossible d'établir l'état de la branche à supprimer.");
       releaseRunOwnership(dir, lease);
@@ -1049,7 +1100,7 @@ try {
           process.exit(1);
         }
         const dansLaLane = tryGitRecover(
-          ["merge-base", "--is-ancestor", donnee, `pi-lane/${runId}-${unite}`],
+          ["merge-base", "--is-ancestor", donnee, `pi-lane/${laneUnite}`],
         );
         if (!dansLaLane) {
           console.error(`  refus : ${donnee} n'est pas un ancêtre de la branche de ${unite}.`);
@@ -1060,20 +1111,35 @@ try {
       }
       let baseAdoptee = donnee;
       if (!baseAdoptee) {
-        if (laneHasDiverged(root, `${runId}-${unite}`)) {
+        if (laneHasDiverged(root, laneUnite)) {
           console.error("  refus : cette lane a une histoire propre, sa base est inconnue.");
           console.error("  fournir « --base <sha> » pour l'adopter en connaissance de cause.");
           releaseRunOwnership(dir, lease);
           process.exit(1);
         }
-        baseAdoptee = laneTip(root, `${runId}-${unite}`);
+        baseAdoptee = laneTip(root, laneUnite);
       }
       if (!baseAdoptee) {
         console.error("  refus : aucune base déterminable pour cette lane.");
         releaseRunOwnership(dir, lease);
         process.exit(1);
       }
-      appendLaneEvent(dir, { event: "OPENED", work_unit: unite, at, base: baseAdoptee }, lease);
+      /*
+       * Sous v2, l'ouverture porte sa lane et sa génération, et l'identifiant de l'artefact
+       * adopté doit être celui de C0 : `<R>-<unité>-g<n>`. Un worktree nommé dans
+       * l'ancienne grammaire n'en porte aucune — il ne s'adopte pas, il se retire. Sous
+       * v1, l'écrivain refuse toute nouvelle ouverture (PLAN-LOT3 § 1) : rien n'est écrit.
+       */
+      const prefixeGen = `${runId}-${unite}-g`;
+      const suffixe = laneUnite.startsWith(prefixeGen) ? laneUnite.slice(prefixeGen.length) : "";
+      const gen = /^[1-9][0-9]*$/.test(suffixe) ? [laneUnite, suffixe] : null;
+      if (laneGrammar(luAction) === LANE_LEDGER_V2 && !gen) {
+        throw new Error(`${laneUnite} ne porte pas l'identité d'une génération de ${unite} : « discard » seulement`);
+      }
+      appendLaneEvent(dir, {
+        event: "OPENED", work_unit: unite, at, base: baseAdoptee,
+        ...(gen ? { lane: laneUnite, generation: Number(gen[1]) } : {}),
+      }, lease);
       console.log(`  adoptée : ouverte au registre, base ${baseAdoptee.slice(0, 12)}`);
       break;
     }
@@ -1105,14 +1171,14 @@ try {
        */
       abandonLane(
         root,
-        `${runId}-${unite}`,
+        laneUnite,
         () => appendLaneEvent(
           dir, { event: "ABANDONED", work_unit: unite, at, reason: conflit.kind }, lease),
         (r, id) => (openLanes(r).includes(id) ? removeLane(r, id) : true),
       );
       console.log("  enregistrée comme abandonnée, worktree rangé");
       console.log(`  sa branche est conservée : elle porte le travail (${
-        laneTip(root, `${runId}-${unite}`)?.slice(0, 12) ?? "aucun commit"})`);
+        laneTip(root, laneUnite)?.slice(0, 12) ?? "aucun commit"})`);
       break;
     }
     case "discard": {
@@ -1127,16 +1193,16 @@ try {
        * symptôme.
        */
       if (conflit.kind === "branche-sans-provenance") {
-        const tip = laneTip(root, `${runId}-${unite}`);
+        const tip = laneTip(root, laneUnite);
         console.log(`  branche parasite ${tip ? tip.slice(0, 12) : "?"} : suppression`);
-        if (!removeLaneBranch(root, `${runId}-${unite}`, process.argv.includes("--force"))) {
+        if (!removeLaneBranch(root, laneUnite, process.argv.includes("--force"))) {
           throw new Error("git a refusé de supprimer la branche parasite");
         }
         console.log("  aucun événement écrit : le registre n'a jamais connu cette unité");
         break;
       }
       // L'effet d'abord, le fait ensuite — comme partout.
-      const retire = removeLane(root, `${runId}-${unite}`);
+      const retire = removeLane(root, laneUnite);
       if (!retire) throw new Error("le worktree attendu n'a pas pu être retiré");
       console.log("  worktree retiré");
 
@@ -1145,7 +1211,7 @@ try {
        * seulement son chemin de nettoyage : worktree + branche, puis zéro fait.
        */
       if (horsPlan) {
-        if (!removeLaneBranch(root, `${runId}-${unite}`, process.argv.includes("--force"))) {
+        if (!removeLaneBranch(root, laneUnite, process.argv.includes("--force"))) {
           throw new Error("le worktree a été retiré mais la branche parasite subsiste");
         }
         console.log("  aucun événement écrit : l'unité ne figure pas dans le plan gelé");
@@ -1163,6 +1229,15 @@ try {
       }
       if (conflit.kind === "residu-d-abandon") {
         console.log("  le fait ABANDONED existe déjà : seul le résidu est retiré");
+        break;
+      }
+      /*
+       * Sous v2, un ABANDONED ferme une lane OUVERTE au registre : sa lane et sa génération
+       * viennent de l'ouverture. Un artefact que le registre n'a jamais ouvert n'a rien à
+       * fermer — l'écrire rendrait le registre incohérent. Retiré, il n'a pas d'histoire.
+       */
+      if (laneGrammar(luAction) === LANE_LEDGER_V2 && !ouverture) {
+        console.log("  aucun événement écrit : le registre n'a jamais ouvert cette lane");
         break;
       }
       appendLaneEvent(dir, { event: "ABANDONED", work_unit: unite, at, reason: "discard" }, lease);

@@ -28,6 +28,7 @@ import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
 import {
   acquireRunOwnership,
   appendLaneEvent,
+  planHash,
   readManifest,
   releaseRunOwnership,
   type Lease,
@@ -60,6 +61,18 @@ const PLAN = {
     { id: "W03", goal: "faire W03", depends_on: [], expected_write_scope: ["src/a.py"] },
     { id: "W09", goal: "faire W09", depends_on: [], expected_write_scope: ["src/b.py"] },
   ],
+};
+
+const PLAN_AVEC_DECISION = {
+  ...PLAN,
+  work_units: PLAN.work_units.map((u) => u.id === "W03"
+    ? {
+        ...u,
+        design_update: {
+          decision_id: "D-001", from_status: "proposé", to_status: "en cours",
+        },
+      }
+    : u),
 };
 
 /**
@@ -284,7 +297,7 @@ test("un run libre laisse la délégation passer", async () => {
     assert.equal(enErreur(r), false, texte(r));
     assert.equal(readManifest(h.runDir)!.nextSeq, 2, "une séquence réservée");
     assert.deepEqual(APPELS.map((a) => a.seq), [1]);
-    assert.deepEqual(lanes(h.root), [`${h.runId}-W03`]);
+    assert.deepEqual(lanes(h.root), [`${h.runId}-W03-g1`]);
   } finally {
     h.done();
   }
@@ -456,7 +469,7 @@ test("une session reprise retrouve la lane ouverte par la précédente", async (
     root = premier.root;
     runId = premier.runId;
     await premier.outil.execute("1", tache("W03"));
-    assert.deepEqual(lanes(root), [`${runId}-W03`]);
+    assert.deepEqual(lanes(root), [`${runId}-W03-g1`]);
 
     // Sortie propre : le bail disparaît, le run reste actif. C'est le chemin de
     // `/new`, `/resume` et de la fermeture ordinaire.
@@ -485,7 +498,7 @@ test("une session reprise retrouve la lane ouverte par la précédente", async (
     // W09, qui ne recouvre pas W03, peut travailler : la reprise n'a rien cassé.
     const r = await outil2!.execute("1", tache("W09"));
     assert.equal(enErreur(r), false, texte(r));
-    assert.deepEqual(lanes(root).sort(), [`${runId}-W03`, `${runId}-W09`]);
+    assert.deepEqual(lanes(root).sort(), [`${runId}-W03-g1`, `${runId}-W09-g1`]);
   } finally {
     premier.done();
   }
@@ -510,8 +523,8 @@ test("une session reprise retrouve la lane ouverte par la précédente", async (
 test("une contradiction ferme le run, et sa résolution le rouvre", async () => {
   const h = await monter();
   try {
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`,
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`), "HEAD"],
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`,
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`), "HEAD"],
       { cwd: h.root, stdio: "ignore" });
     await (h.evenement("session_shutdown") as (() => Promise<void>) | undefined)?.();
 
@@ -536,7 +549,7 @@ test("une contradiction ferme le run, et sa résolution le rouvre", async () => 
     assert.match(texte(bloque), /reprise à trancher/);
     assert.match(texte(bloque), /W03/);
     assert.equal(readManifest(h.runDir)!.nextSeq, avant, "aucune séquence");
-    assert.equal(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W09`)), false);
+    assert.equal(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`)), false);
     assert.deepEqual(APPELS, [], "aucun enfant");
 
     // L'opérateur tranche, explicitement.
@@ -556,8 +569,8 @@ test("un worktree orphelin est signalé, jamais adopté", async () => {
   const h = await monter();
   try {
     // Un worktree du run courant, créé hors de toute délégation.
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`,
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`), "HEAD"],
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`,
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`), "HEAD"],
       { cwd: h.root, stdio: "ignore" });
     await (h.evenement("session_shutdown") as (() => Promise<void>) | undefined)?.();
 
@@ -617,6 +630,34 @@ test("une ouverture qui échoue ne laisse aucune trace au registre", async () =>
   }
 });
 
+/**
+ * Des événements posés au registre des lanes, dans la grammaire qu'il porte : v2.
+ *
+ * Un run neuf écrit son registre en v2 (C4.9, LOT 3). Y ajouter des lignes v1 ne
+ * décrirait pas le scénario : le lecteur les compterait abîmées et le run se fermerait
+ * pour cette raison-là, pas pour celle que le test examine. L'enveloppe est complétée
+ * ici — séquence suivante, lane g<n> de l'unité — et rien d'autre n'est inventé.
+ */
+function ajouterV2(h: { runDir: string; runId: string }, docs: Array<Record<string, unknown>>): void {
+  const chemin = join(h.runDir, `${h.runId}-lanes.jsonl`);
+  const lignes = readFileSync(chemin, "utf-8").split("\n").filter(Boolean);
+  assert.deepEqual(JSON.parse(lignes[0]), { ledger: 2 }, "le registre du scénario doit être v2");
+  let seq = Math.max(0, ...lignes.slice(1).map((l) => Number((JSON.parse(l) as { event_seq?: number }).event_seq ?? 0)));
+  let ajout = "";
+  for (const d of docs) {
+    seq += 1;
+    const generation = (d.generation as number | undefined) ?? 1;
+    ajout += `${JSON.stringify({
+      event_seq: seq, work_unit: d.work_unit, lane: `${h.runId}-${String(d.work_unit)}-g${generation}`, at: "t", ...d,
+    })}\n`;
+  }
+  appendFileSync(chemin, ajout);
+}
+
+/** Le commit que la racine porte maintenant : celui du merge qu'un scénario vient de faire. */
+const teteRacine = (root: string): string =>
+  execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf-8" }).trim();
+
 /*
  * Le résidu sale, de bout en bout.
  *
@@ -630,13 +671,13 @@ test("un worktree sale après intégration ferme le run", async () => {
     // Une lane intégrée, dont le worktree survit avec des modifications.
     const baseAvant = execFileSync("git", ["rev-parse", "HEAD"],
       { cwd: h.root, encoding: "utf-8" }).trim();
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`, laneDir, "HEAD"],
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
     writeFileSync(join(laneDir, "src", "a.py"), "a = intégré\n");
     execFileSync("git", ["add", "-A"], { cwd: laneDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-qm", "W03"], { cwd: laneDir, stdio: "ignore" });
-    execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03`],
+    execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03-g1`],
       { cwd: h.root, stdio: "ignore" });
     // Du travail postérieur, resté dans la lane.
     writeFileSync(join(laneDir, "src", "a.py"), "a = et puis autre chose\n");
@@ -645,10 +686,14 @@ test("un worktree sale après intégration ferme le run", async () => {
     // pas confirmer l'intégration et la contradiction serait tout autre.
     const bail = acquireRunOwnership(h.runDir, h.runId, "s-poseur");
     appendLaneEvent(h.runDir,
-      { event: "OPENED", work_unit: "W03", at: new Date().toISOString(), base: baseAvant },
+      {
+        event: "OPENED", work_unit: "W03", at: new Date().toISOString(), base: baseAvant,
+        lane: `${h.runId}-W03-g1`, generation: 1,
+      },
       (bail as { lease: Lease }).lease);
+    // Sous v2 l'intégration porte son commit exact (C0 v1.8) : celui du merge observé.
     appendLaneEvent(h.runDir,
-      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString() },
+      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), integration_commit: teteRacine(h.root) },
       (bail as { lease: Lease }).lease);
     releaseRunOwnership(h.runDir, (bail as { lease: Lease }).lease);
 
@@ -706,8 +751,8 @@ test("un registre illisible ferme le run", async () => {
 test("une résolution externe débloque la session en cours", async () => {
   const h = await monter();
   try {
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`,
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`), "HEAD"],
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`,
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`), "HEAD"],
       { cwd: h.root, stdio: "ignore" });
 
     // La même instance de l'extension, sans redémarrage.
@@ -735,8 +780,8 @@ test("une résolution externe débloque la session en cours", async () => {
 test("une branche sans provenance ferme le run", async () => {
   const h = await monter();
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`, laneDir, "HEAD"],
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
     writeFileSync(join(laneDir, "src", "a.py"), "a = 2\n");
     execFileSync("git", ["add", "-A"], { cwd: laneDir, stdio: "ignore" });
@@ -763,8 +808,8 @@ test("une branche sans provenance ferme le run", async () => {
 test("une lane adoptée peut travailler puis s'intégrer sans reconflit", async () => {
   const h = await monter();
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`, laneDir, "HEAD"],
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
 
     execFileSync(join(import.meta.dirname, "..", "bin", "subagent-recover"),
@@ -780,11 +825,12 @@ test("une lane adoptée peut travailler puis s'intégrer sans reconflit", async 
     writeFileSync(join(laneDir, "src", "a.py"), "a = adopté\n");
     execFileSync("git", ["add", "-A"], { cwd: laneDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-qm", "W03"], { cwd: laneDir, stdio: "ignore" });
-    execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03`],
+    execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03-g1`],
       { cwd: h.root, stdio: "ignore" });
     const bail = acquireRunOwnership(h.runDir, h.runId, "s-poseur");
+    // Sous v2 l'intégration porte son commit exact (C0 v1.8) : celui du merge observé.
     appendLaneEvent(h.runDir,
-      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString() },
+      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), integration_commit: teteRacine(h.root) },
       (bail as { lease: Lease }).lease);
     releaseRunOwnership(h.runDir, (bail as { lease: Lease }).lease);
 
@@ -809,8 +855,8 @@ test("une lane divergée exige sa base, et la vérifie", async () => {
   try {
     const base = execFileSync("git", ["rev-parse", "HEAD"],
       { cwd: h.root, encoding: "utf-8" }).trim();
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`, laneDir, "HEAD"],
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
     writeFileSync(join(laneDir, "src", "a.py"), "a = premier essai\n");
     execFileSync("git", ["add", "-A"], { cwd: laneDir, stdio: "ignore" });
@@ -849,11 +895,12 @@ test("une lane divergée exige sa base, et la vérifie", async () => {
       readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8").split("\n")[1]);
     assert.equal(ouverture.base, base);
 
-    execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03`],
+    execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03-g1`],
       { cwd: h.root, stdio: "ignore" });
     const bail = acquireRunOwnership(h.runDir, h.runId, "s-poseur");
+    // Sous v2 l'intégration porte son commit exact (C0 v1.8) : celui du merge observé.
     appendLaneEvent(h.runDir,
-      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString() },
+      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), integration_commit: teteRacine(h.root) },
       (bail as { lease: Lease }).lease);
     releaseRunOwnership(h.runDir, (bail as { lease: Lease }).lease);
 
@@ -874,8 +921,8 @@ test("une lane divergée exige sa base, et la vérifie", async () => {
 test("une branche sans provenance est supprimée, pas abandonnée", async () => {
   const h = await monter();
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`, laneDir, "HEAD"],
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
     execFileSync("git", ["worktree", "remove", "--force", laneDir], { cwd: h.root, stdio: "ignore" });
 
@@ -919,10 +966,10 @@ test("les verbes de résolution refusent de fabriquer un fait", async () => {
     };
 
     // Une branche mergée sans provenance, worktree retiré.
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03`,
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`), "HEAD"], { cwd: h.root, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`,
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`), "HEAD"], { cwd: h.root, stdio: "ignore" });
     execFileSync("git", ["worktree", "remove", "--force",
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`)], { cwd: h.root, stdio: "ignore" });
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`)], { cwd: h.root, stdio: "ignore" });
 
     // `adopt` n'a rien à adopter, et le dit.
     const sansWorktree = essai(["W03", "adopt"]);
@@ -1102,7 +1149,7 @@ test("une migration ne peut pas réécrire le registre d'un run tenu", async () 
 test("discard d'une unité hors plan nettoie sans inventer ABANDONED", async () => {
   const h = await monter();
   try {
-    const laneId = `${h.runId}-W99`;
+    const laneId = `${h.runId}-W99-g1`;
     const laneDir = join(h.root, ".git", "pi-lanes", laneId);
     execFileSync("git", ["worktree", "add", "-b", `pi-lane/${laneId}`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
@@ -1125,7 +1172,7 @@ test("discard d'une unité hors plan nettoie sans inventer ABANDONED", async () 
 test("discard d'une branche non intégrée exige --force", async () => {
   const h = await monter();
   try {
-    const laneId = `${h.runId}-W03`;
+    const laneId = `${h.runId}-W03-g1`;
     const laneDir = join(h.root, ".git", "pi-lanes", laneId);
     execFileSync("git", ["worktree", "add", "-b", `pi-lane/${laneId}`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
@@ -1316,7 +1363,7 @@ test("le prompt demande un plan quand le dépôt est prêt", async () => {
 
 /** Une lane approuvée dont l'intégration conflictuera avec la base. */
 async function conflit(h: Awaited<ReturnType<typeof monter>>) {
-  const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+  const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
   // Le worker écrit dans sa lane.
   PILOTE.pendant = () => {
     writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n");
@@ -1407,7 +1454,7 @@ test("l'integration-worker travaille dans le contexte, pas dans la lane", async 
     assert.match(APPELS[avant].task, /src\/a\.py/);
     // La lane n'a pas été touchée.
     assert.equal(
-      readFileSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03`, "src", "a.py"), "utf-8"),
+      readFileSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`, "src", "a.py"), "utf-8"),
       "a = 'lane'\n",
     );
   } finally {
@@ -1494,7 +1541,7 @@ test("un dépassement de scope termine la tentative et rend l'unité à sa lane"
     assert.equal(existsSync(join(h.root, ".git", "pi-integrations")) &&
       execFileSync("ls", [join(h.root, ".git", "pi-integrations")], { encoding: "utf-8" }).trim(),
       "");
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     assert.equal(readFileSync(join(laneDir, "src", "a.py"), "utf-8"), "a = 'lane'\n");
     assert.equal(readFileSync(join(laneDir, "src", "b.py"), "utf-8"), "b = 1\n",
       "rien n'est transporté du contexte vers la lane");
@@ -1535,7 +1582,7 @@ test("une délégation d'intégration n'appartient à aucune lane", async () => 
 
     // Le worker de la lane, lui, en a une : c'est la distinction qui compte.
     const w = journal.find((e) => e.role === "worker");
-    assert.equal(w.lane_id, `${h.runId}-W03`);
+    assert.equal(w.lane_id, `${h.runId}-W03-g1`);
   } finally {
     h.done();
   }
@@ -1887,6 +1934,123 @@ async function redemarrer(h: Awaited<ReturnType<typeof monter>>) {
   return await monter({ reprendre: root });
 }
 
+/**
+ * Recharger un état produit par le runtime antérieur à C0 v1.8.
+ *
+ * L'ancien runtime pouvait ouvrir une tentative pour une unité portant un
+ * `design_update`. Le runtime courant ne peut pas fabriquer cet état par son
+ * chemin public — précisément parce que la nouvelle garde l'interdit. Le
+ * contre-exemple construit donc d'abord la tentative, puis remplace le plan et
+ * son empreinte autoritaire avant le redémarrage. Le reste du plan est identique.
+ */
+async function redemarrerAvecDecision(h: Awaited<ReturnType<typeof monter>>) {
+  const root = h.root;
+  await h.evenement("session_shutdown")?.();
+  const textePlan = JSON.stringify(PLAN_AVEC_DECISION);
+  writeFileSync(join(h.runDir, `${h.runId}-plan.json`), textePlan);
+  const manifeste = readManifest(h.runDir)!;
+  writeFileSync(
+    join(h.runDir, "active-run.json"),
+    `${JSON.stringify({ ...manifeste, planHash: planHash(textePlan) }, null, 2)}\n`,
+  );
+  process.chdir(REPO);
+  return await monter({ reprendre: root, avecPlan: false });
+}
+
+test("une tentative antérieure avec design_update refuse avant de construire son commit", async () => {
+  const h = await monter();
+  let h2: Awaited<ReturnType<typeof monter>> | undefined;
+  try {
+    // État que le runtime antérieur à C0 v1.8 pouvait produire : tentative en résolution.
+    await conflit(h);
+    await h.outil.execute("2", revueDe("approved"));
+    PILOTE.resultat = undefined;
+
+    h2 = await redemarrerAvecDecision(h);
+    PILOTE.pendant = (appel) => {
+      writeFileSync(join(appel.cwd!, "src", "a.py"), "a = 'résolu'\n");
+    };
+    const iw = await h2.outil.execute("3", {
+      agent: "integration-worker", work_unit: "W03", task: "résoudre",
+    });
+    PILOTE.pendant = undefined;
+    assert.match(texte(iw), /RÉSOLUTION PRÊTE/);
+
+    const tentatives = join(h.runDir, `${h.runId}-integrations.jsonl`);
+    const avantTentatives = readFileSync(tentatives, "utf-8");
+    const lanesAvant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
+    const avantHead = git(h.root, "rev-parse", "HEAD").trim();
+    const r = await h2.outil.execute("4", revueDe("approved"));
+    PILOTE.resultat = undefined;
+
+    assert.match(texte(r), /NON INTÉGRABLE\s+W03 : W03 porte un design_update/);
+    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), avantHead, "aucun merge");
+    assert.equal(readFileSync(tentatives, "utf-8"), avantTentatives, "aucun COMMITTED ni CLOSED");
+    assert.equal(
+      readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"),
+      lanesAvant,
+      "aucun INTEGRATED",
+    );
+    assert.equal(
+      execFileSync("ls", [join(h.root, ".git", "pi-integrations")], { encoding: "utf-8" })
+        .split("\n").filter(Boolean).length,
+      1,
+      "la tentative reste ouverte pour le LOT 9",
+    );
+  } finally {
+    PILOTE.pendant = undefined;
+    PILOTE.resultat = undefined;
+    (h2 ?? h).done();
+  }
+});
+
+test("un atterrissage antérieur avec design_update refuse encore avant le merge", async () => {
+  const h = await monter();
+  let h2: Awaited<ReturnType<typeof monter>> | undefined;
+  try {
+    await conflit(h);
+    await h.outil.execute("2", revueDe("approved"));
+    PILOTE.resultat = undefined;
+    PILOTE.pendant = (appel) => {
+      writeFileSync(join(appel.cwd!, "src", "a.py"), "a = 'résolu'\n");
+    };
+    await h.outil.execute("3", {
+      agent: "integration-worker", work_unit: "W03", task: "résoudre",
+    });
+
+    // L'ancien runtime construit M, mais une racine sale empêche son atterrissage.
+    PILOTE.pendant = () => { writeFileSync(join(h.root, "brouillon.txt"), "non suivi\n"); };
+    PILOTE.resultat = { verdict: "approved" } as never;
+    assert.match(texte(await h.outil.execute("4", revueDe("approved"))), /ATTERRISSAGE BLOQUÉ/);
+    PILOTE.pendant = undefined;
+    PILOTE.resultat = undefined;
+
+    h2 = await redemarrerAvecDecision(h);
+    rmSync(join(h.root, "brouillon.txt"));
+    const tentatives = join(h.runDir, `${h.runId}-integrations.jsonl`);
+    const avantTentatives = readFileSync(tentatives, "utf-8");
+    const lanesAvant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
+    const avantHead = git(h.root, "rev-parse", "HEAD").trim();
+    const avantAppels = APPELS.length;
+    const r = await h2.outil.execute("5", tache("W03"));
+
+    assert.ok(enErreur(r), texte(r));
+    assert.match(texte(r), /NON INTÉGRABLE\s+W03 : W03 porte un design_update/);
+    assert.equal(APPELS.length, avantAppels, "aucun enfant lancé");
+    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), avantHead, "aucun merge");
+    assert.equal(readFileSync(tentatives, "utf-8"), avantTentatives, "tentative prête conservée");
+    assert.equal(
+      readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"),
+      lanesAvant,
+      "aucun INTEGRATED",
+    );
+  } finally {
+    PILOTE.pendant = undefined;
+    PILOTE.resultat = undefined;
+    (h2 ?? h).done();
+  }
+});
+
 test("une tentative en résolution est retrouvée après un redémarrage", async () => {
   const h = await monter();
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
@@ -2184,7 +2348,7 @@ test("return-to-lane clôt la tentative et rend l'unité à sa lane", async () =
     assert.equal(existsSync(join(h.root, ".git", "pi-integrations", id)), false);
     assert.doesNotMatch(readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"), /ABANDONED/);
     assert.equal(
-      readFileSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03`, "src", "a.py"), "utf-8"),
+      readFileSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`, "src", "a.py"), "utf-8"),
       "a = 'lane'\n",
     );
 
@@ -2390,7 +2554,7 @@ test("return-to-lane refuse quand la lane n'existe plus, et garde le contexte", 
 
     // La lane disparaît sous la tentative.
     execFileSync("git", ["worktree", "remove", "--force",
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`)], { cwd: h.root });
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`)], { cwd: h.root });
     // Et `P2` est toujours là — c'est bien le contexte qui le tient.
     execFileSync("git", ["cat-file", "-e", `${p2}^{commit}`], { cwd: h.root });
 
@@ -2425,9 +2589,8 @@ test("return-to-lane refuse une unité que le registre ne donne plus ouverte", a
     // La lane est déclarée abandonnée, et son worktree retiré : plus de
     // contradiction, mais plus d'unité ouverte non plus.
     execFileSync("git", ["worktree", "remove", "--force",
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W03`)], { cwd: h.root });
-    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`),
-      `${JSON.stringify({ event: "ABANDONED", work_unit: "W03", at: "t", reason: "opérateur" })}\n`);
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`)], { cwd: h.root });
+    ajouterV2(h, [{ event: "ABANDONED", work_unit: "W03", by: "operator", reason: "opérateur", generation: 1 }]);
 
     const ledgerAvant = readFileSync(join(h.runDir, `${h.runId}-integrations.jsonl`), "utf-8");
     const r = recover(h.root, ["attempt", id, "return-to-lane"]);
@@ -2453,7 +2616,7 @@ test("abandonner range le worktree et ne laisse pas de résidu", async () => {
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
   try {
     // Une lane ouverte, du travail dedans, et une contradiction à trancher.
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
@@ -2465,19 +2628,21 @@ test("abandonner range le worktree et ne laisse pas de résidu", async () => {
      * cas où l'abandon doit ranger quelque chose.
      */
     const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: h.root, encoding: "utf-8" }).trim();
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09`,
-      join(h.root, ".git", "pi-lanes", `${h.runId}-W09`)], { cwd: h.root, stdio: "pipe" });
-    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`),
-      `${JSON.stringify({ event: "OPENED", work_unit: "W09", at: "t", base })}\n` +
-      `${JSON.stringify({ event: "INTEGRATED", work_unit: "W09", at: "t" })}\n`);
-    assert.equal(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W09`)), true);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09-g1`,
+      join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`)], { cwd: h.root, stdio: "pipe" });
+    // Intégrée au registre par un commit que git ne connaît pas : rien ne la confirme.
+    ajouterV2(h, [
+      { event: "OPENED", work_unit: "W09", base, generation: 1 },
+      { event: "INTEGRATED", work_unit: "W09", integration_commit: "0".repeat(40) },
+    ]);
+    assert.equal(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`)), true);
 
     const r = recover(h.root, ["W09", "abandoned"]);
     assert.equal(r.ok, true, r.out);
     assert.match(r.out, /worktree rangé/);
-    assert.equal(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W09`)), false);
+    assert.equal(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`)), false);
     // La branche survit : elle porte le travail abandonné.
-    execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09`], { cwd: h.root, stdio: "pipe" });
+    execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09-g1`], { cwd: h.root, stdio: "pipe" });
 
     // Et le run rouvre : aucun résidu d'abandon.
     process.chdir(REPO);
@@ -2505,21 +2670,23 @@ test("abandonner refuse une lane dont le travail n'est pas dans sa branche", asy
     await h.evenement("session_shutdown")?.();
 
     const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: h.root, encoding: "utf-8" }).trim();
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W09`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09`, laneDir],
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09-g1`, laneDir],
       { cwd: h.root, stdio: "pipe" });
     // A : commité sur la branche.
     writeFileSync(join(laneDir, "src", "a.py"), "a = 'A commité'\n");
     execFileSync("git", ["-C", laneDir, "add", "-A"], { cwd: h.root });
     execFileSync("git", ["-C", laneDir, "commit", "-qm", "chore(subagent): freeze"], { cwd: h.root });
-    const tipA = execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09`],
+    const tipA = execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09-g1`],
       { cwd: h.root, encoding: "utf-8" }).trim();
     // B : présent seulement dans le worktree.
     writeFileSync(join(laneDir, "src", "a.py"), "a = 'B non commité'\n");
 
-    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`),
-      `${JSON.stringify({ event: "OPENED", work_unit: "W09", at: "t", base })}\n` +
-      `${JSON.stringify({ event: "INTEGRATED", work_unit: "W09", at: "t" })}\n`);
+    // Intégrée au registre par un commit que git ne connaît pas : rien ne la confirme.
+    ajouterV2(h, [
+      { event: "OPENED", work_unit: "W09", base, generation: 1 },
+      { event: "INTEGRATED", work_unit: "W09", integration_commit: "0".repeat(40) },
+    ]);
     const ledgerAvant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
 
     const r = recover(h.root, ["W09", "abandoned"]);
@@ -2532,7 +2699,7 @@ test("abandonner refuse une lane dont le travail n'est pas dans sa branche", asy
     assert.equal(existsSync(laneDir), true);
     assert.equal(readFileSync(join(laneDir, "src", "a.py"), "utf-8"), "a = 'B non commité'\n");
     assert.equal(
-      execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09`], { cwd: h.root, encoding: "utf-8" }).trim(),
+      execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09-g1`], { cwd: h.root, encoding: "utf-8" }).trim(),
       tipA,
     );
   } finally {
@@ -2551,7 +2718,7 @@ test("le nettoyage montre avant d'agir, et n'écrit aucun événement", async ()
   const h = await monter();
   try {
     // W03 intégrée avec preuve durable, worktree encore là.
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
@@ -2568,18 +2735,18 @@ test("le nettoyage montre avant d'agir, et n'écrit aucun événement", async ()
     assert.equal(vu.ok, true, vu.out);
     assert.match(vu.out, /relancer avec --apply/);
     assert.equal(
-      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03`],
+      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03-g1`],
         { cwd: h.root, encoding: "utf-8" }).trim().length > 0,
       true,
     );
 
     const fait = recover(h.root, ["cleanup", "--apply"]);
     assert.equal(fait.ok, true, fait.out);
-    assert.match(fait.out, new RegExp(`retiré  pi-lane/${h.runId}-W03`));
+    assert.match(fait.out, new RegExp(`retiré  pi-lane/${h.runId}-W03-g1`));
 
     // La branche est partie, le travail est dans l'intégration.
     assert.equal(
-      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03`],
+      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03-g1`],
         { cwd: h.root, encoding: "utf-8" }).trim(),
       "",
     );
@@ -2594,7 +2761,7 @@ test("le nettoyage montre avant d'agir, et n'écrit aucun événement", async ()
 test("le nettoyage conserve ce qui porte encore du contenu, et dit pourquoi", async () => {
   const h = await monter();
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
@@ -2602,22 +2769,23 @@ test("le nettoyage conserve ce qui porte encore du contenu, et dit pourquoi", as
 
     // Une unité abandonnée, worktree propre : le worktree part, la branche non.
     const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: h.root, encoding: "utf-8" }).trim();
-    const w09 = join(h.root, ".git", "pi-lanes", `${h.runId}-W09`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09`, w09],
+    const w09 = join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09-g1`, w09],
       { cwd: h.root, stdio: "pipe" });
-    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`),
-      `${JSON.stringify({ event: "OPENED", work_unit: "W09", at: "t", base })}\n` +
-      `${JSON.stringify({ event: "ABANDONED", work_unit: "W09", at: "t" })}\n`);
+    ajouterV2(h, [
+      { event: "OPENED", work_unit: "W09", base, generation: 1 },
+      { event: "ABANDONED", work_unit: "W09", by: "operator", reason: "fixture", generation: 1 },
+    ]);
 
     const vu = recover(h.root, ["cleanup"]);
-    assert.match(vu.out, new RegExp(`worktree  ${h.runId}-W09`));
+    assert.match(vu.out, new RegExp(`worktree  ${h.runId}-W09-g1`));
     assert.match(vu.out, /seule référence vers son travail/);
-    assert.doesNotMatch(vu.out, new RegExp(`branche   pi-lane/${h.runId}-W09`));
+    assert.doesNotMatch(vu.out, new RegExp(`branche   pi-lane/${h.runId}-W09-g1`));
 
     const fait = recover(h.root, ["cleanup", "--apply"]);
     assert.equal(fait.ok, true, fait.out);
     assert.equal(existsSync(w09), false, "le worktree propre est parti");
-    execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09`], { cwd: h.root, stdio: "pipe" });
+    execFileSync("git", ["rev-parse", `pi-lane/${h.runId}-W09-g1`], { cwd: h.root, stdio: "pipe" });
   } finally {
     h.done();
   }
@@ -2626,20 +2794,21 @@ test("le nettoyage conserve ce qui porte encore du contenu, et dit pourquoi", as
 test("le nettoyage ne touche pas un worktree sale", async () => {
   const h = await monter();
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
     await h.evenement("session_shutdown")?.();
 
     const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: h.root, encoding: "utf-8" }).trim();
-    const w09 = join(h.root, ".git", "pi-lanes", `${h.runId}-W09`);
-    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09`, w09],
+    const w09 = join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`);
+    execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W09-g1`, w09],
       { cwd: h.root, stdio: "pipe" });
     writeFileSync(join(w09, "src", "a.py"), "a = 'travail non commité'\n");
-    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`),
-      `${JSON.stringify({ event: "OPENED", work_unit: "W09", at: "t", base })}\n` +
-      `${JSON.stringify({ event: "ABANDONED", work_unit: "W09", at: "t" })}\n`);
+    ajouterV2(h, [
+      { event: "OPENED", work_unit: "W09", base, generation: 1 },
+      { event: "ABANDONED", work_unit: "W09", by: "operator", reason: "fixture", generation: 1 },
+    ]);
 
     recover(h.root, ["cleanup", "--apply"]);
     assert.equal(existsSync(w09), true, "un worktree sale ne se range pas");
@@ -2658,7 +2827,7 @@ test("le nettoyage refuse d'agir sous une session qui tient le run, mais montre"
    */
   const h = await monter();
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
@@ -2669,14 +2838,14 @@ test("le nettoyage refuse d'agir sous une session qui tient le run, mais montre"
     // La session tient encore le run : le dry-run passe.
     const vu = recover(h.root, ["cleanup"]);
     assert.equal(vu.ok, true, vu.out);
-    assert.match(vu.out, new RegExp(`branche   pi-lane/${h.runId}-W03`));
+    assert.match(vu.out, new RegExp(`branche   pi-lane/${h.runId}-W03-g1`));
 
     // L'application, non — et rien n'est supprimé.
     const refus = recover(h.root, ["cleanup", "--apply"]);
     assert.equal(refus.ok, false, refus.out);
     assert.match(refus.out, /tenu par une autre session/);
     assert.notEqual(
-      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03`],
+      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03-g1`],
         { cwd: h.root, encoding: "utf-8" }).trim(),
       "",
     );
@@ -2687,7 +2856,7 @@ test("le nettoyage refuse d'agir sous une session qui tient le run, mais montre"
     assert.equal(fait.ok, true, fait.out);
     // Le plan appliqué est affiché juste avant d'agir.
     assert.match(fait.out, /à retirer :/);
-    assert.match(fait.out, new RegExp(`retiré  pi-lane/${h.runId}-W03`));
+    assert.match(fait.out, new RegExp(`retiré  pi-lane/${h.runId}-W03-g1`));
   } finally {
     h.done();
   }
@@ -2705,7 +2874,7 @@ test("un registre de lanes amputé ferme le runtime et l'outil de la même faço
   const h = await monter();
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
   try {
-    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
@@ -2715,7 +2884,7 @@ test("un registre de lanes amputé ferme le runtime et l'outil de la même faço
     await h.evenement("session_shutdown")?.();
 
     // Le plan existe tant que le registre est lisible.
-    assert.match(recover(h.root, ["cleanup"]).out, new RegExp(`pi-lane/${h.runId}-W03`));
+    assert.match(recover(h.root, ["cleanup"]).out, new RegExp(`pi-lane/${h.runId}-W03-g1`));
 
     appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "{ pas du json\n");
 
@@ -2727,7 +2896,7 @@ test("un registre de lanes amputé ferme le runtime et l'outil de la même faço
     assert.equal(applique.ok, false, applique.out);
     // Rien n'a été retiré : ni la branche, ni le worktree.
     assert.notEqual(
-      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03`],
+      execFileSync("git", ["branch", "--list", `pi-lane/${h.runId}-W03-g1`],
         { cwd: h.root, encoding: "utf-8" }).trim(),
       "",
     );
@@ -2748,11 +2917,11 @@ test("une version de registre inconnue ferme le nettoyage", async () => {
     await h.outil.execute("1", tache("W03"));
     await h.evenement("session_shutdown")?.();
     const p = join(h.runDir, `${h.runId}-lanes.jsonl`);
-    writeFileSync(p, readFileSync(p, "utf-8").replace('{"ledger":1}', '{"ledger":2}'));
+    writeFileSync(p, readFileSync(p, "utf-8").replace('{"ledger":2}', '{"ledger":3}'));
 
     const vu = recover(h.root, ["cleanup"]);
     assert.equal(vu.ok, false, vu.out);
-    assert.match(vu.out, /version 2 au lieu de 1/);
+    assert.match(vu.out, /version 3 au lieu de 2/);
   } finally {
     h.done();
   }
@@ -2818,7 +2987,7 @@ test("le relevé reconstruit : ce qui est apparu depuis la dernière reprise y f
   const h = await monter();
   try {
     await h.outil.execute("1", tache("W03"));
-    execFileSync("git", ["branch", `pi-lane/${h.runId}-W99`], { cwd: h.root });
+    execFileSync("git", ["branch", `pi-lane/${h.runId}-W99-g1`], { cwd: h.root });
 
     const dit = await commander(h, "subagent-report");
     assert.match(dit.texte, /W99/, "le relevé a bien reconstruit avant de projeter");
@@ -2853,7 +3022,7 @@ test("runtime et outil décrivent le même run", async () => {
   const h = await monter();
   try {
     await h.outil.execute("1", tache("W03"));
-    execFileSync("git", ["branch", `pi-lane/${h.runId}-W99`], { cwd: h.root });
+    execFileSync("git", ["branch", `pi-lane/${h.runId}-W99-g1`], { cwd: h.root });
 
     const outil = recover(h.root, ["report", "--json"]);
     assert.equal(outil.ok, true, outil.out);
@@ -2914,6 +3083,267 @@ test("registre de lanes amputé : aucun relevé, ni au runtime ni à l'outil", a
     assert.equal(r.ok, false, r.out);
     assert.match(r.out, /registre des lanes est inexploitable/);
   } finally {
+    h.done();
+  }
+});
+
+// ------------------------------------------------ LOT 3 : registre v2, identité g1
+
+/** Les événements du registre des lanes, en-tête exclu. */
+const evenementsDe = (h: { runDir: string; runId: string }): Array<Record<string, unknown>> => {
+  const p = join(h.runDir, `${h.runId}-lanes.jsonl`);
+  return existsSync(p)
+    ? readFileSync(p, "utf-8").split("\n").filter(Boolean).slice(1).map((l) => JSON.parse(l))
+    : [];
+};
+/** Écrire puis faire approuver W03 : le seul chemin jusqu'au merge. */
+async function travaillerPuisApprouver(h: Awaited<ReturnType<typeof monter>>) {
+  PILOTE.pendant = (a) => { if (a.cwd) writeFileSync(join(a.cwd, "src", "a.py"), "a = 2\n"); };
+  await h.outil.execute("1", tache("W03"));
+  PILOTE.pendant = undefined;
+  const r = await h.outil.execute("2", revueDe("approved"));
+  PILOTE.resultat = undefined;
+  return r;
+}
+
+/*
+ * C0 v1.8 : sans traitement du Statut, seule l'absence de design_update autorise
+ * l'INTEGRATED historique. Présent, il ferme l'intégration AVANT le merge : ni la
+ * racine, ni la branche, ni le registre ne bougent.
+ */
+test("un design_update ferme l'intégration avant le merge", async () => {
+  const h = await monter();
+  try {
+    writeFileSync(join(h.runDir, `${h.runId}-plan.json`), JSON.stringify({
+      version: 1,
+      work_units: [
+        {
+          id: "W03", goal: "g", depends_on: [], expected_write_scope: ["src/a.py"],
+          design_update: { decision_id: "D-001", from_status: "proposé", to_status: "en cours" },
+        },
+        { id: "W09", goal: "g", depends_on: [], expected_write_scope: ["src/b.py"] },
+      ],
+    }));
+    const tete = git(h.root, "rev-parse", "HEAD").trim();
+    const r = await travaillerPuisApprouver(h);
+    assert.match(texte(r), /NON INTÉGRABLE\s+W03 : W03 porte un design_update/);
+    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), tete, "aucun merge");
+    assert.equal(readFileSync(join(h.root, "src", "a.py"), "utf-8"), "a = 1\n");
+    assert.equal(evenementsDe(h).some((e) => e.event === "INTEGRATED"), false);
+    assert.deepEqual(lanes(h.root), [`${h.runId}-W03-g1`], "la lane garde son travail");
+  } finally {
+    h.done();
+  }
+});
+
+// L'autre moitié : sans design_update, l'intégration écrit la forme historique, et elle seule.
+test("sans design_update, l'intégration écrit l'INTEGRATED historique de C0 v1.8", async () => {
+  const h = await monter();
+  try {
+    const r = await travaillerPuisApprouver(h);
+    assert.match(texte(r), /intégrée : W03/, texte(r));
+    const fin = evenementsDe(h).filter((e) => e.event === "INTEGRATED");
+    assert.equal(fin.length, 1);
+    assert.deepEqual(Object.keys(fin[0]).sort(), ["at", "event", "event_seq", "integration_commit", "lane", "work_unit"]);
+    assert.equal(fin[0].lane, `${h.runId}-W03-g1`);
+    assert.equal(fin[0].integration_commit, git(h.root, "rev-parse", "HEAD").trim());
+  } finally {
+    h.done();
+  }
+});
+
+/*
+ * PLAN-LOT3 § 1 (b) : un run dont le registre est v1 n'ouvre plus de lane. Le refus
+ * précède la séquence, le worktree et la branche.
+ */
+test("un run legacy refuse une nouvelle lane avant toute séquence", async () => {
+  const h = await monter();
+  try {
+    const chemin = join(h.runDir, `${h.runId}-lanes.jsonl`);
+    writeFileSync(chemin, `${JSON.stringify({ ledger: 1 })}\n`);
+    const seq = readManifest(h.runDir)!.nextSeq;
+    const r = await h.outil.execute("1", tache("W03"));
+    assert.ok(enErreur(r), texte(r));
+    assert.match(texte(r), /registre legacy/);
+    assert.equal(readManifest(h.runDir)!.nextSeq, seq, "aucune séquence");
+    assert.deepEqual(lanes(h.root), []);
+    assert.deepEqual(APPELS, []);
+    assert.equal(readFileSync(chemin, "utf-8"), `${JSON.stringify({ ledger: 1 })}\n`);
+  } finally {
+    h.done();
+  }
+});
+
+/*
+ * C0 v1.8 : `integrated` sous v2 refuse sans effet — il n'observe pas le commit exact
+ * qu'un INTEGRATED v2 porte, et ne le fabrique pas.
+ */
+test("recover integrated refuse sans effet sous le registre v2", async () => {
+  const h = await monter();
+  try {
+    PILOTE.pendant = (a) => { if (a.cwd) writeFileSync(join(a.cwd, "src", "a.py"), "a = 2\n"); };
+    await h.outil.execute("1", tache("W03"));
+    PILOTE.pendant = undefined;
+    await h.evenement("session_shutdown")?.();
+    // Le merge a lieu hors du runtime : le registre dit ouverte, git dit intégrée.
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    git(laneDir, "add", "-A");
+    git(laneDir, "commit", "-qm", "W03");
+    git(h.root, "merge", "--no-ff", "-q", "-m", "merge", `pi-lane/${h.runId}-W03-g1`);
+    const avant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
+
+    const r = recover(h.root, ["W03", "integrated"]);
+    assert.equal(r.ok, false, r.out);
+    assert.match(r.out, /integration-non-enregistree/);
+    assert.match(r.out, /sous le registre v2, une intégration porte son commit exact/);
+    assert.equal(readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"), avant, "rien n'est écrit");
+  } finally {
+    h.done();
+  }
+});
+
+/*
+ * Sous v2, un ABANDONED ferme une lane ouverte au registre. Un worktree que le registre
+ * n'a jamais ouvert se retire sans histoire : l'abandon écrit le rendrait incohérent.
+ */
+test("discard d'un orphelin sous v2 le retire sans écrire d'abandon", async () => {
+  const h = await monter();
+  try {
+    await h.outil.execute("1", tache("W09"));
+    await h.evenement("session_shutdown")?.();
+    const orphelin = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    git(h.root, "worktree", "add", "-q", "-b", `pi-lane/${h.runId}-W03-g1`, orphelin, "HEAD");
+    const avant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
+
+    const r = recover(h.root, ["W03", "discard"]);
+    assert.equal(r.ok, true, r.out);
+    assert.match(r.out, /aucun événement écrit : le registre n'a jamais ouvert cette lane/);
+    assert.equal(existsSync(orphelin), false);
+    assert.equal(readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"), avant);
+  } finally {
+    h.done();
+  }
+});
+
+// Un orphelin nommé dans l'ancienne grammaire ne porte aucune génération : il ne s'adopte pas.
+test("sous v2, un worktree à l'ancienne grammaire n'est pas adoptable", async () => {
+  const h = await monter();
+  try {
+    await h.outil.execute("1", tache("W09"));
+    await h.evenement("session_shutdown")?.();
+    const ancien = join(h.root, ".git", "pi-lanes", `${h.runId}-W03`);
+    git(h.root, "worktree", "add", "-q", "-b", `pi-lane/${h.runId}-W03`, ancien, "HEAD");
+    const avant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
+
+    const r = recover(h.root, ["W03", "adopt"]);
+    assert.equal(r.ok, false, r.out);
+    assert.match(r.out, /ne porte pas l'identité d'une génération de W03/);
+    assert.equal(readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"), avant);
+  } finally {
+    h.done();
+  }
+});
+
+// ------------------------------------------------ la file par unité (PLAN-LOT3 § 4, étape 4)
+
+/*
+ * Une délégation qui échoue libère sa file : l'échec ne bloque pas celle qui attendait.
+ * Sans `finally`, la seconde attendrait pour toujours ; la course la borne.
+ */
+test("la file d'une unité se libère après une délégation en échec", async () => {
+  const h = await monter();
+  try {
+    let lacher: () => void = () => {};
+    const bloque = new Promise<void>((r) => { lacher = r; });
+    let appels = 0;
+    PILOTE.pendant = async () => {
+      appels += 1;
+      if (appels === 1) {
+        await bloque;
+        throw new Error("échec simulé de l'enfant");
+      }
+    };
+    const premiere = h.outil.execute("1", tache("W03")).catch((e: unknown) => e);
+    for (let i = 0; i < 200 && appels < 1; i++) await new Promise((r) => setTimeout(r, 5));
+    const seconde = h.outil.execute("2", tache("W03"));
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(appels, 1, "la seconde attend la première");
+    lacher();
+    await premiere;
+    const issue = await Promise.race([
+      seconde.then(() => "rendue"),
+      new Promise((r) => setTimeout(() => r("bloquée"), 5000)),
+    ]);
+    PILOTE.pendant = undefined;
+    assert.equal(issue, "rendue", "une erreur ne doit pas empoisonner la file");
+    assert.equal(appels, 2);
+  } finally {
+    PILOTE.pendant = undefined;
+    h.done();
+  }
+});
+
+// Deux unités distinctes ne s'attendent jamais : la file est par unité, pas globale.
+test("la file ne sérialise pas deux unités distinctes", async () => {
+  const h = await monter();
+  try {
+    let pendantes = 0;
+    let liberer: () => void = () => {};
+    const relache = new Promise<void>((r) => { liberer = r; });
+    PILOTE.pendant = async () => {
+      pendantes += 1;
+      await relache;
+    };
+    const a = h.outil.execute("1", tache("W03"));
+    const b = h.outil.execute("2", tache("W09"));
+    for (let i = 0; i < 400 && pendantes < 2; i++) await new Promise((r) => setTimeout(r, 5));
+    const simultanees = pendantes;
+    liberer();
+    await Promise.all([a, b]);
+    PILOTE.pendant = undefined;
+    assert.equal(simultanees, 2, "W03 et W09 doivent tourner en même temps");
+  } finally {
+    PILOTE.pendant = undefined;
+    h.done();
+  }
+});
+
+/*
+ * Le tour qui se termine ne retire l'entrée de la file que s'il en est encore la queue.
+ * Sinon, une troisième délégation arrivée pendant la deuxième trouverait la file vide et
+ * partirait en même temps qu'elle.
+ */
+test("la file garde la queue d'un successeur quand un tour plus ancien se termine", async () => {
+  const h = await monter();
+  try {
+    const portes: Array<() => void> = [];
+    let appels = 0;
+    PILOTE.pendant = async () => {
+      appels += 1;
+      await new Promise<void>((r) => portes.push(r));
+    };
+    const attendre = async (n: number) => {
+      for (let i = 0; i < 400 && appels < n; i++) await new Promise((r) => setTimeout(r, 5));
+    };
+    const a = h.outil.execute("1", tache("W03"));
+    await attendre(1);
+    const b = h.outil.execute("2", tache("W03"));
+    await new Promise((r) => setTimeout(r, 50));
+    portes[0]();
+    await a;
+    await attendre(2);
+    const c = h.outil.execute("3", tache("W03"));
+    await new Promise((r) => setTimeout(r, 100));
+    const pendantB = appels;
+    portes[1]();
+    await b;
+    await attendre(3);
+    portes[2]?.();
+    await c;
+    PILOTE.pendant = undefined;
+    assert.equal(pendantB, 2, "la troisième doit attendre la deuxième");
+  } finally {
+    PILOTE.pendant = undefined;
     h.done();
   }
 });

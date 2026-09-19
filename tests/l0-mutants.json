@@ -338,30 +338,8 @@
     "edits": [
       {
         "file": "subagent-only/lane-ledger.ts",
-        "find": "      case \"INTEGRATED\":\n        etats.set(e.work_unit, \"integrated\");\n        break;",
-        "replace": "      case \"INTEGRATED\":\n        etats.delete(e.work_unit);\n        break;"
-      },
-      {
-        "file": "subagent-only/lane-observe.ts",
-        "find": ".filter(([u, b]) => isMerged(root, `${runId}-${u}`, b))",
-        "replace": ".filter(() => false)"
-      },
-      {
-        "file": "subagent-only/lane-observe.ts",
-        "find": "    runBranches: runBranches(root, runId),",
-        "replace": "    runBranches: [],"
-      }
-    ],
-    "control": [
-      {
-        "file": "subagent-only/lane-ledger.ts",
-        "find": "      case \"INTEGRATED\":\n        etats.set(e.work_unit, \"integrated\");\n        break;",
-        "replace": "      case \"INTEGRATED\":\n        etats.delete(e.work_unit);\n        break;"
-      },
-      {
-        "file": "subagent-only/lane-observe.ts",
-        "find": "    runBranches: runBranches(root, runId),",
-        "replace": "    runBranches: [],"
+        "find": "        if (worktrees.has(unit) && sales.has(unit)) {",
+        "replace": "        if (false && worktrees.has(unit) && sales.has(unit)) { // mutant B3 : une unité intégrée au worktree sale n'est plus une contradiction"
       }
     ],
     "runs": 20
@@ -419,5 +397,29 @@
     "file": "extensions/subagent/index.ts",
     "find": "  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;",
     "replace": "  if (frozenExact || integrated) return undefined; // mutant : un ancien INTEGRATED excuse toute tête future"
+  },
+  {
+    "test": "L0 REG F-generation — l'identité d'une lane porte sa génération dès la première",
+    "file": "subagent-only/lane-context.ts",
+    "find": "  return `${runId}-${workUnitId}-g${generation}`;",
+    "replace": "  return `${runId}-${workUnitId}`; // mutant F-generation : la génération disparaît de l'identité"
+  },
+  {
+    "test": "L0 REG F-generation-allocation — après l'abandon durable d'une lane, l'unité en reçoit une nouvelle",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const generation = connue ? connue.generation + 1 : 1;",
+    "replace": "  const generation = connue ? connue.generation : 1; // mutant F-generation-allocation : l'abandon ne fait pas avancer la génération"
+  },
+  {
+    "test": "L0 REG F-generation-lot — un lot réalloue deux unités sans croiser générations, lanes ni worktrees",
+    "file": "extensions/subagent/index.ts",
+    "find": "                noterOuverture(workUnit.id, lease, ouverture);",
+    "replace": "                noterOuverture(workUnit.id, lease, { ...ouverture, nouvelle: ouverture.nouvelle && ouverture.generation === 1 }); // mutant F-generation-lot : le lot n'enregistre pas ses réallocations"
+  },
+  {
+    "test": "L0 PRES F-generation-serialisee — deux délégations sur la même unité s'allouent l'une après l'autre",
+    "file": "extensions/subagent/index.ts",
+    "find": "        const liberer = await entrerFileUnites(unitesDeLAppel(params));",
+    "replace": "        const liberer = (): void => {}; void entrerFileUnites; void unitesDeLAppel; // mutant F-generation-serialisee : aucune file"
   }
 ]

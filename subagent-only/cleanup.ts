@@ -136,11 +136,21 @@ export interface CleanupEffects {
 /** Les vraies suppressions. Remplaçables pour éprouver l'ordre sans détruire. */
 export const REAL_EFFECTS: CleanupEffects = { removeLane, removeLaneBranch, removeIntegration };
 
+/**
+ * L'identité legacy d'une lane, `<R>-<unit>` : la seule qu'un registre v1 connaisse.
+ *
+ * Sous v2 elle ne désigne plus rien — `<R>-<unit>-g<n>` est l'identité, et seule
+ * l'ouverture au registre dit laquelle (`laneOfUnit`). Un appelant sous v2 passe donc
+ * `laneOf` ; ce défaut ne sert que les registres v1 et les plans sans registre.
+ */
+export const legacyLaneOf = (runId: string) => (unit: string): string => `${runId}-${unit}`;
+
 export function applyCleanup(
   root: string,
   runId: string,
   plan: CleanupPlan,
   effets: CleanupEffects = REAL_EFFECTS,
+  laneOf: (unit: string) => string = legacyLaneOf(runId),
 ): CleanupOutcome {
   const out: CleanupOutcome = {
     removedWorktrees: [],
@@ -151,7 +161,7 @@ export function applyCleanup(
 
   const retires = new Set<string>();
   for (const unit of plan.laneWorktrees) {
-    const laneId = `${runId}-${unit}`;
+    const laneId = laneOf(unit);
     if (effets.removeLane(root, laneId)) {
       out.removedWorktrees.push(laneId);
       retires.add(unit);
@@ -161,7 +171,7 @@ export function applyCleanup(
   }
 
   for (const unit of plan.laneBranches) {
-    const laneId = `${runId}-${unit}`;
+    const laneId = laneOf(unit);
     // Si son worktree devait partir et n'est pas parti, la branche reste.
     if (plan.laneWorktrees.includes(unit) && !retires.has(unit)) {
       out.failures.push({

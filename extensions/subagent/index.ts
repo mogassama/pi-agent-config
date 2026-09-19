@@ -34,6 +34,7 @@ import {
   TransitionLockedError,
   RunBusyError,
   LANE_LEDGER_VERSION,
+  LANE_LEDGER_V2,
   acquireRunOwnership,
   appendIntegrationEvent,
   appendLaneEvent,
@@ -70,6 +71,8 @@ import {
   type IntegrationSnapshot,
 } from "../../subagent-only/integration-observe.js";
 import {
+  laneGrammar,
+  laneOfUnit,
   observeLanes,
   type LaneRead,
   type LaneSnapshot,
@@ -89,7 +92,7 @@ import {
   mergeMessage, openLanes, runBranches, type MergeBlock,
 } from "../../subagent-only/worktree.js";
 import {
-  describeConflicts, integrationCommits, reconcile, type Conflict,
+  describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict,
 } from "../../subagent-only/lane-ledger.js";
 import {
   commitIntegration,
@@ -501,6 +504,23 @@ type LandingRetry =
  * ni lane ni review qui l'attende.
  */
 function retryLanding(unit: string, etat: AttemptState, lease: Lease): LandingRetry {
+  /*
+   * Une tentative peut avoir été ouverte par le runtime antérieur à C0 v1.8.
+   * Dans ce cas, elle atteint directement cette reprise et contourne le chemin
+   * ordinaire qui vérifie `design_update`. La compatibilité transitoire reste
+   * pourtant la même : le refus précède CHAQUE merge, y compris celui d'un M
+   * déjà construit. La tentative et son commit sont conservés pour le LOT 9.
+   */
+  const statutFerme = refusDesignUpdate(unit);
+  if (statutFerme) {
+    return {
+      blocked: true,
+      text:
+        `  NON INTÉGRABLE  ${unit} : ${statutFerme}\n` +
+        `    ${etat.landing!.commit.slice(0, 12)} reste prêt à atterrir ; aucun merge, ` +
+        "aucun INTEGRATED.",
+    };
+  }
   const atterri = landIntegration(process.cwd(), etat.landing!, (commit) =>
     appendLaneEvent(
       RUN_DIR,
@@ -672,10 +692,10 @@ let INTEGRATION_CONFLICTS: readonly IntegrationConflict[] = [];
  * Seulement à la création : un rework rouvre la même lane, et le registre décrit
  * sa vie, pas chacune de ses utilisations.
  */
-function noterOuverture(unit: string, lease: Lease, base: string | undefined): void {
-  const nouvelle = !OPEN_UNITS.has(unit);
+function noterOuverture(unit: string, lease: Lease, ouverture: OuvertureDeLane): void {
   OPEN_UNITS.add(unit);
-  if (!nouvelle) return;
+  if (!ouverture.nouvelle) return;
+  const { base } = ouverture;
   if (!base) {
     // Sans base, l'ouverture ne serait pas prouvable et le registre la
     // refuserait comme malformée. Mieux vaut ne pas ouvrir du tout : un
@@ -687,9 +707,145 @@ function noterOuverture(unit: string, lease: Lease, base: string | undefined): v
   }
   appendLaneEvent(
     RUN_DIR,
-    { event: "OPENED", work_unit: unit, at: new Date().toISOString(), base },
+    {
+      event: "OPENED",
+      work_unit: unit,
+      at: new Date().toISOString(),
+      base,
+      lane: ouverture.lane.laneId,
+      generation: ouverture.generation,
+    },
     lease,
   );
+}
+
+/**
+ * La file de chaque unité : la dernière délégation entrée, dont la suivante attend la fin.
+ *
+ * Un tour ne se rejette jamais — il se résout quand sa délégation se termine, erreur
+ * comprise : un échec ne bloque pas celle qui suit. L'entrée n'est retirée que par le
+ * dernier tour de la file ; un tour plus ancien qui se libère ne la supprime pas sous
+ * les pieds d'un successeur. Plusieurs unités (un lot) s'acquièrent dans l'ordre trié :
+ * deux lots qui partagent des unités ne s'attendent pas en croix.
+ */
+const FILES_UNITES = new Map<string, Promise<void>>();
+
+async function entrerFileUnites(unites: readonly string[]): Promise<() => void> {
+  const liberations: Array<() => void> = [];
+  for (const u of [...new Set(unites)].sort()) {
+    const precedente = FILES_UNITES.get(u) ?? Promise.resolve();
+    let terminer: () => void = () => {};
+    const tour = new Promise<void>((r) => { terminer = r; });
+    const queue = precedente.then(() => tour);
+    FILES_UNITES.set(u, queue);
+    await precedente;
+    liberations.push(() => {
+      terminer();
+      if (FILES_UNITES.get(u) === queue) FILES_UNITES.delete(u);
+    });
+  }
+  return () => {
+    for (const l of liberations.reverse()) l();
+  };
+}
+
+/** Une lane rendue par `ouvrirLaneDe`, et ce qu'il faut pour enregistrer son ouverture. */
+interface OuvertureDeLane {
+  lane: LaneContext;
+  base: string | undefined;
+  generation: number;
+  /** Aucune ouverture de cette unité au registre : c'est une lane neuve. */
+  nouvelle: boolean;
+}
+
+/**
+ * La lane d'une unité, telle que le registre la nomme — ou la première, s'il n'en nomme
+ * aucune.
+ *
+ * L'identité vient de l'`OPENED` autoritaire (`laneOfUnit`), jamais de l'unité seule :
+ * dès g1, `${RUN_ID}-${unit}` ne désigne plus aucune lane. Une unité déjà ouverte
+ * rejoint sa lane — rework, revue, reprise après intégration — sans nouvelle ouverture.
+ * Une unité que le registre ne connaît pas reçoit g1.
+ *
+ * Un registre v1 n'arrive jamais jusqu'à la création : `refusLegacy` l'a arrêté avant
+ * toute séquence. L'écrivain le refuserait de toute façon, mais après le worktree.
+ */
+function ouvrirLaneDe(unit: string): OuvertureDeLane {
+  const root = process.cwd();
+  const lu = readLaneEvents(RUN_DIR, RUN_ID);
+  const connue = laneOfUnit(lu.events, laneGrammar(lu), RUN_ID, unit);
+  /*
+   * Une lane abandonnée ne se rejoint pas : C0 § F n'alloue g(n+1) qu'après l'ABANDONED
+   * de g(n), et ne réutilise ni génération ni branche. Intégrée, elle se rejoint — un
+   * travail repris après intégration reste celui de sa lane, sans nouvelle ouverture.
+   */
+  const abandonnee = connue !== undefined && lu.events.some((e) =>
+    e.event === "ABANDONED" && "lane" in e && e.lane === connue.laneId);
+  if (connue && !abandonnee) {
+    const l = ensureLane(root, connue.laneId);
+    return {
+      lane: { laneId: connue.laneId, workUnitId: unit, cwd: l.cwd, branch: l.branch },
+      base: l.base,
+      generation: connue.generation,
+      nouvelle: false,
+    };
+  }
+  const generation = connue ? connue.generation + 1 : 1;
+  let base: string | undefined;
+  const lane = openLane(unit, { runId: RUN_ID, root }, (r, id) => {
+    const l = ensureLane(r, id);
+    base = l.base;
+    return l;
+  }, generation);
+  return { lane, base, generation, nouvelle: true };
+}
+
+/**
+ * Les unités qu'un run legacy devrait ouvrir, s'il en est un (PLAN-LOT3 § 1, lecture (b)).
+ *
+ * Un registre v1 reste lisible et ses lanes déjà ouvertes se rejoignent, se ferment ou
+ * s'abandonnent ; aucune nouvelle n'y naît, parce qu'elle y naîtrait sous une grammaire
+ * que C0 ne crée plus. Le refus précède tout effet durable et toute séquence.
+ */
+function refusLegacy(unites: readonly string[]): string[] {
+  const lu = readLaneEvents(RUN_DIR, RUN_ID);
+  if (!lu.present || lu.version !== LANE_LEDGER_VERSION) return [];
+  // Jamais ouverte, ou abandonnée : dans les deux cas il faudrait une ouverture neuve.
+  const etats = foldLedger(lu.events);
+  return unites.filter((u) => !etats.has(u) || etats.get(u) === "abandoned");
+}
+
+/**
+ * Ce qui ferme l'intégration d'une unité avant le merge jusqu'au traitement du Statut
+ * (C0 v1.8, compatibilité transitoire).
+ *
+ * Seule l'ABSENCE de `design_update` autorise l'`INTEGRATED` historique. Présent — quelle
+ * que soit sa valeur —, ou impossible à établir parce que l'unité ne se retrouve pas dans
+ * le texte du plan : refus. Le plan validé ne garde pas ce champ, d'où la relecture du
+ * texte brut ; ne pas savoir n'est pas savoir qu'il est absent.
+ */
+function refusDesignUpdate(unit: string): string | undefined {
+  let doc: unknown;
+  try {
+    doc = PLAN_TEXT === undefined ? undefined : JSON.parse(PLAN_TEXT);
+  } catch {
+    doc = undefined;
+  }
+  const unites = (doc as { work_units?: unknown } | undefined)?.work_units;
+  const entree = Array.isArray(unites)
+    ? unites.find((u) =>
+      typeof u === "object" && u !== null && !Array.isArray(u) &&
+      typeof (u as { id?: unknown }).id === "string" && (u as { id: string }).id.trim() === unit)
+    : undefined;
+  if (entree === undefined) {
+    return `design_update de ${unit} impossible à établir dans le plan ; ` +
+      "l'intégration reste fermée tant que le traitement du Statut n'existe pas";
+  }
+  if ("design_update" in (entree as object)) {
+    return `${unit} porte un design_update ; son Statut n'est pas encore traité par ce ` +
+      "runtime, l'intégration est fermée avant le merge";
+  }
+  return undefined;
 }
 
 /**
@@ -1709,7 +1865,27 @@ export default function (pi: ExtensionAPI) {
       ],
       parameters,
 
-      async execute(_id, params: Static<typeof parameters>, { signal }: { signal?: AbortSignal } = {}) {
+      async execute(_id, params: Static<typeof parameters>, options: { signal?: AbortSignal } = {}) {
+        /*
+         * Deux délégations sur la même unité se suivent ; elles ne se croisent pas.
+         *
+         * L'attente précède tout : la reconstruction, la porte, la séquence, R. Celle qui
+         * suit relit donc le registre que la précédente a laissé, au lieu d'allouer sur un
+         * instantané que l'autre est en train de rendre faux. Deux unités distinctes ne
+         * s'attendent jamais.
+         */
+        const liberer = await entrerFileUnites(unitesDeLAppel(params));
+        try {
+          return await delegation(_id, params, options);
+        } finally {
+          liberer();
+        }
+
+        async function delegation(
+          _id: string,
+          params: Static<typeof parameters>,
+          { signal }: { signal?: AbortSignal } = {},
+        ) {
         /*
          * Le préflight du dépôt, rendu ici parce que c'est ici qu'il coûte
          * quelque chose. Le run n'a pas été ouvert, donc rien n'a été écrit :
@@ -1894,7 +2070,7 @@ export default function (pi: ExtensionAPI) {
          */
         reconstruire();
 
-        if (RECOVERY_LEDGER_VERSION !== LANE_LEDGER_VERSION) {
+        if (RECOVERY_LEDGER_VERSION !== LANE_LEDGER_VERSION && RECOVERY_LEDGER_VERSION !== LANE_LEDGER_V2) {
           const trouve = RECOVERY_LEDGER_VERSION === undefined
             ? "aucune version déclarée"
             : `version ${RECOVERY_LEDGER_VERSION}`;
@@ -1903,7 +2079,7 @@ export default function (pi: ExtensionAPI) {
               type: "text" as const,
               text:
                 `[run: registre d'une autre version] ${RUN_ID}-lanes.jsonl : ${trouve}, ` +
-                `ce runtime lit la version ${LANE_LEDGER_VERSION}.\n` +
+                `ce runtime lit les versions ${LANE_LEDGER_VERSION} et ${LANE_LEDGER_V2}.\n` +
                 `Ce n'est pas une corruption : le registre a été écrit sous un autre ` +
                 `protocole, et ses lignes ne doivent pas être « corrigées » à la main.\n` +
                 `Examiner avec bin/subagent-recover, migrer avec ` +
@@ -2016,6 +2192,30 @@ export default function (pi: ExtensionAPI) {
 
 
         /*
+         * Un run legacy n'ouvre plus de lane (PLAN-LOT3 § 1, lecture (b)).
+         *
+         * Ici, avant la séquence, le worktree et la branche : le refus ne laisse rien
+         * derrière lui. Les lanes legacy déjà ouvertes continuent d'être rejointes.
+         */
+        if (isLaneBound(roleJoue)) {
+          const lot = (params.batch as unknown as ReadonlyArray<{ work_unit: string }> | undefined) ?? [];
+          const legacy = refusLegacy(hasBatch ? lot.map((b) => b.work_unit) : unit ? [unit] : []);
+          if (legacy.length > 0) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `[run: registre legacy] ${RUN_ID}-lanes.jsonl est en version ${LANE_LEDGER_VERSION} : ` +
+                  `aucune nouvelle lane ne s'y ouvre (${legacy.join(", ")}).\n` +
+                  `Terminer ou abandonner ce run avec bin/subagent-recover, puis en ouvrir un ` +
+                  `nouveau. Aucune délégation n'a été lancée.`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        /*
          * Le bilan de reprise, dit une seule fois.
          *
          * Une session qui reprend un run interrompu doit savoir sur quoi elle
@@ -2103,13 +2303,10 @@ export default function (pi: ExtensionAPI) {
 
         let lane: LaneContext | undefined;
         if (unit && !roleGlobal) {
-          let baseLane: string | undefined;
+          let ouverture: OuvertureDeLane;
           try {
-            lane = openLane(unit, { runId: RUN_ID, root: process.cwd() }, (r, id) => {
-              const l = ensureLane(r, id);
-              baseLane = l.base;
-              return l;
-            });
+            ouverture = ouvrirLaneDe(unit);
+            lane = ouverture.lane;
           } catch (err) {
             return {
               content: [{
@@ -2129,7 +2326,7 @@ export default function (pi: ExtensionAPI) {
            * l'opérateur doit faire : rien, ou trancher un orphelin.
            */
           try {
-            noterOuverture(unit, lease, baseLane);
+            noterOuverture(unit, lease, ouverture);
           } catch (err) {
             const quoi = err instanceof Error ? err.message : String(err);
             return {
@@ -2341,13 +2538,9 @@ export default function (pi: ExtensionAPI) {
                  * worktree créé après la perte de propriété coûte cher.
                  */
                 const seq = allocateSeq(RUN_DIR, lease).seq;
-                let baseLane: string | undefined;
-                const lane = openLane(workUnit.id, { runId: RUN_ID, root: process.cwd() }, (r, id) => {
-                  const l = ensureLane(r, id);
-                  baseLane = l.base;
-                  return l;
-                });
-                noterOuverture(workUnit.id, lease, baseLane);
+                const ouverture = ouvrirLaneDe(workUnit.id);
+                const lane = ouverture.lane;
+                noterOuverture(workUnit.id, lease, ouverture);
                 const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
                   ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd },
                   seq,
@@ -2794,80 +2987,94 @@ export default function (pi: ExtensionAPI) {
                * refuse s'il a changé depuis la review ; `landIntegration`
                * revalide `M` avant de toucher la racine.
                */
-              const m = commitIntegration(attempt, integrationPkg?.tree ?? "", unit);
-              if (!m.ok && m.committed) {
-                /*
-                 * Le commit a eu lieu et sa forme est fausse. Le contexte n'est
-                 * plus sur `P1`, n'a plus de `MERGE_HEAD`, et porte un objet
-                 * qu'on refuse d'intégrer : personne ne peut continuer dessus.
-                 * Y renvoyer un integration-worker le ferait travailler dans un
-                 * état qu'aucune suite ne reprend, pendant que le worker de la
-                 * lane reste interdit — un blocage sans sortie.
-                 */
-                noteAttempt({ event: "RECOVERY_REQUIRED", id: attempt.id, reason: m.reason }, lease);
-                ATTEMPTS.set(unit, { attempt, phase: "recovery-required" });
+              /*
+               * Une tentative peut venir d'un runtime antérieur à C0 v1.8 : elle existe
+               * alors malgré le `design_update` que la version courante doit fermer.
+               * La garde du chemin ordinaire ne sera jamais revisitée ici. On la rejoue
+               * donc avant même de construire M, et a fortiori avant son atterrissage.
+               */
+              const statutFerme = refusDesignUpdate(unit);
+              if (statutFerme) {
                 integration =
-                  `  REPRISE REQUISE  ${unit} : ${m.reason}\n` +
-                  `    le contexte ${attempt.id} porte un commit dont la forme est fausse.\n` +
-                  "    aucune délégation sur cette unité tant qu'un opérateur ne l'a pas tranché ;\n" +
-                  "    le contexte est conservé pour ça.";
-              } else if (!m.ok) {
-                integration = `  INTÉGRATION REFUSÉE  ${unit} : ${m.reason}`;
+                  `  NON INTÉGRABLE  ${unit} : ${statutFerme}\n` +
+                  `    la tentative ${attempt.id} reste ouverte ; aucun commit d'intégration, ` +
+                  "aucun merge, aucun INTEGRATED.";
               } else {
-                /*
-                 * `M` existe : le registre le dit avant qu'on tente de le faire
-                 * atterrir. Un crash entre les deux laisserait sinon un contexte
-                 * portant un commit dont aucune provenance ne parle.
-                 */
-                noteAttempt({
-                  event: "COMMITTED",
-                  id: attempt.id,
-                  commit: m.integration.commit,
-                  tree: m.integration.tree,
-                }, lease);
-                const atterri = landIntegration(process.cwd(), m.integration, (commit) =>
-                  appendLaneEvent(
-                    RUN_DIR,
-                    {
-                      event: "INTEGRATED",
-                      work_unit: unit,
-                      at: new Date().toISOString(),
-                      integration_commit: commit,
-                    },
-                    lease,
-                  ),
-                );
-                if (atterri.ok) {
-                  noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "integrated" }, lease);
-                  ATTEMPTS.delete(unit);
-                  LANE_BLOCKS.delete(lane?.laneId ?? "");
-                  INTEGRATED.add(unit);
-                  OPEN_UNITS.delete(unit);
-                  integration = `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`;
-                } else if (atterri.stale) {
+                const m = commitIntegration(attempt, integrationPkg?.tree ?? "", unit);
+                if (!m.ok && m.committed) {
                   /*
-                   * La base a bougé pendant la review : on rouvre sur le même
-                   * `P2` et le nouveau `P1`. La même transition sert à la
-                   * reprise d'un `ready-to-land` — deux machines séparées en
-                   * avaient produit une qui ne rouvrait jamais.
-                   *
-                   * Renvoyer vers une review de lane était inexécutable : le
-                   * dernier agent est le reviewer d'intégration, et la garde
-                   * globale refuse une review qu'aucun worker ne sépare de la
-                   * précédente.
+                   * Le commit a eu lieu et sa forme est fausse. Le contexte n'est
+                   * plus sur `P1`, n'a plus de `MERGE_HEAD`, et porte un objet
+                   * qu'on refuse d'intégrer : personne ne peut continuer dessus.
+                   * Y renvoyer un integration-worker le ferait travailler dans un
+                   * état qu'aucune suite ne reprend, pendant que le worker de la
+                   * lane reste interdit — un blocage sans sortie.
                    */
-                  integration = reopenStaleAttempt(unit, attempt, lease, atterri.reason);
+                  noteAttempt({ event: "RECOVERY_REQUIRED", id: attempt.id, reason: m.reason }, lease);
+                  ATTEMPTS.set(unit, { attempt, phase: "recovery-required" });
+                  integration =
+                    `  REPRISE REQUISE  ${unit} : ${m.reason}\n` +
+                    `    le contexte ${attempt.id} porte un commit dont la forme est fausse.\n` +
+                    "    aucune délégation sur cette unité tant qu'un opérateur ne l'a pas tranché ;\n" +
+                    "    le contexte est conservé pour ça.";
+                } else if (!m.ok) {
+                  integration = `  INTÉGRATION REFUSÉE  ${unit} : ${m.reason}`;
                 } else {
                   /*
-                   * `M` existe et vaut ; seul son atterrissage a échoué, pour une
-                   * raison hors du runtime. La tentative attend une reprise, elle
-                   * ne retourne pas à la résolution.
+                   * `M` existe : le registre le dit avant qu'on tente de le faire
+                   * atterrir. Un crash entre les deux laisserait sinon un contexte
+                   * portant un commit dont aucune provenance ne parle.
                    */
-                  ATTEMPTS.set(unit, { attempt, phase: "ready-to-land", landing: m.integration });
-                  integration =
-                    `  ATTERRISSAGE BLOQUÉ  ${unit} : ${atterri.reason}\n` +
-                    `    ${m.integration.commit.slice(0, 12)} est construit et vérifié ; il attend\n` +
-                    "    une racine propre. La prochaine délégation sur cette unité réessaiera.";
+                  noteAttempt({
+                    event: "COMMITTED",
+                    id: attempt.id,
+                    commit: m.integration.commit,
+                    tree: m.integration.tree,
+                  }, lease);
+                  const atterri = landIntegration(process.cwd(), m.integration, (commit) =>
+                    appendLaneEvent(
+                      RUN_DIR,
+                      {
+                        event: "INTEGRATED",
+                        work_unit: unit,
+                        at: new Date().toISOString(),
+                        integration_commit: commit,
+                      },
+                      lease,
+                    ),
+                  );
+                  if (atterri.ok) {
+                    noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "integrated" }, lease);
+                    ATTEMPTS.delete(unit);
+                    LANE_BLOCKS.delete(lane?.laneId ?? "");
+                    INTEGRATED.add(unit);
+                    OPEN_UNITS.delete(unit);
+                    integration = `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`;
+                  } else if (atterri.stale) {
+                    /*
+                     * La base a bougé pendant la review : on rouvre sur le même
+                     * `P2` et le nouveau `P1`. La même transition sert à la
+                     * reprise d'un `ready-to-land` — deux machines séparées en
+                     * avaient produit une qui ne rouvrait jamais.
+                     *
+                     * Renvoyer vers une review de lane était inexécutable : le
+                     * dernier agent est le reviewer d'intégration, et la garde
+                     * globale refuse une review qu'aucun worker ne sépare de la
+                     * précédente.
+                     */
+                    integration = reopenStaleAttempt(unit, attempt, lease, atterri.reason);
+                  } else {
+                    /*
+                     * `M` existe et vaut ; seul son atterrissage a échoué, pour une
+                     * raison hors du runtime. La tentative attend une reprise, elle
+                     * ne retourne pas à la résolution.
+                     */
+                    ATTEMPTS.set(unit, { attempt, phase: "ready-to-land", landing: m.integration });
+                    integration =
+                      `  ATTERRISSAGE BLOQUÉ  ${unit} : ${atterri.reason}\n` +
+                      `    ${m.integration.commit.slice(0, 12)} est construit et vérifié ; il attend\n` +
+                      "    une racine propre. La prochaine délégation sur cette unité réessaiera.";
+                  }
                 }
               }
             }
@@ -2909,7 +3116,16 @@ export default function (pi: ExtensionAPI) {
            * C'est ici, et seulement ici, qu'une unité devient une dépendance
            * satisfaite : intégrée, pas terminée.
            */
-          const merged = integrateLane(
+          /*
+           * C0 v1.8 : sans traitement du Statut, seule une unité SANS design_update
+           * s'intègre, par la forme historique d'INTEGRATED. Le refus précède le merge ;
+           * il ne touche ni la lane ni la racine, et un rework ne le lève pas — seul le
+           * plan le peut.
+           */
+          const statutFerme = blocks.length === 0 ? refusDesignUpdate(lane.workUnitId) : undefined;
+          const merged: ReturnType<typeof integrateLane> = statutFerme
+            ? { ok: false, conflicts: [], reason: statutFerme }
+            : integrateLane(
             process.cwd(),
             lane.laneId,
             blocks,
@@ -2931,6 +3147,8 @@ export default function (pi: ExtensionAPI) {
             INTEGRATED.add(lane.workUnitId);
             OPEN_UNITS.delete(lane.workUnitId);
             integration = `  intégrée : ${lane.workUnitId}`;
+          } else if (statutFerme) {
+            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${statutFerme}`;
           } else if (blocks.length > 0) {
             integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}`;
           } else if (merged.conflicts.length > 0) {
@@ -3094,9 +3312,29 @@ export default function (pi: ExtensionAPI) {
           details,
           isError: details.status === "failed",
         };
+        }
       },
     }),
   );
+
+  /**
+   * Les unités qu'un appel fera avancer : celle du chemin simple, telle que `execute` la
+   * résoudra (`targetWorkUnit`), ou celles du lot. Un rôle global n'en fait avancer aucune.
+   */
+  function unitesDeLAppel(params: Static<typeof parameters>): string[] {
+    // Les champs lus ici, sous leur forme de schéma ; rien d'autre de l'appel n'est consulté.
+    const p = params as unknown as {
+      agent: string;
+      work_unit?: string;
+      for_risks?: string[];
+      batch?: ReadonlyArray<{ work_unit?: string }>;
+    };
+    const agent = agents.get(p.agent);
+    if (!agent || !isLaneBound(agent.envelopeRole ?? agent.name)) return [];
+    if (p.batch !== undefined) return p.batch.map((b) => b.work_unit?.trim() ?? "").filter(Boolean);
+    const cible = targetWorkUnit(p.work_unit, p.for_risks ?? [], RISKS);
+    return cible.kind === "unit" ? [cible.workUnitId] : [];
+  }
 }
 
 /** Descriptions come from the definitions, so the menu cannot drift from them. */

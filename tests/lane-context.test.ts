@@ -31,8 +31,10 @@ const ledgerWith = (...pairs: Array<[string, string | undefined]>): RiskRecord[]
 
 // ------------------------------------------------------------ dérivation
 
-test("la lane porte le run et l'unité", () => {
-  assert.equal(laneIdFor("W06", "9a6766"), "9a6766-W06");
+// C0 § F : la génération est explicite dès la première, une seule grammaire.
+test("la lane porte le run, l'unité et sa génération", () => {
+  assert.equal(laneIdFor("W06", "9a6766"), "9a6766-W06-g1");
+  assert.equal(laneIdFor("W06", "9a6766", 2), "9a6766-W06-g2");
 });
 
 // Deux runs ne se marchent pas dessus, comme pour les identifiants de risque.
@@ -54,8 +56,8 @@ test("la lane rend le worktree que git connaît", () => {
     execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
 
     const lane = openLane("W06", { runId: "9a6766", root }, ensureLane);
-    assert.equal(lane.laneId, "9a6766-W06");
-    assert.equal(lane.branch, "pi-lane/9a6766-W06");
+    assert.equal(lane.laneId, "9a6766-W06-g1");
+    assert.equal(lane.branch, "pi-lane/9a6766-W06-g1");
     assert.notEqual(lane.cwd, root);
     const listed = execFileSync("git", ["worktree", "list"], { cwd: root, encoding: "utf-8" });
     assert.ok(listed.includes(lane.cwd));

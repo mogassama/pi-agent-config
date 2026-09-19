@@ -129,7 +129,12 @@ export type LaneEventV2 =
   | (LaneEnvelope & { event: "RISK"; id: string; transition: RiskTransition; by?: string; to?: string })
   | (LaneEnvelope & { event: "FROZEN"; commit: string; parent: string; tree: string; reviewed_event_seq: number })
   | (LaneEnvelope & { event: "MERGED"; integration_commit: string; frozen_event_seq: number })
-  | (LaneEnvelope & { event: "INTEGRATED"; integration_commit: string; status: IntegrationStatus })
+  /*
+   * `status` absent : la forme historique de C0 v1.8, écrite par les LOTS 3 à 8 pour une
+   * unité sans `design_update`. Lue à demeure, jamais complétée : aucun `status` ne lui est
+   * synthétisé, et elle n'est pas un `not-applicable`.
+   */
+  | (LaneEnvelope & { event: "INTEGRATED"; integration_commit: string; status?: IntegrationStatus })
   | (LaneEnvelope & { event: "ABANDONED"; by: string; reason: string; generation: number });
 
 /**
@@ -244,7 +249,10 @@ export function parseLaneEventV2(doc: unknown): LaneEventV2 | null {
       case "MERGED":
         return texte(doc.integration_commit) && rang(doc.frozen_event_seq);
       case "INTEGRATED":
-        return texte(doc.integration_commit) && statutValide(doc.status);
+        // Deux formes, et deux seulement (C0 v1.8) : complète, `status` valide ; ou
+        // historique, `status` ABSENT. Présent et invalide — `null` compris — n'est ni
+        // l'une ni l'autre.
+        return texte(doc.integration_commit) && (!("status" in doc) || statutValide(doc.status));
       case "ABANDONED":
         return texte(doc.by) && texte(doc.reason) && rang(doc.generation);
       default:

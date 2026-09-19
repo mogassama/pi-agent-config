@@ -161,7 +161,7 @@ regression("C-P1-F02", "le chemin simple refuse une unité dont la dépendance n
   try {
     await h.outil.execute("1", tache("W09"));
     propriete(APPELS.length === 0, `aucun enfant ne doit partir pour W09 ; lancés : ${agents().join(", ")}`);
-    propriete(!lanes(h.root).includes(`${h.runId}-W09`), "aucune lane ne doit s'ouvrir pour W09");
+    propriete(!lanes(h.root).includes(`${h.runId}-W09-g1`), "aucune lane ne doit s'ouvrir pour W09");
     propriete(ouvertures(h, "W09") === 0, "aucun OPENED ne doit être écrit pour W09");
   } finally { h.fin(); }
 });
@@ -178,11 +178,11 @@ regression("C-P1-F02", "le chemin simple refuse une unité dont le scope est dé
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
-    precondition(lanes(h.root).includes(`${h.runId}-W03`), "la lane W03 doit être ouverte");
+    precondition(lanes(h.root).includes(`${h.runId}-W03-g1`), "la lane W03 doit être ouverte");
     await h.outil.execute("2", tache("W09"));
     propriete(APPELS.length === 1, `seul l'enfant de W03 doit être parti ; lancés : ${agents().join(", ")}`);
     propriete(ouvertures(h, "W09") === 0, "aucun OPENED ne doit être écrit pour W09, même suivi d'un nettoyage");
-    propriete(!lanes(h.root).includes(`${h.runId}-W09`), "aucune lane ne doit s'ouvrir pour W09");
+    propriete(!lanes(h.root).includes(`${h.runId}-W09-g1`), "aucune lane ne doit s'ouvrir pour W09");
   } finally { h.fin(); }
 });
 
@@ -201,7 +201,7 @@ regression("C-P1-F01", "la revue d'une lane part après la revue d'une autre lan
     PILOTE.pendant = undefined;
     await h.outil.execute("2", revue("W03"));
     precondition(compter("reviewer") === 1, "la revue de W03 doit être partie");
-    precondition(lire(join(h.root, ".git", "pi-lanes", `${h.runId}-W09`), "src/b.py") === "x = 2",
+    precondition(lire(join(h.root, ".git", "pi-lanes", `${h.runId}-W09-g1`), "src/b.py") === "x = 2",
       "la lane W09 doit porter sa modification");
     await h.outil.execute("3", revue("W09"));
     PILOTE.resultat = undefined;
@@ -263,7 +263,7 @@ regressionCorrigee("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FRO
     };
     await h.outil.execute("1", tache("W03"));
     PILOTE.pendant = undefined;
-    const laneId = `${h.runId}-W03`;
+    const laneId = `${h.runId}-W03-g1`;
     const branche = `pi-lane/${laneId}`;
     precondition(git(h.root, "log", "-1", "--format=%s", branche).trim() === "commit de l'enfant",
       "HEAD de la lane doit être le commit de l'enfant");
@@ -303,7 +303,7 @@ regressionCorrigee("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FRO
     );
     precondition(lire(h2.root, "src/a.py") === "a = 2", "la première intégration doit être dans la racine");
 
-    const laneId = `${h2.runId}-W03`;
+    const laneId = `${h2.runId}-W03-g1`;
     const branche = `pi-lane/${laneId}`;
     const shaIntegre = git(h2.root, "rev-parse", branche).trim();
     /*
@@ -365,13 +365,13 @@ regression("C-P1-F04-m28", "après perte du bail, le nouveau propriétaire recal
     };
     await h.outil.execute("1", { agent: "worker", batch: [{ work_unit: "W03", task: "écrire pour W03" }] });
     PILOTE.pendant = undefined;
-    precondition(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03`, "DESIGN.md")),
+    precondition(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`, "DESIGN.md")),
       "DESIGN.md doit être dans la lane");
     await h.outil.execute("2", revue("W03"));
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 1, "la revue doit être partie une fois le bail repris");
     propriete(!existsSync(join(h.root, "DESIGN.md")), "DESIGN.md ne doit pas atteindre la racine");
-    propriete(lanes(h.root).includes(`${h.runId}-W03`), "la lane doit être conservée");
+    propriete(lanes(h.root).includes(`${h.runId}-W03-g1`), "la lane doit être conservée");
   } finally { h.fin(); }
 });
 
@@ -385,7 +385,7 @@ couverture("C-P1-F04-m3", "un fichier hors scope bloque l'intégration", async (
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 1, "la revue doit être partie");
     propriete(lire(h.root, "src/b.py") === "b = 1", "le fichier hors scope ne doit pas atteindre la racine");
-    propriete(lanes(h.root).includes(`${h.runId}-W03`), "la lane doit être conservée");
+    propriete(lanes(h.root).includes(`${h.runId}-W03-g1`), "la lane doit être conservée");
   } finally { h.fin(); }
 });
 
@@ -425,7 +425,7 @@ couverture("C-P1-F04-m5", "un risque laissé ouvert bloque l'intégration", asyn
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 1, "la revue doit être partie");
     propriete(lire(h.root, "src/a.py") === "a = 1", "la lane à risque ouvert ne doit pas être intégrée");
-    propriete(lanes(h.root).includes(`${h.runId}-W03`), "la lane doit être conservée");
+    propriete(lanes(h.root).includes(`${h.runId}-W03-g1`), "la lane doit être conservée");
   } finally { h.fin(); }
 });
 
