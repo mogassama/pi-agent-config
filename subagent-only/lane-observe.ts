@@ -210,8 +210,23 @@ function construire(root: string, runId: string, lu: LaneRead): LaneSnapshot {
 
   const v = laneGrammar(laneRead);
   const evts = laneRead.events;
-  // Les artefacts, rapportés à leur unité par l'identité que le registre leur donne.
-  const worktreeIds = openLanes(root).filter((id) => unitOfLane(id, evts, v, runId) !== undefined);
+  /*
+   * Les artefacts, rapportés à leur unité par l'identité que le registre leur donne — et
+   * seulement ceux de sa génération COURANTE. Une génération abandonnée garde sa branche
+   * par contrat : la compter parmi les branches de l'unité, ou son worktree parmi ses
+   * worktrees, ferait parler g1 à la place de g2. Un artefact que le registre n'a jamais
+   * ouvert reste observé : c'est un orphelin, et il doit se voir.
+   */
+  const courantes = new Set<string>();
+  for (const e of evts) {
+    if (e.event !== "OPENED") continue;
+    const l = laneOfUnit(evts, v, runId, e.work_unit);
+    if (l) courantes.add(l.laneId);
+  }
+  const historiques = new Set<string>();
+  for (const e of evts) if (e.event === "OPENED" && "lane" in e && !courantes.has(e.lane)) historiques.add(e.lane);
+  const observable = (id: string): boolean => !historiques.has(id) && unitOfLane(id, evts, v, runId) !== undefined;
+  const worktreeIds = openLanes(root).filter(observable);
   const worktrees = [...new Set(worktreeIds.map((id) => unitOfLane(id, evts, v, runId)!))];
 
   /*
@@ -254,8 +269,9 @@ function construire(root: string, runId: string, lu: LaneRead): LaneSnapshot {
     runBranches: [
       ...new Set(
         runBranches(root, runId)
-          .map((id) => unitOfLane(`${runId}-${id}`, evts, v, runId))
-          .filter((u): u is string => u !== undefined),
+          .map((b) => `${runId}-${b}`)
+          .filter(observable)
+          .map((id) => unitOfLane(id, evts, v, runId)!),
       ),
     ].sort(),
     // La seule source qui survive au nettoyage : les commits d'intégration que

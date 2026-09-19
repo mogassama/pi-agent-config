@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { copieJetable } from "./l0-lib.ts";
 import { test } from "node:test";
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync,
   writeFileSync,
 } from "node:fs";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
@@ -76,6 +76,7 @@ import {
   type LaneEventV2,
 } from "../subagent-only/lane-ledger.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
+import { ensureLane } from "../subagent-only/worktree.ts";
 import { verifierCompleted } from "../subagent-only/run-end.ts";
 import {
   aJeter as jetablesFixtures, AT as AT_FIXTURE, cheminIntegrations, git as gitFixture, hashPlan,
@@ -4216,4 +4217,91 @@ test("terminerRun completed : une seconde génération ouverte refuse sans effet
     (err: unknown) => err instanceof RecoveryError && err.message.includes(`${RUN_FIXTURE}-W03-g2`));
   assert.equal(readFileSync(join(r.dir, "active-run.json"), "utf-8"), actifAvant);
   assert.equal(existsSync(join(r.dir, `${RUN_FIXTURE}-run.json`)), false);
+});
+
+// ------------------------------------------------ l'observation de g2 (PLAN-LOT3 § 4, étape 6)
+
+/*
+ * Un dépôt où W03 a vécu deux générations : g1 abandonnée, sa branche conservée avec un
+ * commit ; g2 ouverte. Tout ce que l'observation dit de W03 doit venir de g2.
+ */
+function deuxGenerations(
+  options: { g1Reste?: boolean } = {},
+): { root: string; dir: string; runId: string; bail: Lease; done: () => void } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-g2-")));
+  const g = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf-8" });
+  g(root, "init", "-q");
+  g(root, "config", "user.email", "t@t");
+  g(root, "config", "user.name", "t");
+  writeFileSync(join(root, "a.py"), "a = 1\n");
+  writeFileSync(join(root, ".gitignore"), ".pi-subagent-runs/\n");
+  g(root, "add", "-A");
+  g(root, "commit", "-qm", "base");
+  const dir = join(root, ".pi-subagent-runs");
+  const m = openRun(dir).manifest;
+  const bail = own(dir, m.runId);
+  const base = g(root, "rev-parse", "HEAD").trim();
+  const g1 = ensureLane(root, `${m.runId}-W03-g1`);
+  writeFileSync(join(g1.cwd, "a.py"), "a = 'g1'\n");
+  g(g1.cwd, "add", "-A");
+  g(g1.cwd, "commit", "-qm", "travail de g1");
+  appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "1", base, lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
+  appendLaneEvent(dir, { event: "ABANDONED", work_unit: "W03", at: "2", reason: "essai" }, bail);
+  if (options.g1Reste) writeFileSync(join(g1.cwd, "a.py"), "a = 'reste de g1'\n");
+  else g(root, "worktree", "remove", "--force", g1.cwd);
+  ensureLane(root, `${m.runId}-W03-g2`);
+  appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "3", base, lane: `${m.runId}-W03-g2`, generation: 2 }, bail);
+  return { root, dir, runId: m.runId, bail, done: () => rmSync(root, { recursive: true, force: true }) };
+}
+const observer = (x: { root: string; dir: string; runId: string }) => {
+  const lu = readLaneEvents(x.dir, x.runId);
+  const vu = observeLanes({ root: x.root, runId: x.runId, laneRead: { ...lu, version: lu.version } });
+  assert.equal(vu.usable, true, vu.usable ? "" : vu.reason);
+  return (vu as { snapshot: import("../subagent-only/lane-observe.ts").LaneSnapshot }).snapshot;
+};
+
+test("g2 : la génération ouverte est celle de l'unité, sans contradiction héritée de g1", () => {
+  const x = deuxGenerations();
+  try {
+    const vu = observer(x);
+    assert.deepEqual([...vu.observations.openWorktrees], ["W03"]);
+    assert.deepEqual([...(vu.observations.runBranches ?? [])], ["W03"], "la branche conservée de g1 ne compte pas");
+    assert.deepEqual([...vu.reconciliation.openUnits], ["W03"]);
+    assert.equal(vu.reconciliation.conflicts.size, 0, "g1 abandonnée n'est pas un résidu de g2");
+    assert.equal(vu.bases.get("W03") !== undefined, true);
+  } finally {
+    x.done();
+  }
+});
+
+// Le worktree de g1 est resté, sale : ce qu'il porte n'est pas le travail de g2.
+test("g2 : dirtyWorktrees lit le worktree de g2, et seulement lui", () => {
+  const x = deuxGenerations({ g1Reste: true });
+  try {
+    assert.deepEqual([...(observer(x).observations.dirtyWorktrees ?? [])], [], "g2 est propre");
+    writeFileSync(join(x.root, ".git", "pi-lanes", `${x.runId}-W03-g2`, "a.py"), "a = 'g2'\n");
+    assert.deepEqual([...(observer(x).observations.dirtyWorktrees ?? [])], ["W03"]);
+  } finally {
+    x.done();
+  }
+});
+
+/*
+ * mergedUnits se prouve par la lane courante et SA base. g1 a un commit qui n'est pas
+ * dans HEAD : la confondre avec g2 ferait dire « non intégrée » d'une g2 mergée, ou
+ * l'inverse. Ici g2 est mergée, g1 ne l'est pas.
+ */
+test("g2 : mergedUnits prouve l'intégration par la lane de g2", () => {
+  const x = deuxGenerations();
+  try {
+    assert.deepEqual([...observer(x).observations.mergedUnits], [], "g2 n'a encore rien produit");
+    const cwd = join(x.root, ".git", "pi-lanes", `${x.runId}-W03-g2`);
+    writeFileSync(join(cwd, "a.py"), "a = 'g2'\n");
+    execFileSync("git", ["add", "-A"], { cwd });
+    execFileSync("git", ["commit", "-qm", "travail de g2"], { cwd });
+    execFileSync("git", ["merge", "--no-ff", "-q", "-m", "merge g2", `pi-lane/${x.runId}-W03-g2`], { cwd: x.root });
+    assert.deepEqual([...observer(x).observations.mergedUnits], ["W03"]);
+  } finally {
+    x.done();
+  }
 });

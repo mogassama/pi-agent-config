@@ -421,5 +421,17 @@
     "file": "extensions/subagent/index.ts",
     "find": "        const liberer = await entrerFileUnites(unitesDeLAppel(params));",
     "replace": "        const liberer = (): void => {}; void entrerFileUnites; void unitesDeLAppel; // mutant F-generation-serialisee : aucune file"
+  },
+  {
+    "test": "L0 PRES F-generation-isolation — deux générations successives ne partagent ni worktree ni branche",
+    "file": "subagent-only/worktree.ts",
+    "find": "  return `pi-lane/${laneId}`;",
+    "replace": "  return `pi-lane/${laneId.replace(/-g[0-9]+$/, \"\")}`; // mutant F-generation-isolation : la branche perd sa génération"
+  },
+  {
+    "test": "L0 PRES F-generation-ordre — sans abandon, une seconde délégation reste dans la lane ouverte",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (connue && !abandonnee) {",
+    "replace": "  if (connue && !abandonnee && false) { // mutant F-generation-ordre : toute délégation alloue une génération"
   }
 ]

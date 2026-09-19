@@ -3373,3 +3373,40 @@ test("un lot alloue toutes ses lanes en une seule section critique", async () =>
     h.done();
   }
 });
+
+/*
+ * Le nettoyage d'une unité à deux générations vise celle que le registre dit intégrée :
+ * la branche de g2, prouvée par son commit d'intégration, se range ; celle de g1,
+ * abandonnée, porte encore son travail et reste.
+ */
+test("g2 : le nettoyage range la génération intégrée et laisse l'abandonnée", async () => {
+  const h = await monter();
+  try {
+    PILOTE.pendant = (a) => { if (a.cwd) writeFileSync(join(a.cwd, "src", "a.py"), "a = 'g1'\n"); };
+    await h.outil.execute("1", tache("W03"));
+    PILOTE.pendant = undefined;
+    const g1 = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    git(g1, "add", "-A");
+    git(g1, "commit", "-qm", "travail de g1");
+    git(h.root, "worktree", "remove", "--force", g1);
+    ajouterV2(h, [{ event: "ABANDONED", work_unit: "W03", by: "operator", reason: "essai", generation: 1 }]);
+
+    const r = await travaillerPuisApprouver(h);
+    assert.match(texte(r), /intégrée : W03/, texte(r));
+    assert.equal(
+      evenementsDe(h).filter((e) => e.event === "INTEGRATED")[0]?.lane, `${h.runId}-W03-g2`,
+      "c'est g2 qui s'intègre",
+    );
+    await h.evenement("session_shutdown")?.();
+
+    const vu = recover(h.root, ["cleanup"]);
+    assert.match(vu.out, new RegExp(`branche   pi-lane/${h.runId}-W03-g2`), vu.out);
+    assert.doesNotMatch(vu.out, new RegExp(`branche   pi-lane/${h.runId}-W03-g1`));
+    const fait = recover(h.root, ["cleanup", "--apply"]);
+    assert.equal(fait.ok, true, fait.out);
+    assert.throws(() => git(h.root, "rev-parse", "--verify", `pi-lane/${h.runId}-W03-g2`));
+    assert.doesNotThrow(() => git(h.root, "rev-parse", "--verify", `pi-lane/${h.runId}-W03-g1`));
+  } finally {
+    h.done();
+  }
+});
