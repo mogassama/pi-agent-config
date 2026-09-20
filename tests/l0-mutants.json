@@ -469,5 +469,11 @@
     "file": "extensions/subagent/index.ts",
     "find": "  const streak = streakOf([...view], agentName);",
     "replace": "  const streak = streakOf(HISTORY, agentName); void view; // mutant C1.7 streak : relu sur HISTORY"
+  },
+  {
+    "test": "L0 REG A-P1-F03 — un edit au schéma edits[] de pi 0.85.1 est inspecté sur chaque newText",
+    "file": "extensions/pi-secret-gate/index.ts",
+    "find": "    for (const part of written.parts) {",
+    "replace": "    for (const part of written.parts.slice(0, 1)) { // mutant A-P1-F03 : seul le premier newText est scanné"
   }
 ]

@@ -489,7 +489,7 @@ function brancherSecretGate(): (event: unknown) => Promise<Decision> {
 // Littéral synthétique, de la forme reconnue par rules.ts ; aucune vraie clé.
 const CLE = `API_KEY = "AIzaSyB1234567890abcdefghijklmnopqrstuv"`;
 
-regression("A-P1-F03", "un edit au schéma edits[] de pi 0.85.1 est inspecté sur chaque newText", async () => {
+regressionCorrigee("A-P1-F03", "un edit au schéma edits[] de pi 0.85.1 est inspecté sur chaque newText", async () => {
   const appeler = brancherSecretGate();
   const ecriture = await appeler({ toolName: "write", toolCallId: "w", input: { path: "src/app.py", content: CLE } });
   precondition(ecriture?.block === true, "la même clé dans un write doit être bloquée");
