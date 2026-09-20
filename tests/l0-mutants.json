@@ -475,5 +475,29 @@
     "file": "extensions/pi-secret-gate/index.ts",
     "find": "    for (const part of written.parts) {",
     "replace": "    for (const part of written.parts.slice(0, 1)) { // mutant A-P1-F03 : seul le premier newText est scanné"
+  },
+  {
+    "test": "L0 REG A-P1-F05 — la destination réelle décide, pas sa forme lexicale",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  return sameFileAsBundle(abs, root);",
+    "replace": "  return false; // mutant A-P1-F05 : identité retirée, la décision est lexicale seule"
+  },
+  {
+    "test": "L0 REG A-P1-F04 — un fichier du bundle est protégé de bash comme il l'est de write",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (kind === \"bash\" && ctx.root) {",
+    "replace": "  if (false && kind === \"bash\" && ctx.root) { // mutant A-P1-F04 : la garde bundle ignore bash"
+  },
+  {
+    "test": "L0 PRES A-P1-F04 — lire, et nommer un fichier du bundle sans l'écrire, reste permis",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  for (const { word, where } of bashDestinations(command, cwd)) {",
+    "replace": "  if (BUNDLE_FILES.some((f) => command.includes(f))) return \"mutant PRES A-P1-F04 : toute mention d'un fichier gelé est bloquée\";\n  for (const { word, where } of bashDestinations(command, cwd)) {"
+  },
+  {
+    "test": "L0 PRES A-P1-F04 — hors bundle, aucune de ces commandes n'est bloquée",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (kind === \"bash\" && ctx.root) {\n    const reason = refuseBundleWrite(input.command ?? \"\", ctx.root, ctx.cwd);",
+    "replace": "  if (kind === \"bash\") { // mutant PRES A-P1-F04 hors bundle : les quatre noms à cwd tenus pour gelés\n    const reason = refuseBundleWrite(input.command ?? \"\", ctx.root ?? ctx.cwd, ctx.cwd);"
   }
 ]

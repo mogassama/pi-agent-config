@@ -10,7 +10,7 @@
  * allowlist — and a rule that cannot be tested is a rule that gets re-broken.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync, type BigIntStats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /** The Forge bundle, exactly as AGENTS.md defines it. */
@@ -44,11 +44,72 @@ export function bundleRoot(cwd: string): string | null {
   }
 }
 
-/** True when `p` is one of the four, at the root — not a same-named file in a subdirectory. */
-export function isBundleFile(p: string, root: string): boolean {
-  const abs = isAbsolute(p) ? p : resolve(root, p);
+/**
+ * A working directory this guard can resolve against: an absolute path, nothing else.
+ *
+ * The type makes `cwd` mandatory, and the one production caller passes
+ * `process.cwd()`. A context built outside the type's reach — a cast, an object from
+ * elsewhere — still reaches here, and `path.resolve(undefined)` throws. So the value is
+ * checked where it is used, and an unusable one is treated as unknown.
+ */
+export function usableCwd(cwd: unknown): cwd is string {
+  return typeof cwd === "string" && isAbsolute(cwd);
+}
+
+/**
+ * True when the file behind `abs` is the file behind one of the four.
+ *
+ * `stat` follows links, and the comparison is the exact `(dev, ino)` pair, read as
+ * bigint so no precision is lost on a large inode. That one criterion covers a symlink
+ * on a directory (`alias-root/DESIGN.md`), a symlink on the file, a hard link, and a
+ * case alias on a case-insensitive volume — the last one only when the filesystem
+ * itself resolves it to the same inode, never by comparing lowercased names.
+ * `realpath` alone would see neither hard links nor, on macOS, case.
+ *
+ * Read afresh on every decision, with no cache: a bundle file replaced by rename has a
+ * new inode, and a remembered one would miss a link to it. A destination that does not
+ * exist cannot be one of the four, which exist by definition of the regime; a `stat`
+ * that fails is the same answer. The race between this `stat` and the write is out of
+ * reach, as it is for the git guard.
+ */
+function sameFileAsBundle(abs: string, root: string): boolean {
+  let target: BigIntStats;
+  try {
+    target = statSync(abs, { bigint: true });
+  } catch {
+    return false;
+  }
+  for (const f of BUNDLE_FILES) {
+    try {
+      const frozen = statSync(join(root, f), { bigint: true });
+      if (frozen.dev === target.dev && frozen.ino === target.ino) return true;
+    } catch {
+      // A bundle file that cannot be read matches nothing.
+    }
+  }
+  return false;
+}
+
+/**
+ * True when `p` designates one of the four, at the root — not a same-named file in a
+ * subdirectory.
+ *
+ * A relative `p` resolves against `cwd`, the directory the child writes from, never
+ * against the bundle root: a worker in `docs/` writing `DESIGN.md` writes
+ * `docs/DESIGN.md`. `decideRoleGuard` refuses a relative path before this predicate
+ * when the context has no usable `cwd`; the predicate itself therefore never invents
+ * an identity for a path it cannot resolve.
+ *
+ * Lexical first, as it always was; then the file's identity (`sameFileAsBundle`).
+ */
+export function isBundleFile(p: string, root: string, cwd: string): boolean {
+  if (!isAbsolute(p) && !usableCwd(cwd)) {
+    throw new TypeError("isBundleFile requires an absolute cwd for a relative path");
+  }
+  const abs = isAbsolute(p) ? p : resolve(cwd, p);
   const rel = relative(root, abs);
-  return !rel.includes("/") && !rel.startsWith("..") && BUNDLE_FILES.includes(basename(abs));
+  if (!rel.includes("/") && !rel.startsWith("..") && BUNDLE_FILES.includes(basename(abs))) return true;
+  return sameFileAsBundle(abs, root);
 }
 
 /**
@@ -298,10 +359,192 @@ export function refuseGitMutation(command: string): string | null {
   return null;
 }
 
+/**
+ * The files a shell command writes, as far as reading the command can tell.
+ *
+ * **What this is.** A guard against ordinary failure, not a sandbox. It reads the
+ * command it is handed and nothing else: an interpreter (python -c, node -e), a script
+ * written then run, a destination built at run time ($F, $(…)), a wrapper (env, xargs,
+ * sudo), or the contents of an archive are not seen. Same status as
+ * `refuseGitMutation`, for the same reason.
+ *
+ * **What it reads.** Redirections (`>`, `>>`, `>|`, `N>`, `&>`, `&>>`; `>&N` duplicates a
+ * descriptor and writes nothing) and the destinations of the verbs that write: `tee`,
+ * `sed -i`, `perl -i`, `truncate`, `rm`, `unlink`, `touch`, `chmod`, `chown`, `chgrp`
+ * (every operand), `cp`, `mv`, `install`, `ln`, `rsync` (the target, or each
+ * `<dir>/<source basename>` when the target is an existing directory), `dd of=`, and
+ * `patch` with an explicit target. A verb is recognised by its basename: `/bin/cp` is `cp`.
+ *
+ * **Where it resolves.** Against the directory the child is in. Only
+ * `cd <literal> && ...` establishes a directory, and only inside that continuous `&&`
+ * chain. At `;`, a newline or `||`, a later command may run on a path where the cd was
+ * skipped or failed, so the directory becomes unknown. Any other `cd` — no argument,
+ * `cd -`, a variable, several words, an option, one followed by `;`, a newline, `||` or
+ * `|`, one reached through `||`, or one inside `(` or `{` — also leaves the directory
+ * unknown. A relative destination after that is refused rather than guessed. An
+ * absolute destination does not depend on any of this.
+ */
+type Where = { kind: "known"; dir: string } | { kind: "cd"; cd: string } | { kind: "nocwd" };
+type Destination = { word: string; where: Where };
+
+const LITERAL = /^[^\s$`\\*?[\]'"]+$/;
+const DYNAMIC = /[$`*?[\]]|^~/;
+
+/** Segments with the operators on both sides. `>|` is a redirection, not a pipe. */
+function segmentsWithSeparators(command: string): Array<{ text: string; previous: string; next: string }> {
+  const parts = command.split(/(\|\||&&|(?<!>)\||;|\n)/);
+  const out: Array<{ text: string; previous: string; next: string }> = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const text = parts[i].trim();
+    if (text) out.push({ text, previous: i === 0 ? "" : (parts[i - 1] ?? ""), next: parts[i + 1] ?? "" });
+  }
+  return out;
+}
+
+const REDIRECT = /(?<![<>])(?:&|\d+)?(?:>>|>\||>)(?![&(>])\s*("[^"]*"|'[^']*'|[^\s<>|;&()]+)/g;
+const unquote = (w: string) => w.replace(/^(['"])(.*)\1$/, "$2").replace(/\)+$/, "");
+
+function positional(args: string[]): string[] {
+  const out: string[] = [];
+  let options = true;
+  for (const a of args) {
+    if (options && a === "--") { options = false; continue; }
+    if (options && a.startsWith("-") && a !== "-") continue;
+    out.push(a);
+  }
+  return out;
+}
+
+const EVERY_OPERAND = new Set(["tee", "truncate", "rm", "unlink", "touch", "chmod", "chown", "chgrp"]);
+const COPYING = new Set(["cp", "mv", "install", "ln", "rsync"]);
+const PATCH_VALUE_OPTIONS = new Set(["-i", "-d", "-D", "-B", "-F", "-r", "-V", "-Y", "-z", "-g", "-p"]);
+
+/** The words of one segment this verb writes to, before any resolution. */
+function writtenWords(cmd: string, args: string[], where: Where): string[] {
+  if (EVERY_OPERAND.has(cmd)) return positional(args);
+  if (cmd === "sed" || cmd === "perl") {
+    const inPlace = args.some((w) => /^-[a-zA-Z]*i/.test(w) || w === "--in-place" || w.startsWith("--in-place="));
+    return inPlace ? positional(args) : [];
+  }
+  if (cmd === "dd") return args.filter((w) => w.startsWith("of=")).map((w) => w.slice(3));
+  if (cmd === "patch") {
+    const out: string[] = [];
+    let first: string | undefined;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === "-o" || a === "--output") { if (args[i + 1]) out.push(args[++i]); continue; }
+      if (a.startsWith("--output=")) { out.push(a.slice(9)); continue; }
+      if (/^-o./.test(a)) { out.push(a.slice(2)); continue; }
+      if (PATCH_VALUE_OPTIONS.has(a)) { i++; continue; }
+      if (a.startsWith("-")) continue;
+      first ??= a;
+    }
+    return first ? [first, ...out] : out;
+  }
+  if (COPYING.has(cmd)) {
+    let target: string | undefined;
+    const rest: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === "-t" || a === "--target-directory") { target = args[++i]; continue; }
+      if (a.startsWith("--target-directory=")) { target = a.slice(19); continue; }
+      if (/^-t./.test(a)) { target = a.slice(2); continue; }
+      rest.push(a);
+    }
+    const operands = positional(rest);
+    if (target === undefined) target = operands.pop();
+    if (target === undefined) return [];
+    const dir = where.kind === "known" || isAbsolute(target)
+      ? resolve(where.kind === "known" ? where.dir : "/", target)
+      : undefined;
+    let isDir = false;
+    if (dir !== undefined) {
+      try { isDir = statSync(dir).isDirectory(); } catch { isDir = false; }
+    }
+    return isDir ? operands.filter((s) => !DYNAMIC.test(s)).map((s) => join(dir as string, basename(s))) : [target];
+  }
+  return [];
+}
+
+/** Every destination the command writes, each with the directory it resolves from. */
+export function bashDestinations(command: string, cwd: unknown): Destination[] {
+  let where: Where = usableCwd(cwd) ? { kind: "known", dir: cwd } : { kind: "nocwd" };
+  // A `cd X && ...` proves X only while the same && chain is executing. Once that
+  // chain reaches `;`, a newline, or `||`, the following command may also run on a
+  // path where the cd was skipped or failed; the working directory is then unknown.
+  let conditionalCd: string | undefined;
+  const out: Destination[] = [];
+  for (const { text, previous, next } of segmentsWithSeparators(command)) {
+    if (conditionalCd !== undefined && [";", "\n", "||"].includes(previous)) {
+      where = { kind: "cd", cd: conditionalCd };
+      conditionalCd = undefined;
+    }
+    const grouped = /^[({]/.test(text);
+    for (const m of text.matchAll(REDIRECT)) out.push({ word: unquote(m[1]), where });
+    const words = text.replace(REDIRECT, " ").replace(/^[({]+/, "").split(/\s+/).filter(Boolean).map(unquote);
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const cmd = basename(words[i] ?? "");
+    const args = words.slice(i + 1);
+    if (cmd === "cd") {
+      // Only `cd literal && ...` proves the directory in which the following command
+      // runs. With `;` or a newline the following command also runs when cd fails. A cd
+      // reached through `||` may be skipped while the later && operand still runs.
+      const staticCd = !grouped && args.length === 1 && LITERAL.test(args[0]) && args[0] !== "-" &&
+        !args[0].startsWith("-") && !args[0].startsWith("~") && next === "&&" && previous !== "||";
+      if (where.kind !== "known") continue;
+      if (staticCd) {
+        where = { kind: "known", dir: resolve(where.dir, args[0]) };
+        conditionalCd = text;
+      } else {
+        where = { kind: "cd", cd: text };
+        conditionalCd = undefined;
+      }
+      continue;
+    }
+    for (const word of writtenWords(cmd, args, where)) out.push({ word, where });
+  }
+  return out.filter((d) => d.word !== "" && !DYNAMIC.test(d.word));
+}
+
+const FROZEN_WRITE =
+  "Only the operator changes it, and the one field pi may write — the `Statut` line of a " +
+  "DESIGN.md decision — belongs to the orchestrator, not to a delegation. If the task " +
+  "cannot be done without changing it, say so in `deviations` and implement what can be.";
+
+const unknownCwd = (path: string) =>
+  `blocked by role-guard: ${path} is relative and this guard does not know the directory it ` +
+  "resolves from, so it cannot tell whether it is a frozen bundle file. Use an absolute path.";
+
+/** Null when the command writes no frozen bundle file this guard can see; a reason otherwise. */
+export function refuseBundleWrite(command: string, root: string, cwd: unknown): string | null {
+  for (const { word, where } of bashDestinations(command, cwd)) {
+    if (!isAbsolute(word) && where.kind === "nocwd") return unknownCwd(word);
+    if (!isAbsolute(word) && where.kind === "cd") {
+      return (
+        `blocked by role-guard: \`${where.cd}\` leaves the working directory unknown, so the ` +
+        `relative destination ${word} cannot be checked against the frozen bundle files. Write ` +
+        "to an absolute path, or cd to a literal path first."
+      );
+    }
+    const abs = isAbsolute(word) ? word : resolve((where as { dir: string }).dir, word);
+    if (isBundleFile(abs, root, root)) {
+      return `blocked by role-guard: this command writes ${basename(abs)} (${word}), a frozen bundle file. ` + FROZEN_WRITE;
+    }
+  }
+  return null;
+}
+
 /** What role-guard knows about the child it is guarding. */
 export interface RoleContext {
   /** The bundle root, or null in the free regime. */
   root: string | null;
+  /**
+   * The directory the child runs in, absolute: relative destinations resolve against
+   * it, never against the bundle root. Mandatory, so every caller is seen by the type;
+   * checked again at use (`usableCwd`), because a context can reach here without it.
+   */
+  cwd: string;
   readOnly: boolean;
   role: string;
 }
@@ -316,10 +559,10 @@ export interface RoleContext {
  * same shape of blind spot. What remains in `role-guard.ts` is the translation
  * from a pi event to a tool kind, which is the only part that needs pi.
  *
- * The order matters and is asserted: the bundle first, then the read-only rule
- * whose message is specific to a role that holds no `edit`, then git. A
- * read-only role hits the second and never reaches the third, so its refusals
- * keep saying what they always said.
+ * The order matters and is asserted: the bundle first — for `bash` too, and for
+ * every role, read-only or not — then the read-only rule whose message is specific
+ * to a role that holds no `edit`, then git. A read-only role hits the second and
+ * never reaches the third, so its refusals keep saying what they always said.
  */
 export function decideRoleGuard(
   kind: "read" | "write" | "edit" | "bash" | "other",
@@ -328,19 +571,21 @@ export function decideRoleGuard(
 ): string | null {
   if (ctx.root && (kind === "read" || kind === "write" || kind === "edit")) {
     const path = input.path;
-    if (path && isBundleFile(path, ctx.root)) {
+    if (path && !isAbsolute(path) && !usableCwd(ctx.cwd)) return unknownCwd(path);
+    if (path && isBundleFile(path, ctx.root, ctx.cwd)) {
       return kind !== "read"
-        ? `blocked by role-guard: ${basename(path)} is a frozen bundle file. Only the ` +
-            "operator changes it, and the one field pi may write — the `Statut` line of a " +
-            "DESIGN.md decision — belongs to the orchestrator, not to a delegation. If the " +
-            "task cannot be done without changing it, say so in `deviations` and implement " +
-            "what can be."
+        ? `blocked by role-guard: ${basename(path)} is a frozen bundle file. ` + FROZEN_WRITE
         : `blocked by role-guard: ${basename(path)} is a frozen bundle file, and whatever ` +
             "you need from it has been quoted into your task verbatim. Reading it returns " +
             "what you were already given and costs turns you will need for the work. If " +
             "something decisive is genuinely missing from the task text, name it in your " +
             "envelope rather than going to look for it.";
     }
+  }
+
+  if (kind === "bash" && ctx.root) {
+    const reason = refuseBundleWrite(input.command ?? "", ctx.root, ctx.cwd);
+    if (reason) return reason;
   }
 
   if (kind === "bash") {

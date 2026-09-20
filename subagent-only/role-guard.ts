@@ -14,6 +14,10 @@
  *      operator, with the `Statut` line of a DESIGN.md decision as the single
  *      exception, and that exception belongs to the orchestrator, not here.
  *
+ *      A write is a write whatever carries it: the bundle rule reads the
+ *      destinations of a `bash` command too, for every role, read-only or not,
+ *      resolved from the directory the child is in (`cwd`, read at each event).
+ *
  *   2. A read-only role is read-only through `bash` too. The scout's tool list
  *      denies `edit` and `write`; `bash` hands them straight back. Its prompt
  *      says "`bash` is for reading. Never mutate" and lists `rm`, `mv`, `>`,
@@ -55,8 +59,12 @@ export default function (pi: ExtensionAPI): void {
             ? "bash"
             : "other";
 
+    // `cwd` is read here, at each event, never frozen at load: it is the directory a
+    // relative destination is written from, and the only value that says so is the
+    // process's own.
     const reason = decideRoleGuard(kind, (event.input ?? {}) as Record<string, string>, {
       root,
+      cwd: process.cwd(),
       readOnly,
       role,
     });

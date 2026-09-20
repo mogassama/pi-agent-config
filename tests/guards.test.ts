@@ -146,11 +146,11 @@ test("three of four files is the free regime", () => {
 
 test("only the four files at the root are frozen", () => {
   const root = "/repo";
-  assert.equal(isBundleFile("/repo/DESIGN.md", root), true);
-  assert.equal(isBundleFile("DESIGN.md", root), true);
+  assert.equal(isBundleFile("/repo/DESIGN.md", root, root), true);
+  assert.equal(isBundleFile("DESIGN.md", root, root), true);
   // A project's own docs/DESIGN.md is an ordinary file.
-  assert.equal(isBundleFile("/repo/docs/DESIGN.md", root), false);
-  assert.equal(isBundleFile("/repo/src/loader.py", root), false);
+  assert.equal(isBundleFile("/repo/docs/DESIGN.md", root, root), false);
+  assert.equal(isBundleFile("/repo/src/loader.py", root, root), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -386,8 +386,10 @@ const bundle = () => {
   return { root, done: () => rmSync(root, { recursive: true, force: true }) };
 };
 
-const worker = (root: string | null = null) => ({ root, readOnly: false, role: "worker" });
-const scout = (root: string | null = null) => ({ root, readOnly: true, role: "scout" });
+// `cwd` is absolute in both branches: `mkdtempSync` for a bundle, the suite's own
+// directory otherwise. None of these cases resolves a relative path in the bundle regime.
+const worker = (root: string | null = null) => ({ root, cwd: root ?? process.cwd(), readOnly: false, role: "worker" });
+const scout = (root: string | null = null) => ({ root, cwd: root ?? process.cwd(), readOnly: true, role: "scout" });
 
 test("a role that may write still cannot write to git", () => {
   // The point of the whole rule: `readOnly` is false here.

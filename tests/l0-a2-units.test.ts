@@ -19,8 +19,8 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync,
-  writeFileSync,
+  existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync,
+  symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +53,7 @@ function precondition(vrai: boolean, message: string): void {
   assert.ok(vrai, `PRÉCONDITION — ${message}`);
 }
 void regressionCorrigee; // employée par les lots de correction, pas encore ici
+void regression; // plus aucune REG ouverte dans ce fichier depuis le LOT 5
 
 // ------------------------------------------------------------------ outillage
 
@@ -198,41 +199,116 @@ function bundle(prefixe: string): string {
   return root;
 }
 
-regression("A-P1-F04", "un fichier du bundle est protégé de bash comme il l'est de write", () => {
+regressionCorrigee("A-P1-F04", "un fichier du bundle est protégé de bash comme il l'est de write", () => {
   const root = bundle("l0-f04-");
-  const ctx = { ...WORKER, root };
+  // La fixture dit où l'enfant tourne : une destination relative se résout contre cwd,
+  // jamais contre la racine du bundle (LOT 5, L5-Q3).
+  const ctx = { ...WORKER, root, cwd: root };
+  mkdirSync(join(root, "sub"));
+  // Depuis sub, un `cd` ignoré résoudrait sub/DESIGN.md, qui n'est pas gelé : la forme
+  // « cd dynamique » ne verdit que par le refus fail-closed, jamais par hasard.
+  const depuisSub = { ...ctx, cwd: join(root, "sub") };
+  // Jamais exécutées ; créées quand même, parce que la branche « répertoire » lit le disque.
+  const ext = neuf("l0-f04-ext-");
+  for (const f of ["x", "p.diff", "DESIGN.md"]) writeFileSync(join(ext, f), "");
+  const x = join(ext, "x");
   precondition(decideRoleGuard("write", { path: "DESIGN.md" }, ctx) !== null, "write sur DESIGN.md doit être bloqué");
-  const ecrivains = [
-    "echo bidon > DESIGN.md",
-    "echo bidon >> DESIGN.md",
-    "sed -i '' 's/a/b/' DESIGN.md",
-    "cp /dev/null DESIGN.md",
-    `cat /etc/hostname > ${join(root, "ARCHITECTURE.md")}`,
+  precondition(
+    !existsSync(join(root, "absent")),
+    "absent ne doit pas exister : un `cd absent` échoue et la suite écrit le DESIGN.md de la racine",
+  );
+  const ecrivains: Array<[string, typeof ctx]> = [
+    ["echo bidon > DESIGN.md", ctx],
+    ["echo bidon >> DESIGN.md", ctx],
+    ["sed -i '' 's/a/b/' DESIGN.md", ctx],
+    ["cp /dev/null DESIGN.md", ctx],
+    [`cat /etc/hostname > ${join(root, "ARCHITECTURE.md")}`, ctx],
+    // redirections
+    ["echo x >| DESIGN.md", ctx],
+    ["echo x 1> DESIGN.md", ctx],
+    ["echo x &> DESIGN.md", ctx],
+    ["echo x &>> DESIGN.md", ctx],
+    // verbes
+    ["echo x | tee DESIGN.md", ctx],
+    ["perl -i -pe 's/a/b/' DESIGN.md", ctx],
+    [`mv ${x} DESIGN.md`, ctx],
+    ["install /dev/null DESIGN.md", ctx],
+    [`ln -sf ${x} DESIGN.md`, ctx],
+    [`rsync ${x} DESIGN.md`, ctx],
+    ["truncate -s 0 DESIGN.md", ctx],
+    ["rm DESIGN.md", ctx],
+    ["unlink DESIGN.md", ctx],
+    ["touch DESIGN.md", ctx],
+    ["chmod 644 DESIGN.md", ctx],
+    ["chown 0 DESIGN.md", ctx],
+    ["chgrp 0 DESIGN.md", ctx],
+    ["dd if=/dev/null of=DESIGN.md", ctx],
+    [`patch DESIGN.md ${join(ext, "p.diff")}`, ctx],
+    // basename
+    ["/bin/cp /dev/null DESIGN.md", ctx],
+    // répertoire
+    [`cp ${join(ext, "DESIGN.md")} .`, ctx],
+    // cd fiable, puis point-virgule refusé fail-closed
+    ["cd sub && echo x > ../DESIGN.md", ctx],
+    ["cd sub ; echo x > ../DESIGN.md", ctx],
+    // Un cd conditionnel ou dont l'échec n'arrête pas la suite ne fonde aucun cwd.
+    ["false && cd sub ; echo x > DESIGN.md", ctx],
+    ["true || cd sub && echo x > DESIGN.md", ctx],
+    ["cd absent ; echo x > DESIGN.md", ctx],
+    // Après un cd fiable, `;`, `||` et le saut de ligne referment la chaîne && : si le cd
+    // échoue, la suite part de la racine. `absent` n'existe pas (précondition ci-dessus).
+    ["cd absent && true ; echo x > DESIGN.md", ctx],
+    ["cd absent && false || echo x > DESIGN.md", ctx],
+    ["cd absent && true\necho x > DESIGN.md", ctx],
+    // cd dynamique
+    ['cd "$D" && echo x > DESIGN.md', depuisSub],
   ];
-  const passes = ecrivains.filter((c) => decideRoleGuard("bash", { command: c }, ctx) === null);
+  const passes = ecrivains.filter(([c, k]) => decideRoleGuard("bash", { command: c }, k) === null).map(([c]) => c);
   propriete(
     passes.length === 0,
     `ces commandes écrivent un fichier gelé et ne sont pas bloquées : ${JSON.stringify(passes)}`,
   );
 });
 
-regression("A-P1-F05", "la destination réelle décide, pas sa forme lexicale", () => {
+regressionCorrigee("A-P1-F05", "la destination réelle décide, pas sa forme lexicale", (t) => {
   const root = bundle("l0-f05-");
-  const ctx = { ...WORKER, root };
+  const ctx = { ...WORKER, root, cwd: root };
   symlinkSync(".", join(root, "alias-root"));
   precondition(
     existsSync(join(root, "alias-root", "DESIGN.md")),
     "le lien doit rendre le fichier gelé atteignable par un second chemin",
   );
+  const identite = (p: string): string | null => {
+    try {
+      const s = statSync(join(root, p), { bigint: true });
+      return `${s.dev}:${s.ino}`;
+    } catch {
+      return null;
+    }
+  };
+  const gele = identite("DESIGN.md");
+  symlinkSync("DESIGN.md", join(root, "lien-design.md"));
+  linkSync(join(root, "DESIGN.md"), join(root, "dur-design.md"));
+  precondition(identite("lien-design.md") === gele, "le lien de fichier doit atteindre le fichier gelé");
+  precondition(identite("dur-design.md") === gele, "le lien dur doit atteindre le fichier gelé");
+  const ecritures = ["alias-root/DESIGN.md", "lien-design.md", "dur-design.md"];
+  // La casse décide sur le comportement observé du volume, jamais sur son nom.
+  if (identite("design.md") === gele) {
+    t.diagnostic("A-P1-F05 casse : exécuté — design.md et DESIGN.md ont le même (dev, ino)");
+    ecritures.push("design.md");
+  } else {
+    t.diagnostic("A-P1-F05 casse : sauté — design.md absent ou d'identité différente");
+  }
+  const passes = ecritures.filter((p) => decideRoleGuard("write", { path: p }, ctx) === null);
   propriete(
-    decideRoleGuard("write", { path: "alias-root/DESIGN.md" }, ctx) !== null,
-    "écrire le fichier gelé à travers un lien doit être bloqué comme le chemin direct",
+    passes.length === 0,
+    `écrire le fichier gelé à travers un lien doit être bloqué comme le chemin direct : ${JSON.stringify(passes)}`,
   );
 });
 
 preservation("A-P1-F04", "lire, et nommer un fichier du bundle sans l'écrire, reste permis", () => {
   const root = bundle("l0-pres-04-");
-  const ctx = { ...WORKER, root };
+  const ctx = { ...WORKER, root, cwd: root };
   mkdirSync(join(root, "docs"), { recursive: true });
   writeFileSync(join(root, "docs", "DESIGN.md"), "# homonyme\n");
   const permis: Array<[string, string | null]> = [
@@ -251,7 +327,8 @@ preservation("A-P1-F04", "lire, et nommer un fichier du bundle sans l'écrire, r
 });
 
 preservation("A-P1-F04", "hors bundle, aucune de ces commandes n'est bloquée", () => {
-  const libre = { ...WORKER, root: null };
+  // Un cwd hors bundle : le mutant de cette préservation en a besoin pour avoir un sens.
+  const libre = { ...WORKER, root: null, cwd: neuf("l0-pres-04-libre-") };
   const commandes = ["echo bidon > DESIGN.md", "sed -i '' 's/a/b/' DESIGN.md", "cp /dev/null DESIGN.md"];
   const bloques = commandes.filter((c) => decideRoleGuard("bash", { command: c }, libre) !== null);
   propriete(
