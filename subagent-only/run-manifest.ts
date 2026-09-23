@@ -1531,6 +1531,26 @@ export function laneAllocationSections(): number {
   return SECTIONS_D_ALLOCATION;
 }
 
+/**
+ * Un registre v2 présent ne reçoit rien s'il n'est pas KNOWN (PLAN-LOT7 Q2).
+ *
+ * Lisible ne suffit pas : un `event_seq` dupliqué ou décroissant, une lane qu'aucune
+ * ouverture ne porte, un témoin qui contredit le fichier laissent chaque ligne analysable
+ * et l'histoire inconnue. Ajouter un fait à une histoire inconnue la rend plus inconnue
+ * encore. L'état se juge ici comme les observateurs le jugent — témoins relus sous R et
+ * même fonction —, avant la séquence et avant le premier octet. Un seul lieu, pour toutes
+ * les entrées de l'écrivain.
+ */
+function exigerRegistreConnu(dir: string, runId: string, lu: LedgerRead, quoi: string): void {
+  const etat = laneState(readWitnesses(dir, runId), { ...lu, version: lu.version }, runId);
+  if (etat !== "KNOWN") {
+    throw new RecoveryError(
+      `registre ${runId} ${etat} : un registre v2 qui n'est pas KNOWN ne reçoit aucun ` +
+        `${quoi} ; rien n'est écrit`,
+    );
+  }
+}
+
 /** Le corps de `appendLaneEvent`, R déjà tenu et le bail déjà vérifié. */
 function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
   const path = laneLedgerPath(dir, lease.runId);
@@ -1542,6 +1562,7 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
     );
   }
   if (lu.version === LANE_LEDGER_V2) {
+    exigerRegistreConnu(dir, lease.runId, lu, event.event);
     appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
     return;
   }

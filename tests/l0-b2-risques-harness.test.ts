@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { PILOTE } from "./stubs/dispatch.ts";
 import {
-  aJeter, abandonVersionne, blocages, ecrire, enveloppeComplete, formeRisque, integree, issue,
+  aJeter, abandonVersionne, blocages, compter, ecrire, enveloppeComplete, formeRisque, integree, issue,
   laneActive, monter, montrer, precondition, propriete, revue, tache, type Harnais,
 } from "./l0-b2-harness.ts";
 import { openLanes, runBranches } from "../subagent-only/worktree.ts";
@@ -39,8 +39,16 @@ const parcours = (h: Harnais, unite: string, id: string): string[] =>
     .filter((e) => e.event === "RISK" && e.work_unit === unite && e.id === id)
     .map((e) => String(e.transition));
 
+/** Un scout recevable sur l'unité : `checkScoutInput` exige `find` et `scope`. */
+const scout = (unite: string, pourRisques?: string[]) => ({
+  agent: "scout", work_unit: unite, task: "porter le risque",
+  find: "où ce risque se vérifie", scope: ["src/"],
+  ...(pourRisques ? { for_risks: pourRisques } : {}),
+});
+
 /** Une unité travaillée puis revue avec un risque ouvert, par la surface publique. */
 async function avecRisqueOuvert(h: Harnais, unite: string, id: string, seq: string): Promise<void> {
+  process.chdir(h.root);
   PILOTE.pendant = ecrire(`src/${unite === "W03" ? "a" : "b"}.py`, `${unite} = 2\n`);
   await h.outil.execute(`${seq}a`, tache(unite));
   PILOTE.pendant = undefined;
@@ -73,10 +81,13 @@ regression("B2-risque-cle", "le même identifiant sur deux unités fait deux ris
       .sort();
 
     // W09 résout le sien par le pont existant : reviewer → scout → continuation.
-    await h.outil.execute("3", { agent: "scout", work_unit: "W09", task: "porter le risque" });
+    const routage = await issue(() => h.outil.execute("3", scout("W09", ["r-partage"])));
     PILOTE.resultat = { verdict: "approved", changedFiles: [], resolvedRisks: ["r-partage"] } as never;
-    await h.outil.execute("4", { agent: "reviewer", work_unit: "W09", task: "juger" });
+    await h.outil.execute("4", { agent: "reviewer", work_unit: "W09", for_risks: ["r-partage"], task: "juger" });
     PILOTE.resultat = undefined;
+    // Un scout sans risque confié sépare les deux revues de W03 : la garde de revue refuse
+    // un reviewer qui en suit un autre, et la porte de W03 ne serait jamais atteinte.
+    await h.outil.execute("4s", scout("W03"));
     const apres = await issue(() => h.outil.execute("5", revue("W03")));
     PILOTE.resultat = undefined;
 
@@ -94,7 +105,7 @@ regression("B2-risque-cle", "le même identifiant sur deux unités fait deux ris
         `W03 intégrée ${integree(h.root, "src/a.py", "W03 = 2")}, parcours W09 ` +
         `${JSON.stringify(parcours(h, "W09", "r-partage"))}, parcours W03 ` +
         `${JSON.stringify(parcours(h, "W03", "r-partage"))}, blocages ` +
-        `${JSON.stringify(blocages(apres.value))}`,
+        `${JSON.stringify(blocages(apres.value))}, routage de W09 ${montrer(routage)}`,
     );
   } finally { h.fin(); }
 });
@@ -174,9 +185,11 @@ regression("B2-risque-routed", "routed laisse le risque ouvert, seul resolved l�
   const h = await monter();
   try {
     await avecRisqueOuvert(h, "W03", "r-1", "1");
-    await h.outil.execute("2", { agent: "scout", work_unit: "W03", task: "porter le risque" });
+    await h.outil.execute("2", scout("W03", ["r-1"]));
+    precondition(compter("scout") === 1, "le scout qui porte r-1 doit être parti");
     const apresRoute = await issue(() => h.outil.execute("3", revue("W03")));
     PILOTE.resultat = undefined;
+    precondition(compter("reviewer") === 2, "la revue après routage doit atteindre sa porte");
     const lane = laneActive(h, "W03");
     const bloqueApresRoute =
       !integree(h.root, "src/a.py", "W03 = 2") &&
@@ -184,9 +197,11 @@ regression("B2-risque-routed", "routed laisse le risque ouvert, seul resolved l�
       JSON.stringify(parcours(h, "W03", "r-1")) === JSON.stringify(["opened", "routed"]);
 
     // La continuation rend le risque résolu : la porte s'ouvre alors, et alors seulement.
+    await h.outil.execute("3s", scout("W03"));
     PILOTE.resultat = { verdict: "approved", changedFiles: [], resolvedRisks: ["r-1"] } as never;
-    const apresResolution = await issue(() => h.outil.execute("4", { agent: "reviewer", work_unit: "W03", task: "juger" }));
+    const apresResolution = await issue(() => h.outil.execute("4", { agent: "reviewer", work_unit: "W03", for_risks: ["r-1"], task: "juger" }));
     PILOTE.resultat = undefined;
+    precondition(compter("reviewer") === 3, "la revue de continuation doit être partie");
     // Le parcours se relit APRÈS la résolution : une fermeture qui ne vivrait qu'en
     // mémoire laisserait le registre à « routed », et le risque reviendrait à la session
     // suivante.
@@ -234,10 +249,12 @@ regression("B2-risque-ignored", "ignored n'est pas un événement du registre au
   try {
     await avecRisqueOuvert(h, "W03", "r-1", "1");
     // Une continuation qui rend un identifiant inconnu : le pont la range en `ignored`.
-    await h.outil.execute("2", { agent: "scout", work_unit: "W03", task: "porter le risque" });
+    await h.outil.execute("2", scout("W03", ["r-1"]));
+    precondition(compter("scout") === 1, "le scout qui porte r-1 doit être parti");
     PILOTE.resultat = { verdict: "approved", changedFiles: [], resolvedRisks: ["r-inconnu"] } as never;
-    const resultat = await issue(() => h.outil.execute("3", { agent: "reviewer", work_unit: "W03", task: "juger" }));
+    const resultat = await issue(() => h.outil.execute("3", { agent: "reviewer", work_unit: "W03", for_risks: ["r-1"], task: "juger" }));
     PILOTE.resultat = undefined;
+    precondition(compter("reviewer") === 2, "la revue de continuation doit être partie");
 
     const lane = laneActive(h, "W03");
     const evts = h.evenements().filter((e) => e.event === "RISK" && e.work_unit === "W03" && e.id === "r-1");
@@ -294,6 +311,7 @@ preservation("B2-journal-non-autoritaire", "le journal des délégations ne déc
       h: Harnais, contenu: string | undefined, unite: string, valeur: string, seq: string,
     ) => {
       const fichier = unite === "W03" ? "src/a.py" : "src/b.py";
+      process.chdir(h.root);
       PILOTE.pendant = ecrire(fichier, `${valeur}\n`);
       await h.outil.execute(`${seq}a`, tache(unite));
       PILOTE.pendant = undefined;
@@ -336,14 +354,20 @@ preservation("B2-journal-non-autoritaire", "le journal des délégations ne déc
     const defavorable = await tenter(sain, FAUX_DEFAVORABLE, "W09", "sain = 3", "2");
 
     const tous = [absentBloquant, menteur, tronque, absent, defavorable];
+    // Le sens 1 doit être refusé PAR SON RISQUE : un refus étranger (plan absent, dépôt
+    // d'un autre harnais) ferait passer « non intégré » pour une preuve.
+    const parSonRisque = [absentBloquant, menteur, tronque]
+      .every((r) => (blocages(r.issue.value) ?? []).includes("open-risks"));
     propriete(
-      !absentBloquant.integree &&
+      parSonRisque &&
+        !absentBloquant.integree &&
         !menteur.integree &&
         !tronque.integree &&
         absent.integree &&
         defavorable.integree &&
         tous.every((r) => r.issue.kind === "returned"),
-      `le journal ne peut ni autoriser ni bloquer (T4) ; autorisé à tort — journal absent ` +
+      `le journal ne peut ni autoriser ni bloquer (T4) ; sens 1 refusé par son risque ${parSonRisque} ; ` +
+        `autorisé à tort — journal absent ` +
         `${absentBloquant.integree}, fausse résolution ${menteur.integree}, tronqué ` +
         `${tronque.integree} — bloqué à tort — journal absent ${!absent.integree}, faux ` +
         `événements défavorables ${!defavorable.integree} ; ${montrer(menteur.issue)} · ` +
