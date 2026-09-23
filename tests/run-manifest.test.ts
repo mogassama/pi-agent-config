@@ -3369,19 +3369,22 @@ test("parseLaneEventV2 rend null, sans lever, pour ce qui n'est pas un objet", (
 });
 
 /*
- * L'écrivain reste v1 (C4.9). Cette borne est un type, pas un contrôle : aucune exécution
- * ne la voit. La directive ci-dessous la rend mesurable — si `appendLaneEvent` acceptait
- * une nature v2, la directive deviendrait inutile et le compilateur le signalerait, ce
- * que S4 refuse comme diagnostic nouveau. La fonction n'est jamais appelée.
+ * L'écrivain accepte une DEMANDE REVIEWED v2, mais refuse un REVIEWED complet portant
+ * `event_seq` : l'enveloppe s'attribue sous R, jamais depuis l'appelant (LOT 6). Cette
+ * borne est un type, pas un contrôle : aucune exécution ne la voit. La directive
+ * ci-dessous la rend mesurable — si `appendLaneEvent` acceptait un événement déjà
+ * enveloppé, la directive deviendrait inutile et le compilateur le signalerait, ce que S4
+ * refuse comme diagnostic nouveau. Le témoin positif est B2-reviewed-reload. La fonction
+ * n'est jamais appelée.
  */
-export function ecrivainBorneALaV1(dir: string, lease: Lease): void {
+export function ecrivainRefuseUnReviewedEnveloppe(dir: string, lease: Lease): void {
   // Une revue v2 bien typée : la seule erreur attendue est celle de l'écrivain.
   const revue: LaneEventV2 = {
     event_seq: 1, work_unit: "W03", lane: `${RV2}-W03-g1`, at: "2026-09-16T00:00:00Z",
     event: "REVIEWED", from_tree: "t0", tree: "t1", verdict: "approved",
     reviewer: { delegation_seq: 2, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" },
   };
-  // @ts-expect-error — REVIEWED est une nature v2, que l'écrivain n'a pas le droit d'écrire
+  // @ts-expect-error — un REVIEWED portant déjà `event_seq` n'est pas une demande d'écriture
   appendLaneEvent(dir, revue, lease);
 }
 

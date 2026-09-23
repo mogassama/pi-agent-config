@@ -462,7 +462,7 @@ test("l'inventaire est celui qu'on croit : un lanceur ajouté le fait bouger", (
   for (const s of inventaire()) parClasse.set(s.classe, (parClasse.get(s.classe) ?? 0) + 1);
   assert.deepEqual(
     [...parClasse.entries()].sort(),
-    [["counted-git", 10], ["opaque-shell", 3], ["outside-recovery", 2]],
+    [["counted-git", 16], ["opaque-shell", 3], ["outside-recovery", 2]],
     "l'inventaire a changé — classer le nouveau site plutôt que d'ajuster ce compte",
   );
 });

@@ -32,7 +32,9 @@ import {
   readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { laneLedgerIncoherences, parseLaneEventV2, type LaneEvent, type LaneEventV1 } from "./lane-ledger.ts";
+import {
+  laneLedgerIncoherences, parseLaneEventV2, type LaneEvent, type LaneEventV1, type ProofMode,
+} from "./lane-ledger.ts";
 import { verifierCompleted } from "./run-end.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
 import { basename, dirname, join, resolve } from "node:path";
@@ -1187,7 +1189,30 @@ export const LANE_LEDGER_V2 = 2;
 export type LaneWrite =
   | { event: "OPENED"; work_unit: string; at: string; base: string; lane?: string; generation?: number }
   | { event: "INTEGRATED"; work_unit: string; at: string; integration_commit?: string }
-  | { event: "ABANDONED"; work_unit: string; at: string; reason?: string; by?: string };
+  | { event: "ABANDONED"; work_unit: string; at: string; reason?: string; by?: string }
+  /*
+   * La revue d'une lane (C2.2, § F). `lane` n'est pas une seconde vérité : c'est un
+   * CONTRÔLE, comme pour l'ouverture — l'écrivain refuse si le registre relu sous R ne
+   * désigne pas cette lane comme la lane courante de l'unité, et il refuse une chaîne
+   * que `from_tree` romprait. Le reste du payload est ce que le runtime a observé.
+   */
+  | {
+      event: "REVIEWED";
+      /*
+       * Jamais fournie : la séquence se déduit du registre relu sous R. Un événement v2
+       * complet, enveloppe comprise, n'est donc pas une demande d'écriture — et la borne de
+       * type de `tests/run-manifest.test.ts` (`ecrivainRefuseUnReviewedEnveloppe`) continue de le refuser.
+       */
+      event_seq?: never;
+      work_unit: string;
+      at: string;
+      lane: string;
+      from_tree: string;
+      tree: string;
+      verdict: string;
+      reviewer: { delegation_seq: number; agent: string; role: string };
+      proof: { mode: ProofMode; paths?: string[] };
+    };
 
 /**
  * Une ouverture refusée dans un run legacy (PLAN-LOT3 § 1, lecture (b)).
@@ -1289,6 +1314,42 @@ function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<st
     throw new RecoveryError(`${quoi} : le registre n'a jamais ouvert de lane pour ${event.work_unit}`);
   }
   const enveloppe = { event_seq: seq, work_unit: event.work_unit, lane: ouverte.lane, at: event.at };
+  if (event.event === "REVIEWED") {
+    if (event.lane !== ouverte.lane) {
+      throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
+    }
+    if (lu.events.some((e) => e.event === "ABANDONED" && "lane" in e && e.lane === ouverte.lane)) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} est abandonnée, aucune revue ne s'y enregistre`);
+    }
+    // La chaîne `from_tree → tree` (§ F) : une revue part de là où la précédente s'est
+    // arrêtée. La première part de la base, que seul git connaît : l'appelant la fournit
+    // et la porte la revérifie avant de fonder une décision.
+    let precedent: string | undefined;
+    for (const e of lu.events) if (e.event === "REVIEWED" && e.lane === ouverte.lane) precedent = e.tree;
+    if (precedent !== undefined && precedent !== event.from_tree) {
+      throw new RecoveryError(`${quoi} : from_tree ${event.from_tree} romprait la chaîne après tree ${precedent}`);
+    }
+    const proof = event.proof.paths === undefined
+      ? { mode: event.proof.mode }
+      : { mode: event.proof.mode, paths: [...event.proof.paths] };
+    const doc = {
+      ...enveloppe,
+      event: "REVIEWED",
+      from_tree: event.from_tree,
+      tree: event.tree,
+      verdict: event.verdict,
+      reviewer: {
+        delegation_seq: event.reviewer.delegation_seq,
+        agent: event.reviewer.agent,
+        role: event.reviewer.role,
+      },
+      proof,
+    };
+    // La forme d'une ligne se juge par le lecteur lui-même : l'écrivain n'écrit rien
+    // qu'une relecture compterait abîmée.
+    if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
+    return doc;
+  }
   if (event.event === "INTEGRATED") {
     /*
      * La forme historique de C0 v1.8, et elle seule : le commit exact, aucun `status`.
@@ -1416,6 +1477,12 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
     const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
     throw new RecoveryError(
       `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
+    );
+  }
+  if (event.event === "REVIEWED") {
+    throw new RecoveryError(
+      `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : sa grammaire ne porte aucune ` +
+        "revue durable ; REVIEWED n'existe qu'en v2",
     );
   }
   if (event.event === "OPENED") {

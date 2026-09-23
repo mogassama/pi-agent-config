@@ -544,5 +544,38 @@
     "file": "subagent-only/role-rules.ts",
     "find": "  if (kind === \"bash\" && ctx.root) {\n    const reason = refuseBundleWrite(input.command ?? \"\", ctx.root, ctx.cwd);",
     "replace": "  if (kind === \"bash\") { // mutant PRES A-P1-F04 hors bundle : les quatre noms à cwd tenus pour gelés\n    const reason = refuseBundleWrite(input.command ?? \"\", ctx.root ?? ctx.cwd, ctx.cwd);"
+  },
+  {
+    "test": "L0 REG B2-reviewed-reload — une approbation produite par task survit à la session",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    appendLaneEvent(\n      RUN_DIR,\n      {\n        event: \"REVIEWED\",",
+        "replace": "    ((..._jete: unknown[]) => undefined)( // mutant B2-reviewed-reload : l'approbation reste en session\n      RUN_DIR,\n      {\n        event: \"REVIEWED\","
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  if (!derniere) return \"aucune revue durable de cette lane\";",
+        "replace": "  if (!derniere) return undefined; // mutant B2-reviewed-reload : la porte se contente de la session"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG B2-proof-none — une revue sans preuve n'autorise pas un arbre qu'aucune revue ne couvre",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const nue = revues.find((r) => r.from_tree !== r.tree && r.proof.mode === \"none\");",
+    "replace": "  const nue = undefined as ReviewFact | undefined; // mutant B2-proof-none : none couvre un maillon changé"
+  },
+  {
+    "test": "L0 PRES B2-scope-breach-etat — un rework qui répare le scope rend la lane intégrable",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const montres = [...delta];\n",
+    "replace": "  const montres = delta.filter((f) => !restaures.includes(f)); // mutant D1 : la restauration n'est pas remise\n"
+  },
+  {
+    "test": "L0 PRES B2-paquet-complet — la revue reçoit tout le delta, même ce qu'un bail perdu a écrit",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const delta = cheminsDuDelta;\n",
+    "replace": "  const delta = cheminsDuDelta.filter((f) => frontiere.includes(f)); // mutant D3 : la frontière borne la preuve\n"
   }
 ]

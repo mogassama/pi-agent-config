@@ -99,7 +99,11 @@ import {
 } from "../../subagent-only/worktree.js";
 import {
   describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict,
+  type LaneEvent, type ProofMode, type ReviewFact,
 } from "../../subagent-only/lane-ledger.js";
+import {
+  deltaBetweenTrees, pathIdenticalBetweenTrees, pathsBetweenTrees, treeOfCommit, workingTree,
+} from "../../subagent-only/tree.js";
 import {
   commitIntegration,
   integrationReview,
@@ -964,6 +968,135 @@ function laneHorsProvenance(unit: string, laneId: string): string | undefined {
   );
 }
 
+/**
+ * La base enregistrée d'une lane, et son tree. Lue dans des événements déjà relus.
+ *
+ * La boucle et non `.find()`, pour la même raison que `laneHorsProvenance` : seule la
+ * comparaison du discriminant restreint l'union v1|v2 jusqu'à `base`.
+ */
+function baseDeLane(events: readonly LaneEvent[], laneId: string): string | undefined {
+  for (const e of events) {
+    if (e.event === "OPENED" && "lane" in e && e.lane === laneId) return e.base;
+  }
+  return undefined;
+}
+
+/**
+ * Enregistre la revue d'une lane (C2.2, PLAN-LOT6 Q5). Rend la raison d'un refus, ou rien.
+ *
+ * Le runtime écrit tout, et il écrit LES TREES DU PAQUET : `from_tree` et `tree` sont ceux
+ * que `paquetDeLane` a observés pour construire la preuve, jamais un recalcul d'après la
+ * revue. Les recalculer ici décrirait un arbre que le reviewer n'a pas vu : une écriture
+ * arrivée pendant la délégation serait couverte par un `proof` qui ne la contient pas
+ * (B1). Si la lane a changé pendant la revue, l'approbation porte l'ancien snapshot et la
+ * porte la refuse sur « l'arbre de la lane a changé depuis la revue ».
+ *
+ * L'identité est celle de la délégation réelle ; la preuve est ce que le paquet contenait.
+ * Le reviewer ne choisit rien de tout cela. L'écrivain revérifie la chaîne sous R.
+ */
+function enregistrerRevue(
+  lane: LaneContext,
+  resultat: RunResult | undefined,
+  seq: number,
+  identite: { agent: string; role: string },
+  snapshot: { fromTree: string; tree: string; proof: DiffPackage["proof"] },
+  lease: Lease,
+): string | undefined {
+  const verdict = resultat?.verdict;
+  if (typeof verdict !== "string" || verdict === "") {
+    return "la revue n'a rendu aucun verdict exploitable ; aucune revue n'est enregistrée";
+  }
+  try {
+    appendLaneEvent(
+      RUN_DIR,
+      {
+        event: "REVIEWED",
+        work_unit: lane.workUnitId,
+        at: new Date().toISOString(),
+        lane: lane.laneId,
+        from_tree: snapshot.fromTree,
+        tree: snapshot.tree,
+        verdict,
+        reviewer: { delegation_seq: seq, agent: identite.agent, role: identite.role },
+        proof: snapshot.proof,
+      },
+      lease,
+    );
+    return undefined;
+  } catch (err) {
+    return `revue non enregistrée : ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/**
+ * L'état autoritaire d'une lane, relu à la porte (PLAN-LOT6 Q8).
+ *
+ * Par l'observation commune — la même que la reconstruction et que
+ * `bin/subagent-recover` —, jamais par le cache de l'appel : un registre inexploitable,
+ * une chaîne rompue ou une observation git en échec rendent la lane inconnue.
+ */
+type EtatDeLane =
+  | { connu: true; baseTree: string; reviews: ReviewFact[] }
+  | { connu: false; raison: string };
+
+function etatAutoritaire(laneId: string): EtatDeLane {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    const laneRead = { ...lu, version: lu.version };
+    const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead });
+    if (!vu.usable) return { connu: false, raison: vu.reason };
+    if (vu.snapshot.read.version !== LANE_LEDGER_V2) {
+      return { connu: false, raison: "le registre legacy ne porte aucune revue durable (C2.2)" };
+    }
+    const base = baseDeLane(vu.snapshot.read.events, laneId);
+    if (base === undefined) return { connu: false, raison: `aucune ouverture enregistrée pour ${laneId}` };
+    return {
+      connu: true,
+      baseTree: treeOfCommit(process.cwd(), base),
+      reviews: vu.snapshot.projections.reviews.get(laneId) ?? [],
+    };
+  } catch (err) {
+    return { connu: false, raison: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * C2.3, sur la chaîne continue des revues durables de la lane (PLAN-LOT6 Q3).
+ *
+ * Intégrable seulement si : la chaîne part de la base ; la dernière revue est approuvée
+ * et porte le T_L recalculé maintenant ; et chaque maillon qui change le tree a reçu un
+ * diff ou une liste de lecture. Un maillon `none` sur un tree inchangé n'ajoute rien à
+ * couvrir ; un maillon `none` qui change le tree laisse ce changement non couvert, et
+ * aucune revue ultérieure sans preuve ne le couvre.
+ */
+function refusDeCouverture(lane: LaneContext): string | undefined {
+  const etat = etatAutoritaire(lane.laneId);
+  if (!etat.connu) return `état de la lane inconnu : ${etat.raison}`;
+  let tl: string;
+  try {
+    tl = workingTree(lane.cwd);
+  } catch (err) {
+    return `état de la lane inconnu : ${err instanceof Error ? err.message : String(err)}`;
+  }
+  const revues = etat.reviews;
+  const derniere = revues.at(-1);
+  if (!derniere) return "aucune revue durable de cette lane";
+  if (revues[0].from_tree !== etat.baseTree) {
+    return `la chaîne des revues part de ${revues[0].from_tree.slice(0, 12)}, pas de la base ` +
+      `${etat.baseTree.slice(0, 12)}`;
+  }
+  if (derniere.verdict !== "approved") return `la dernière revue est ${derniere.verdict}`;
+  if (derniere.tree !== tl) {
+    return `l'arbre de la lane a changé depuis la revue (${derniere.tree.slice(0, 12)} → ${tl.slice(0, 12)})`;
+  }
+  const nue = revues.find((r) => r.from_tree !== r.tree && r.proof.mode === "none");
+  if (nue) {
+    return `la revue ${nue.event_seq} n'a reçu aucune preuve du changement ` +
+      `${nue.from_tree.slice(0, 12)} → ${nue.tree.slice(0, 12)}, et aucune revue ne le couvre (C2.3)`;
+  }
+  return undefined;
+}
+
 function reconstruire(): void {
   /*
    * La fenêtre de mesure : avant la première lecture, après la seconde
@@ -1531,11 +1664,23 @@ export interface DiffPackage {
   degraded: boolean;
   /** Size of the inlined diff, when one was inlined. The budget follows it. */
   diffChars?: number;
+  /**
+   * Ce que le reviewer a réellement reçu (C2.3) : un diff, une liste de lecture, ou rien.
+   * Lu de la construction du paquet, jamais de la réponse du reviewer. Une liste de
+   * fichiers générés seuls n'est pas une preuve : leur contenu n'a été ni montré ni
+   * désigné à la lecture.
+   */
+  proof: { mode: ProofMode; paths?: string[] };
 }
+
+const SANS_PREUVE = { mode: "none" as const };
+
+/** Des chemins canoniques de § F : triés, uniques. */
+const trierChemins = (paths: readonly string[]): string[] => [...new Set(paths)].sort();
 
 function diffSection(paths: string[], cwd: string): DiffPackage {
   const all = paths.filter(Boolean);
-  if (all.length === 0) return { text: "", degraded: false };
+  if (all.length === 0) return { text: "", degraded: false, proof: SANS_PREUVE };
 
   const files = all.filter((f) => !GENERATED.test(f));
   const generated = all.filter((f) => GENERATED.test(f));
@@ -1551,13 +1696,14 @@ function diffSection(paths: string[], cwd: string): DiffPackage {
       "yourself. You have grep and find for this delegation, and more turns than usual.\n\n" +
       alsoChanged,
     degraded: true,
+    proof: { mode: "reading-list", paths: trierChemins(files) },
   });
 
-  if (files.length === 0) return { text: alsoChanged, degraded: false };
+  if (files.length === 0) return { text: alsoChanged, degraded: false, proof: SANS_PREUVE };
   if (files.length > DIFF_MAX_FILES) return readingList("too many to inline");
 
   const diff = gitDiffFor(files, cwd);
-  if (!diff.trim()) return { text: alsoChanged, degraded: false };
+  if (!diff.trim()) return { text: alsoChanged, degraded: false, proof: SANS_PREUVE };
   if (diff.length > DIFF_MAX_CHARS) {
     return readingList(`diff too large to inline at ${Math.round(diff.length / 1000)}kB`);
   }
@@ -1571,6 +1717,153 @@ function diffSection(paths: string[], cwd: string): DiffPackage {
       alsoChanged,
     degraded: false,
     diffChars: diff.length,
+    proof: { mode: "diff", paths: trierChemins(files) },
+  };
+}
+
+/**
+ * Le paquet d'une revue de lane (D3 et D1, PLAN-LOT6 § 3).
+ *
+ * La frontière `HISTORY` est un contexte, pas une borne de preuve. Un worker dont le bail
+ * s'est perdu a pu écrire dans la lane sans laisser de trace en mémoire, et une revue
+ * rechargée n'a plus de mémoire du tout. Ce que le reviewer doit recevoir est donc le
+ * delta Git ENTIER du dernier tree revu durablement (sinon la base) jusqu'au T_L observé
+ * maintenant : ajouts, modifications, suppressions, modes, types et liens. Il se lit de
+ * deux trees, jamais du registre ni de la mémoire, et jamais contre la base à la place
+ * du dernier tree revu.
+ *
+ * Toute panne git, tout résultat incohérent — des chemins sans patch, des trees
+ * différents sans chemin — est une observation inconnue : refus avant la délégation,
+ * jamais un paquet partiel étiqueté `diff`. Un fichier généré dans le delta rend ce
+ * maillon `none` : la politique actuelle ne le montre pas et n'en fournit aucune lecture.
+ *
+ * Un chemin revenu à la base (D1) est vérifié par l'entrée de tree exacte, et annoncé ;
+ * sa preuve est le patch inverse qui figure dans le delta, pas l'annonce.
+ */
+type PaquetDeLane =
+  | { ok: true; pkg: DiffPackage; fromTree: string; tree: string }
+  | { ok: false; raison: string };
+
+function paquetDeLane(frontiere: readonly string[], lane: LaneContext): PaquetDeLane {
+  let tl: string;
+  let fromTree: string;
+  let cheminsDuDelta: string[];
+  const restaures: string[] = [];
+  try {
+    // Un seul snapshot autoritaire : la lecture, sa qualification et ses projections. Un
+    // registre lisible mais UNKNOWN refuse ici, avant que le reviewer ne parte (D3).
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    const laneRead = { ...lu, version: lu.version };
+    const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead });
+    if (!vu.usable) {
+      throw new Error(
+        `le registre des lanes est inexploitable (${vu.state}) : ${vu.reason}`,
+      );
+    }
+    const base = baseDeLane(vu.snapshot.read.events, lane.laneId);
+    if (base === undefined) {
+      throw new Error(`aucune ouverture enregistrée pour ${lane.laneId}`);
+    }
+    const baseTree = treeOfCommit(process.cwd(), base);
+    fromTree =
+      vu.snapshot.projections.reviews.get(lane.laneId)?.at(-1)?.tree ??
+      baseTree;
+    tl = workingTree(lane.cwd);
+    cheminsDuDelta = pathsBetweenTrees(process.cwd(), fromTree, tl);
+    for (const f of cheminsDuDelta) {
+      if (pathIdenticalBetweenTrees(process.cwd(), baseTree, tl, f)) restaures.push(f);
+    }
+  } catch (err) {
+    return { ok: false, raison: err instanceof Error ? err.message : String(err) };
+  }
+  if (cheminsDuDelta.length === 0) {
+    if (fromTree === tl) {
+      return { ok: true, fromTree, tree: tl, pkg: { text: "", degraded: false, proof: SANS_PREUVE } };
+    }
+    return {
+      ok: false,
+      raison: `les trees ${fromTree.slice(0, 12)} et ${tl.slice(0, 12)} diffèrent sans aucun chemin de delta`,
+    };
+  }
+
+  // D3 : tout le delta, jamais la seule frontière en mémoire.
+  const delta = cheminsDuDelta;
+  // D1 : les chemins rétablis en font partie ; leur patch inverse est leur preuve.
+  const montres = [...delta];
+  const generes = montres.filter((f) => GENERATED.test(f));
+  const lisibles = montres.filter((f) => !GENERATED.test(f));
+  if (lisibles.length === 0) {
+    return {
+      ok: true,
+      fromTree,
+      tree: tl,
+      pkg: { text: `Changed, generated, not diffed: ${generes.join(", ")}.\n\n`, degraded: false, proof: SANS_PREUVE },
+    };
+  }
+
+  let patch: string;
+  try {
+    patch = deltaBetweenTrees(process.cwd(), fromTree, tl, lisibles);
+  } catch (err) {
+    return { ok: false, raison: err instanceof Error ? err.message : String(err) };
+  }
+  if (!patch.trim()) {
+    return {
+      ok: false,
+      raison: `les chemins ${lisibles.join(", ")} diffèrent entre ${fromTree.slice(0, 12)} et ` +
+        `${tl.slice(0, 12)}, et leur patch est vide`,
+    };
+  }
+
+  const annonce = restaures.length > 0
+    ? `Changed since the last review and now identical to the base: ${restaures.join(", ")}.\n\n`
+    : "";
+  const aussi = generes.length > 0 ? `Also changed, generated, not diffed: ${generes.join(", ")}.\n\n` : "";
+  // La frontière n'est qu'un contexte : ce qu'elle ne nomme pas est montré quand même, et
+  // signalé, parce qu'aucune délégation de cette session n'en rend compte.
+  const horsFrontiere = delta.filter((f) => !frontiere.includes(f));
+  const aussiHors = horsFrontiere.length > 0 && frontiere.length > 0
+    ? `Changed outside the delegations recorded in this session: ${horsFrontiere.join(", ")}.\n\n`
+    : "";
+  // Un fichier généré n'est ni montré ni lu : ce maillon n'a pas de preuve complète.
+  const preuveComplete = generes.length === 0;
+
+  if (lisibles.length > DIFF_MAX_FILES || patch.length > DIFF_MAX_CHARS) {
+    const pourquoi = lisibles.length > DIFF_MAX_FILES
+      ? "too many to inline"
+      : `diff too large to inline at ${Math.round(patch.length / 1000)}kB`;
+    return {
+      ok: true,
+      fromTree,
+      tree: tl,
+      pkg: {
+        text:
+          `Changed files since the last review (${lisibles.length}, ${pourquoi}):\n` +
+          lisibles.map((f) => `  - ${f}`).join("\n") + "\n\n" + annonce + aussiHors + aussi +
+          "No diff is inlined for this review. Every file above changed between the last " +
+          `reviewed tree ${fromTree} and the tree under review ${tl}; both are git objects. ` +
+          `Read each change with \`git diff ${fromTree} ${tl} -- <path>\`, and a previous ` +
+          `version, deleted files included, with \`git show ${fromTree}:<path>\`. You have grep ` +
+          "and find for this delegation, and more turns than usual.\n\n",
+        degraded: true,
+        proof: preuveComplete ? { mode: "reading-list", paths: trierChemins(lisibles) } : SANS_PREUVE,
+      },
+    };
+  }
+  return {
+    ok: true,
+    fromTree,
+    tree: tl,
+    pkg: {
+      text:
+        "The change under review, as a diff from the last reviewed tree. Do not reconstruct it — " +
+        "it is here.\nYou may read any file for context, including files this diff does not " +
+        "touch;\njudge only what the diff introduced.\n\n" + annonce + aussiHors +
+        `<diff>\n${patch.trimEnd()}\n</diff>\n\n` + aussi,
+      degraded: false,
+      diffChars: patch.length,
+      proof: preuveComplete ? { mode: "diff", paths: trierChemins(lisibles) } : SANS_PREUVE,
+    },
   };
 }
 
@@ -2543,11 +2836,35 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        const pkg = integrationPkg
-          ? { text: integrationPkg.text, degraded: false, diffChars: integrationPkg.text.length }
-          : params.agent === "reviewer" && changed.length > 0
-            ? diffSection(changed, lane?.cwd ?? process.cwd())
-            : { text: "", degraded: false, diffChars: 0 };
+        let paquetDeRevue: DiffPackage = { text: "", degraded: false, proof: SANS_PREUVE };
+        // Les deux trees du paquet, tels qu'observés pour le construire : ce sont eux que
+        // REVIEWED portera (B1), jamais un recalcul d'après la revue.
+        let snapshotDeRevue: { fromTree: string; tree: string } | undefined;
+        if (!integrationPkg && params.agent === "reviewer" && lane && !attempt) {
+          {
+            const p = paquetDeLane(changed, lane);
+            if (!p.ok) {
+              return {
+                content: [{
+                  type: "text" as const,
+                  text:
+                    `Refused: le paquet de revue de ${lane.workUnitId} est inobservable — ${p.raison}\n` +
+                    "Aucune revue n'est lancée : une observation inconnue n'est jamais une preuve vide.",
+                }],
+                isError: true,
+              };
+            }
+            paquetDeRevue = p.pkg;
+            snapshotDeRevue = { fromTree: p.fromTree, tree: p.tree };
+          }
+        } else if (!integrationPkg && params.agent === "reviewer" && changed.length > 0) {
+          paquetDeRevue = diffSection(changed, lane?.cwd ?? process.cwd());
+        }
+        const pkg: DiffPackage = integrationPkg
+          ? { text: integrationPkg.text, degraded: false, diffChars: integrationPkg.text.length, proof: SANS_PREUVE }
+          : params.agent === "reviewer"
+            ? paquetDeRevue
+            : { text: "", degraded: false, diffChars: 0, proof: SANS_PREUVE };
 
         // For a scout, the contract is also the head of its task text: the child
         // reads the same one question and the same paths the schema enforced.
@@ -3210,6 +3527,27 @@ export default function (pi: ExtensionAPI) {
             }
           }
         } else if (lane && !attempt && params.agent === "reviewer" && !results[0]?.failure) {
+          /*
+           * La revue, rendue durable avant que la porte ne la lise (C2.2).
+           *
+           * Écrite quel que soit le verdict : une revue défavorable déplace aussi la
+           * frontière, elle n'approuve pas. Sans enveloppe exploitable, sous bail perdu,
+           * ou si l'écriture échoue, rien n'est enregistré et la porte se ferme : une
+           * approbation qu'aucune relecture ne retrouverait n'autorise rien.
+           */
+          const fermeC2 = (snapshotDeRevue === undefined
+            ? "le paquet de revue n'a pas été observé ; aucune revue n'est enregistrée"
+            : enregistrerRevue(
+              lane,
+              results[0],
+              seqs[0],
+              // L'agent réellement délégué, et son rôle d'enveloppe : une variante de modèle
+              // (`reviewer-gemini`) revoit sous le rôle `reviewer`.
+              { agent: params.agent, role: agent.envelopeRole ?? agent.name },
+              { fromTree: snapshotDeRevue.fromTree, tree: snapshotDeRevue.tree, proof: pkg.proof },
+              lease,
+            )) ??
+            refusDeCouverture(lane);
           const blocks = [...(LANE_BLOCKS.get(lane.laneId) ?? [])];
           if (results[0]?.verdict !== "approved") blocks.push("not-approved");
 
@@ -3252,9 +3590,10 @@ export default function (pi: ExtensionAPI) {
            * il ne touche ni la lane ni la racine, et un rework ne le lève pas — seul le
            * plan le peut.
            */
-          const statutFerme = blocks.length === 0 ? refusDesignUpdate(lane.workUnitId) : undefined;
-          const merged: ReturnType<typeof integrateLane> = statutFerme
-            ? { ok: false, conflicts: [], reason: statutFerme }
+          const statutFerme = blocks.length === 0 && !fermeC2 ? refusDesignUpdate(lane.workUnitId) : undefined;
+          const ferme = blocks.length === 0 ? fermeC2 ?? statutFerme : undefined;
+          const merged: ReturnType<typeof integrateLane> = ferme
+            ? { ok: false, conflicts: [], reason: ferme }
             : integrateLane(
             process.cwd(),
             lane.laneId,
@@ -3277,10 +3616,11 @@ export default function (pi: ExtensionAPI) {
             INTEGRATED.add(lane.workUnitId);
             OPEN_UNITS.delete(lane.workUnitId);
             integration = `  intégrée : ${lane.workUnitId}`;
-          } else if (statutFerme) {
-            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${statutFerme}`;
+          } else if (ferme) {
+            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${ferme}`;
           } else if (blocks.length > 0) {
-            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}`;
+            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}` +
+              (fermeC2 ? ` ; ${fermeC2}` : "");
           } else if (merged.conflicts.length > 0) {
             /*
              * Le conflit ouvre un contexte, il ne se contente plus de l'annoncer.

@@ -415,9 +415,34 @@ regression("C-P1-F04-m28", "après perte du bail, le nouveau propriétaire recal
     PILOTE.pendant = undefined;
     precondition(existsSync(join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`, "DESIGN.md")),
       "DESIGN.md doit être dans la lane");
+    precondition(
+      !evenements(h).some((e) => e.event === "VIOLATION"),
+      "l'ancien propriétaire, bail perdu, ne doit avoir écrit aucun VIOLATION",
+    );
+    /*
+     * D2 (PLAN-LOT6) : une délégation autorisée du nouveau propriétaire, dans la même lane.
+     * Sans elle, la revue suivante n'aurait rien reçu, C2.3 refuserait, et DESIGN.md
+     * resterait hors de la racine pour une raison qui n'a rien à voir avec R.
+     */
+    PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
+    try {
+      await h.outil.execute("1b", tache("W03"));
+    } finally {
+      PILOTE.pendant = undefined;
+    }
+    precondition(
+      existsSync(join(h.runDir, `${h.runId}.lease`, "owner.json")) && bail(h).sessionId !== "session-autre",
+      "le nouveau propriétaire doit tenir le bail",
+    );
+    precondition(!existsSync(join(h.root, "DESIGN.md")), "DESIGN.md ne doit pas être déjà dans la racine");
     await h.outil.execute("2", revue("W03"));
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 1, "la revue doit être partie une fois le bail repris");
+    const paquet = APPELS.filter((a) => a.agent === "reviewer").at(-1)?.task ?? "";
+    precondition(
+      paquet.includes("diff --git a/DESIGN.md b/DESIGN.md") && paquet.includes("diff --git a/src/a.py b/src/a.py"),
+      "la revue doit avoir reçu le diff complet, DESIGN.md et src/a.py compris",
+    );
     propriete(!existsSync(join(h.root, "DESIGN.md")), "DESIGN.md ne doit pas atteindre la racine");
     propriete(lanes(h.root).includes(`${h.runId}-W03-g1`), "la lane doit être conservée");
   } finally { h.fin(); }

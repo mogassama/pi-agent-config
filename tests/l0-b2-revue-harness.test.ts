@@ -9,10 +9,13 @@
  * Montage : `l0-b2-harness.ts`.
  */
 import { test, type TestContext } from "node:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { PILOTE } from "./stubs/dispatch.ts";
+import { APPELS, PILOTE } from "./stubs/dispatch.ts";
+import {
+  acquireRunOwnership, type Lease, releaseRunOwnership,
+} from "../subagent-only/run-manifest.ts";
 import {
   aJeter, blocages, ecrire, enveloppeComplete, git, integree, issue, laneActive, monter, montrer,
   precondition, propriete, revue, tache, treeDeTravail,
@@ -22,11 +25,21 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`, et un
+ * mutant qui réintroduit le défaut.
+ */
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
+function preservation(id: string, titre: string, fn: Preuve): void {
+  test(`L0 PRES ${id} — ${titre}`, fn);
+}
 test.after(() => { for (const d of aJeter()) rmSync(d, { recursive: true, force: true }); });
 
 // ================================================================== l'approbation durable
 
-regression("B2-reviewed-reload", "une approbation produite par task survit à la session", async () => {
+regressionCorrigee("B2-reviewed-reload", "une approbation produite par task survit à la session", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
@@ -76,25 +89,70 @@ regression("B2-reviewed-reload", "une approbation produite par task survit à la
   } finally { h.fin(); }
 });
 
-regression("B2-proof-none", "une revue sans preuve n'autorise pas un arbre qu'aucune revue ne couvre", async () => {
+regressionCorrigee("B2-proof-none", "une revue sans preuve n'autorise pas un arbre qu'aucune revue ne couvre", async () => {
   /*
    * Deux runs équivalents, pour isoler C2.3.
    *
    * Sans le témoin, une correction qui refuserait toutes les revues — ou qui planterait
    * avant d'intégrer — ferait passer la propriété. Les deux branches sont exemptes de
    * toute cause C3 : même scope, aucun réservé, aucun risque.
+   *
+   * L6-D4 (PLAN-LOT6) : le paquet est le delta complet depuis le dernier tree revu (D3),
+   * même après rechargement. Une revue sans preuve n'y existe plus que si le delta porte un
+   * fichier généré, que la politique ne montre ni ne fait lire : `src/uv.lock` ici, dans
+   * le scope de W03 pour qu'aucun dépassement ne s'en mêle.
    */
-  const sansPreuve = await monter();
-  const avecPreuve = await monter();
+  const plan = {
+    version: 1,
+    work_units: [
+      { id: "W03", goal: "faire W03", depends_on: [], expected_write_scope: ["src/a.py", "src/uv.lock"] },
+    ],
+  };
+  const sansPreuve = await monter({ plan });
+  const avecPreuve = await monter({ plan });
   try {
     for (const h of [sansPreuve, avecPreuve]) {
-      PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
+      const genere = h === sansPreuve;
+      PILOTE.pendant = (a) => {
+        if (!a.cwd) return;
+        writeFileSync(join(a.cwd, "src", "a.py"), "a = 2\n");
+        if (genere) writeFileSync(join(a.cwd, "src", "uv.lock"), "verrou\n");
+      };
+      // Le runtime prend sa racine dans le répertoire courant, et `monter` y laisse le
+      // DERNIER harnais monté : sans ce chdir, la tâche de `sansPreuve` s'exécutait dans
+      // le dépôt d'`avecPreuve`, et la branche `none` mesurait une unité sans lane.
+      process.chdir(h.root);
       await h.outil.execute("1", tache("W03"));
       PILOTE.pendant = undefined;
     }
 
-    // Branche `none` : après rechargement, le reviewer reçoit « juger » sans rien.
+    // La branche `none` porte réellement sa lane et son changement, dans son dépôt.
+    const laneSans = laneActive(sansPreuve, "W03");
+    const baseSans = git(sansPreuve.root, "rev-parse", "HEAD^{tree}").trim();
+    precondition(
+      sansPreuve.evenements().some((e) => e.event === "OPENED" && e.lane === laneSans),
+      `sansPreuve doit avoir enregistré l'ouverture de ${laneSans}`,
+    );
+    precondition(treeDeTravail(sansPreuve, laneSans) !== baseSans, "le T_L de sansPreuve doit différer de sa base");
+    const delegationsDe = (h: typeof sansPreuve) => h.journal().filter((r) => r.role === "worker");
+    const laneAvec = laneActive(avecPreuve, "W03");
+    precondition(
+      delegationsDe(sansPreuve).length === 1 && delegationsDe(sansPreuve)[0].lane_id === laneSans &&
+        delegationsDe(avecPreuve).length === 1 && delegationsDe(avecPreuve)[0].lane_id === laneAvec,
+      `chaque harnais doit porter sa seule délégation, dans sa lane ; sansPreuve ` +
+        `${JSON.stringify(delegationsDe(sansPreuve).map((r) => r.lane_id))}, avecPreuve ` +
+        `${JSON.stringify(delegationsDe(avecPreuve).map((r) => r.lane_id))}`,
+    );
+    const verrou = (h: typeof sansPreuve, lane: string) =>
+      existsSync(join(h.root, ".git", "pi-lanes", lane, "src", "uv.lock"));
+    precondition(
+      verrou(sansPreuve, laneSans) && !verrou(avecPreuve, laneAvec),
+      "seule la lane de sansPreuve porte le fichier généré src/uv.lock",
+    );
+
+    // Branche `none` : après rechargement, le delta porte un fichier généré, non montré.
     const neuveSans = await sansPreuve.recharger();
+    precondition(laneActive(neuveSans, "W03") === laneSans, "la branche none doit juger la lane de sansPreuve");
     const rSans = await issue(() => neuveSans.outil.execute("2", revue("W03")));
     PILOTE.resultat = undefined;
     const revueSans = neuveSans.evenements().find((e) => e.event === "REVIEWED");
@@ -107,19 +165,16 @@ regression("B2-proof-none", "une revue sans preuve n'autorise pas un arbre qu'au
       !integree(neuveSans.root, "src/a.py", "a = 2") &&
       (blocages(rSans.value) ?? []).length === 0;
 
-    // Branche témoin : un écrivain dans la session neuve, donc un diff, donc une preuve.
+    // Branche témoin : le même changement, sans fichier généré, donc un diff, donc une preuve.
     const neuveAvec = await avecPreuve.recharger();
-    PILOTE.pendant = ecrire("src/a.py", "a = 3\n");
-    await neuveAvec.outil.execute("2", tache("W03"));
-    PILOTE.pendant = undefined;
-    const rAvec = await issue(() => neuveAvec.outil.execute("3", revue("W03")));
+    const rAvec = await issue(() => neuveAvec.outil.execute("2", revue("W03")));
     PILOTE.resultat = undefined;
     const revueAvec = neuveAvec.evenements().find((e) => e.event === "REVIEWED");
     const modeAvec = (revueAvec?.proof as { mode?: string } | undefined)?.mode;
     const branche2 =
       rAvec.kind === "returned" &&
       modeAvec === "diff" &&
-      integree(neuveAvec.root, "src/a.py", "a = 3") &&
+      integree(neuveAvec.root, "src/a.py", "a = 2") &&
       (blocages(rAvec.value) ?? []).length === 0;
 
     propriete(
@@ -131,6 +186,75 @@ regression("B2-proof-none", "une revue sans preuve n'autorise pas un arbre qu'au
         `${montrer(rSans)} · ${montrer(rAvec)}`,
     );
   } finally { sansPreuve.fin(); avecPreuve.fin(); }
+});
+
+preservation("B2-paquet-complet", "la revue reçoit tout le delta, même ce qu'un bail perdu a écrit", async () => {
+  /*
+   * D3 (PLAN-LOT6) : la frontière en mémoire est un contexte, pas une borne de preuve.
+   *
+   * `src/b.py` est écrit par une délégation dont le bail se perd : le lot rend avant
+   * `HISTORY`, et aucune délégation de la session n'en rend compte. `src/a.py` est écrit
+   * ensuite par le nouveau propriétaire. Les deux sont dans le scope de W03 ; aucun
+   * n'est réservé ni du bundle. Le reviewer doit avoir vu les deux avant d'approuver.
+   */
+  const h = await monter({
+    plan: {
+      version: 1,
+      work_units: [{ id: "W03", goal: "faire W03", depends_on: [], expected_write_scope: ["src/a.py", "src/b.py"] }],
+    },
+  });
+  try {
+    PILOTE.pendant = (a) => {
+      if (!a.cwd) return;
+      writeFileSync(join(a.cwd, "src", "b.py"), "b = 'sous bail perdu'\n");
+      const bail = JSON.parse(readFileSync(join(h.runDir, `${h.runId}.lease`, "owner.json"), "utf-8")) as Lease;
+      releaseRunOwnership(h.runDir, bail);
+      const autre = acquireRunOwnership(h.runDir, h.runId, "session-autre");
+      if (autre.ok) releaseRunOwnership(h.runDir, autre.lease);
+    };
+    try {
+      await h.outil.execute("1", { agent: "worker", batch: [{ work_unit: "W03", task: "écrire pour W03" }] });
+    } finally {
+      PILOTE.pendant = undefined;
+    }
+    PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
+    try {
+      await h.outil.execute("2", tache("W03"));
+    } finally {
+      PILOTE.pendant = undefined;
+    }
+
+    const lane = laneActive(h, "W03");
+    const cheminLane = join(h.root, ".git", "pi-lanes", lane);
+    precondition(
+      readFileSync(join(cheminLane, "src", "b.py"), "utf-8") === "b = 'sous bail perdu'\n" &&
+        readFileSync(join(cheminLane, "src", "a.py"), "utf-8") === "a = 2\n",
+      "les deux changements doivent être dans l'arbre de la lane",
+    );
+    const ecritures = h.journal().flatMap((r) => (r.changed_files as string[] | undefined) ?? []);
+    precondition(
+      !ecritures.includes("src/b.py") && ecritures.includes("src/a.py"),
+      `src/b.py ne doit apparaître dans aucune délégation journalisée ; ${JSON.stringify(ecritures)}`,
+    );
+    const proprietaire = JSON.parse(
+      readFileSync(join(h.runDir, `${h.runId}.lease`, "owner.json"), "utf-8"),
+    ) as Lease;
+    precondition(proprietaire.sessionId !== "session-autre", "le nouveau propriétaire doit tenir le bail");
+
+    const r = await issue(() => h.outil.execute("3", revue("W03")));
+    PILOTE.resultat = undefined;
+    const paquet = APPELS.filter((a) => a.agent === "reviewer").at(-1)?.task ?? "";
+    const vuB = paquet.includes("diff --git a/src/b.py b/src/b.py");
+    const vuA = paquet.includes("diff --git a/src/a.py b/src/a.py");
+    const approbation = h.evenements().find((e) => e.event === "REVIEWED");
+    const integreeOk = integree(h.root, "src/a.py", "a = 2") && integree(h.root, "src/b.py", "b = 'sous bail perdu'");
+
+    propriete(
+      vuB && vuA && r.kind === "returned" && integreeOk && (blocages(r.value) ?? []).length === 0,
+      `le reviewer a vu src/b.py ${vuB} et src/a.py ${vuA} ; preuve ` +
+        `${JSON.stringify(approbation?.proof)} ; intégrée ${integreeOk} ; ${montrer(r)}`,
+    );
+  } finally { h.fin(); }
 });
 
 // ================================================================== la porte, C3.7
