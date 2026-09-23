@@ -33,8 +33,8 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import {
-  laneLedgerIncoherences, parseLaneEventV2, type LaneEvent, type LaneEventV1, type ProofMode,
-  type ViolationKind,
+  laneLedgerIncoherences, parseLaneEventV2, projectRisks, riskKey, type LaneEvent, type LaneEventV1,
+  type ProofMode, type RiskFact, type RiskTransition, type ViolationKind,
 } from "./lane-ledger.ts";
 import { verifierCompleted } from "./run-end.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
@@ -1229,7 +1229,29 @@ export type LaneWrite =
       paths: string[];
       source: { delegation_seq: number; agent: string };
       observed_tree: string;
-    };
+    }
+  | RiskWrite;
+
+/**
+ * Une transition de risque (C3.4, § F). Même discipline que REVIEWED et VIOLATION : la lane
+ * est un contrôle — la lane courante de l'unité, jamais abandonnée —, l'enveloppe se déduit
+ * sous R, et la transition se juge contre la projection autoritaire relue sous R
+ * (PLAN-LOT7 Q4). La clé est `(R, work_unit, id)` ; la lane n'en fait pas partie.
+ *
+ * `by` ou `to`, exactement un : `opened` et `resolved` disent qui agit, `routed` à qui c'est
+ * confié. Leur valeur est une provenance opaque (PLAN-LOT7 Q3) : aucune décision ne la lit.
+ */
+export type RiskWrite = {
+  event: "RISK";
+  event_seq?: never;
+  work_unit: string;
+  at: string;
+  lane: string;
+  id: string;
+  transition: RiskTransition;
+  by?: string;
+  to?: string;
+};
 
 /**
  * Une ouverture refusée dans un run legacy (PLAN-LOT3 § 1, lecture (b)).
@@ -1349,6 +1371,36 @@ function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<st
     if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
     return doc;
   }
+  if (event.event === "RISK") {
+    if (event.lane !== ouverte.lane) {
+      throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
+    }
+    if (lu.events.some((e) => e.event === "ABANDONED" && "lane" in e && e.lane === ouverte.lane)) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} est abandonnée, aucun risque ne s'y enregistre`);
+    }
+    // La machine de C0 § F, sur la projection du LOT 2 : `opened` naît une fois, `routed` et
+    // `resolved` n'agissent que sur un risque ouvert, et un risque fermé ne se rouvre pas.
+    const fait = projectRisks(lu.events, runId).get(riskKey(runId, event.work_unit, event.id));
+    if (event.transition === "opened" && fait !== undefined) {
+      throw new RecoveryError(`${quoi} : le risque ${event.id} existe déjà pour ${event.work_unit}`);
+    }
+    if (event.transition !== "opened" && (fait === undefined || !fait.open)) {
+      throw new RecoveryError(
+        `${quoi} : ${event.transition} sur le risque ${event.id} de ${event.work_unit}, ` +
+          `${fait === undefined ? "absent" : "déjà fermé"}`,
+      );
+    }
+    const doc = {
+      ...enveloppe,
+      event: "RISK",
+      id: event.id,
+      transition: event.transition,
+      ...(event.by !== undefined ? { by: event.by } : {}),
+      ...(event.to !== undefined ? { to: event.to } : {}),
+    };
+    if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
+    return doc;
+  }
   if (event.event === "REVIEWED") {
     if (event.lane !== ouverte.lane) {
       throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
@@ -1418,11 +1470,115 @@ function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<st
  * Tout autre en-tête, ou une ligne illisible, refuse : écrire à la suite d'un registre
  * qu'on ne sait pas lire en entier ajouterait un fait à une histoire inconnue.
  */
-export function appendLaneEvent(dir: string, event: LaneWrite, lease: Lease): void {
+export function appendLaneEvent(
+  dir: string,
+  event: LaneWrite,
+  lease: Lease,
+  risquesAvant?: CalculDesRisques,
+): void {
   withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.work_unit}`);
-    ajouterSousR(dir, event, lease);
+    if (risquesAvant === undefined) {
+      ajouterSousR(dir, event, lease);
+      return;
+    }
+    ecrireSequenceSousR(dir, risquesAvant, [event], lease);
   });
+}
+
+/**
+ * Ce que le producteur de risques reçoit sous R (PLAN-LOT7 § 3.3) : la projection du LOT 2,
+ * `(R, work_unit, id)`, sur le registre relu sous la garde et jugé KNOWN, et la lane courante
+ * d'une unité (dernier OPENED). C'est le même fold que `vu.snapshot.projections.risks` : sur
+ * un registre v2 KNOWN, l'observation n'y ajoute rien.
+ */
+export interface EtatDesRisques {
+  faits: ReadonlyMap<string, RiskFact>;
+  laneCourante: (workUnit: string) => string | undefined;
+}
+export type CalculDesRisques = (etat: EtatDesRisques) => readonly RiskWrite[];
+
+/**
+ * Des transitions de risque seules, sous UNE acquisition de R (PLAN-LOT7 § 3.3) : le routage
+ * d'un scout, la continuation qui n'a rien rendu, le reviewer de tentative T_I. Les
+ * transitions se calculent sous R, sur l'état relu sous R.
+ */
+export function appendRiskEvents(dir: string, workUnit: string, calcul: CalculDesRisques, lease: Lease): void {
+  withRunGuard(dir, lease.runId, () => {
+    assertOwner(dir, lease, `enregistrer RISK sur ${workUnit}`);
+    ecrireSequenceSousR(dir, calcul, [], lease);
+  });
+}
+
+/**
+ * Une séquence RISK (puis REVIEWED) commencée et non achevée.
+ *
+ * Le registre est append-only : aucun octet écrit ne se reprend, et une troncature
+ * simulerait une atomicité que le fichier n'a pas. Dès qu'un append a été tenté, son issue
+ * compte comme possiblement durable ; le verrou R reste donc comme vestige de transition
+ * (C1.10), et l'appel suivant rencontre `RUN_TRANSITION_LOCKED` jusqu'à la réconciliation
+ * opérateur (PLAN-LOT7 Q6).
+ */
+export class RiskNotRecordedError extends RecoveryError {}
+
+/**
+ * Tout se décide avant le premier octet, puis tout s'écrit dans l'ordre, sans jamais défaire.
+ *
+ * Phase 1, sous R : registre présent, lisible, v2, KNOWN ; les transitions de risque
+ * calculées sur cet état ; chaque événement construit par `evenementV2` contre le registre
+ * relu ET les événements qui le précèdent dans la séquence. Un refus ici n'a rien écrit :
+ * `RecoveryError`, verrou libéré. Phase 2 : un append par ligne. La première panne après
+ * un RISK tenté lève `RiskNotRecordedError` et garde R ; une séquence sans aucun RISK garde
+ * la règle de sa seule entrée.
+ */
+function ecrireSequenceSousR(
+  dir: string,
+  calcul: CalculDesRisques,
+  suite: readonly LaneWrite[],
+  lease: Lease,
+): void {
+  const path = laneLedgerPath(dir, lease.runId);
+  let quoi = ["RISK", ...suite.map((e) => e.event)].join(" → ");
+  if (!existsSync(path)) {
+    throw new RecoveryError(`registre ${lease.runId} absent : ${quoi} sans lane ouverte ; rien n'est écrit`);
+  }
+  const lu = readLaneEvents(dir, lease.runId);
+  if (lu.malformedLines.length > 0) {
+    throw new RecoveryError(`registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`);
+  }
+  if (lu.version !== LANE_LEDGER_V2) {
+    throw new RecoveryError(
+      `registre ${lease.runId} en version ${String(lu.version)} : ${quoi} n'existe qu'en v2 ; rien n'est écrit`,
+    );
+  }
+  exigerRegistreConnu(dir, lease.runId, lu, quoi);
+  const risques = calcul({
+    faits: projectRisks(lu.events, lease.runId),
+    laneCourante: (u) => lastLaneOfUnit(lu.events, u)?.lane,
+  });
+  const events: LaneWrite[] = [...risques, ...suite];
+  quoi = events.map((e) => e.event).join(" → ") || "aucune transition";
+  const lignes: string[] = [];
+  let courant: LedgerRead = lu;
+  for (const event of events) {
+    const doc = evenementV2(courant, event, lease.runId);
+    lignes.push(`${JSON.stringify(doc)}\n`);
+    courant = { ...courant, events: [...courant.events, doc as unknown as LaneEvent] };
+  }
+  for (let i = 0; i < lignes.length; i++) {
+    try {
+      appendFileSync(path, lignes[i]);
+    } catch (err) {
+      if (!events.slice(0, i + 1).some((e) => e.event === "RISK")) {
+        throw new RecoveryError(`${quoi} : append en échec (${messageOf(err)}) ; aucun risque n'était en jeu`);
+      }
+      throw new RiskNotRecordedError(
+        `${quoi} : append ${i + 1}/${lignes.length} en échec sous bail valide (${messageOf(err)}) ; ` +
+          `${i} ligne(s) déjà écrite(s), aucune n'est reprise. Le verrou ${guardPath(dir, lease.runId)} ` +
+          "est conservé comme vestige ; réconcilier le registre avant de le lever.",
+      );
+    }
+  }
 }
 
 /**
@@ -1572,10 +1728,10 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
       `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
     );
   }
-  if (event.event === "REVIEWED" || event.event === "VIOLATION") {
+  if (event.event === "REVIEWED" || event.event === "VIOLATION" || event.event === "RISK") {
     throw new RecoveryError(
       `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : sa grammaire ne porte ni ` +
-        `revue ni violation durable ; ${event.event} n'existe qu'en v2`,
+        `revue, ni violation, ni risque durable ; ${event.event} n'existe qu'en v2`,
     );
   }
   if (event.event === "OPENED") {
@@ -2107,14 +2263,15 @@ function messageOf(err: unknown): string {
  */
 function sousGuardAcquis<T>(path: string, label: string, fn: () => T): T {
   let sortieNormale = false;
-  // Le seul échec qui garde le verrou : une violation constatée et non écrite (Q7).
+  // Les seuls échecs qui gardent le verrou : une violation constatée et non écrite (LOT 6
+  // Q7), une séquence de risques commencée et non achevée (LOT 7 Q6).
   let vestige = false;
   try {
     const resultat = fn();
     sortieNormale = true;
     return resultat;
   } catch (err) {
-    vestige = err instanceof ViolationNotRecordedError;
+    vestige = err instanceof ViolationNotRecordedError || err instanceof RiskNotRecordedError;
     throw err;
   } finally {
     if (!vestige) try {

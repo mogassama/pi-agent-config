@@ -23,8 +23,8 @@ import {
 import { openLanes, runBranches } from "../subagent-only/worktree.ts";
 
 type Preuve = (t: TestContext) => Promise<void> | void;
-function regression(id: string, titre: string, fn: Preuve): void {
-  test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
 }
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
@@ -58,7 +58,7 @@ async function avecRisqueOuvert(h: Harnais, unite: string, id: string, seq: stri
 
 // ================================================================== la clé du risque
 
-regression("B2-risque-cle", "le même identifiant sur deux unités fait deux risques distincts", async () => {
+regressionCorrigee("B2-risque-cle", "le même identifiant sur deux unités fait deux risques distincts", async () => {
   const h = await monter();
   try {
     /*
@@ -110,18 +110,20 @@ regression("B2-risque-cle", "le même identifiant sur deux unités fait deux ris
   } finally { h.fin(); }
 });
 
-regression("B2-risque-reload", "un risque ouvert par task survit à la session", async () => {
+regressionCorrigee("B2-risque-reload", "un risque ouvert par task survit à la session", async () => {
   const h = await monter();
   try {
     await avecRisqueOuvert(h, "W03", "r-1", "1");
     const lane = laneActive(h, "W03");
     const ouvert = risques(h, "opened").find((e) => e.work_unit === "W03" && e.id === "r-1");
-    const forme = formeRisque(ouvert, {
-      unite: "W03", lane, id: "r-1", transition: "opened", champ: "by", valeur: "reviewer",
-    });
 
     const neuve = await h.recharger();
     const relu = neuve.evenements().find((e) => e.event === "RISK" && e.id === "r-1");
+    // La forme se juge sur le fait RELU après rechargement (PLAN-LOT7 § 3.6) : avant, seule
+    // compte l'existence de l'événement écrit, et son identité avec le relu.
+    const forme = formeRisque(relu, {
+      unite: "W03", lane, id: "r-1", transition: "opened", champ: "by", valeur: "reviewer",
+    });
     const resultat = await issue(() => neuve.outil.execute("2", revue("W03")));
     PILOTE.resultat = undefined;
     propriete(
@@ -138,7 +140,7 @@ regression("B2-risque-reload", "un risque ouvert par task survit à la session",
   } finally { h.fin(); }
 });
 
-regression("B2-risque-generation", "un risque ouvert sur une génération bloque la suivante", async () => {
+regressionCorrigee("B2-risque-generation", "un risque ouvert sur une génération bloque la suivante", async () => {
   const h = await monter();
   try {
     await avecRisqueOuvert(h, "W03", "r-1", "1");
@@ -181,16 +183,16 @@ regression("B2-risque-generation", "un risque ouvert sur une génération bloque
   } finally { h.fin(); }
 });
 
-regression("B2-risque-routed", "routed laisse le risque ouvert, seul resolved lève la porte", async () => {
+regressionCorrigee("B2-risque-routed", "routed laisse le risque ouvert, seul resolved lève la porte", async () => {
   const h = await monter();
   try {
     await avecRisqueOuvert(h, "W03", "r-1", "1");
+    const lane = laneActive(h, "W03");
     await h.outil.execute("2", scout("W03", ["r-1"]));
     precondition(compter("scout") === 1, "le scout qui porte r-1 doit être parti");
     const apresRoute = await issue(() => h.outil.execute("3", revue("W03")));
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 2, "la revue après routage doit atteindre sa porte");
-    const lane = laneActive(h, "W03");
     const bloqueApresRoute =
       !integree(h.root, "src/a.py", "W03 = 2") &&
       (blocages(apresRoute.value) ?? []).includes("open-risks") &&
@@ -244,10 +246,11 @@ regression("B2-risque-routed", "routed laisse le risque ouvert, seul resolved l�
   } finally { h.fin(); }
 });
 
-regression("B2-risque-ignored", "ignored n'est pas un événement du registre autoritaire", async () => {
+regressionCorrigee("B2-risque-ignored", "ignored n'est pas un événement du registre autoritaire", async () => {
   const h = await monter();
   try {
     await avecRisqueOuvert(h, "W03", "r-1", "1");
+    const lane = laneActive(h, "W03");
     // Une continuation qui rend un identifiant inconnu : le pont la range en `ignored`.
     await h.outil.execute("2", scout("W03", ["r-1"]));
     precondition(compter("scout") === 1, "le scout qui porte r-1 doit être parti");
@@ -256,7 +259,6 @@ regression("B2-risque-ignored", "ignored n'est pas un événement du registre au
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 2, "la revue de continuation doit être partie");
 
-    const lane = laneActive(h, "W03");
     const evts = h.evenements().filter((e) => e.event === "RISK" && e.work_unit === "W03" && e.id === "r-1");
     const formes = [
       ...formeRisque(evts.find((e) => e.transition === "opened"), {
@@ -282,6 +284,54 @@ regression("B2-risque-ignored", "ignored n'est pas un événement du registre au
 });
 
 // ================================================================== ce qui doit survivre
+
+preservation("B2-risque-reprise", "après rechargement, un risque ouvert se route et se résout par le pont", async () => {
+  const h = await monter();
+  try {
+    /*
+     * La session qui a ouvert le risque est morte : sa mémoire aussi. Le pont doit
+     * retrouver le risque au registre, le router, le résoudre — et la porte ne s'ouvrir
+     * qu'après le `resolved` durable (PLAN-LOT7 Q8, § 3.6). Sans cela, une porte durable
+     * fermerait l'unité pour toujours.
+     */
+    await avecRisqueOuvert(h, "W03", "r-1", "1");
+    precondition(
+      JSON.stringify(parcours(h, "W03", "r-1")) === JSON.stringify(["opened"]),
+      "le risque doit être ouvert au registre avant le rechargement",
+    );
+    const neuve = await h.recharger();
+    await neuve.outil.execute("2", scout("W03", ["r-1"]));
+    precondition(compter("scout") === 1, "le scout de reprise doit être parti");
+    const apresRoute = await issue(() => neuve.outil.execute("3", revue("W03")));
+    PILOTE.resultat = undefined;
+    precondition(compter("reviewer") === 1, "la revue après routage doit atteindre sa porte");
+    const parcoursRoute = parcours(neuve, "W03", "r-1");
+    const bloqueApresRoute =
+      !integree(neuve.root, "src/a.py", "W03 = 2") &&
+      (blocages(apresRoute.value) ?? []).includes("open-risks");
+
+    await neuve.outil.execute("3s", scout("W03"));
+    PILOTE.resultat = { verdict: "approved", changedFiles: [], resolvedRisks: ["r-1"] } as never;
+    const apresResolution = await issue(() =>
+      neuve.outil.execute("4", { agent: "reviewer", work_unit: "W03", for_risks: ["r-1"], task: "juger" }));
+    PILOTE.resultat = undefined;
+    precondition(compter("reviewer") === 2, "la revue de continuation doit être partie");
+
+    const final = parcours(neuve, "W03", "r-1");
+    propriete(
+      JSON.stringify(parcoursRoute) === JSON.stringify(["opened", "routed"]) &&
+        bloqueApresRoute &&
+        JSON.stringify(final) === JSON.stringify(["opened", "routed", "resolved"]) &&
+        integree(neuve.root, "src/a.py", "W03 = 2") &&
+        !(blocages(apresResolution.value) ?? []).includes("open-risks"),
+      `après rechargement, le pont doit router puis résoudre depuis le registre, et la porte ` +
+        `ne s'ouvrir qu'après resolved ; parcours après routage ${JSON.stringify(parcoursRoute)}, ` +
+        `bloquée après routage ${bloqueApresRoute}, parcours final ${JSON.stringify(final)}, ` +
+        `intégrée ${integree(neuve.root, "src/a.py", "W03 = 2")}, blocages ` +
+        `${JSON.stringify(blocages(apresResolution.value))} ; ${montrer(apresResolution)}`,
+    );
+  } finally { h.fin(); }
+});
 
 preservation("B2-journal-non-autoritaire", "le journal des délégations ne décide dans aucun sens", async () => {
   const bloquant = await monter();

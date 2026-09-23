@@ -151,9 +151,31 @@ export function targetWorkUnit(
   ledger: readonly RiskRecord[],
 ): Target {
   const named = declared?.trim() || undefined;
-  const known = riskIds
-    .map((id) => ledger.find((r) => r.id === id)?.workUnitId)
-    .filter((u): u is string => u !== undefined);
+  /*
+   * Un risque est `(unité, id)` (C3.4). Chaque identifiant confié se résout seul :
+   *
+   *   unité déclarée U, (U, id) connu            → U
+   *   unité déclarée U, id connu seulement ailleurs → conflit de provenance (plus bas)
+   *   sans unité, id connu sous une seule unité  → cette unité
+   *   sans unité, id connu sous plusieurs unités → ambigu, refus
+   *   id inconnu                                 → ne désigne rien
+   */
+  const known: string[] = [];
+  for (const id of riskIds) {
+    const porteurs = [
+      ...new Set(ledger.filter((r) => r.id === id && r.workUnitId !== undefined).map((r) => r.workUnitId!)),
+    ].sort();
+    if (named && porteurs.includes(named)) {
+      known.push(named);
+    } else if (!named && porteurs.length > 1) {
+      return {
+        kind: "conflict",
+        reason: `le risque ${id} existe sous ${porteurs.join(" et ")} : nommer l'unité de la continuation`,
+      };
+    } else if (porteurs.length > 0) {
+      known.push(...porteurs);
+    }
+  }
   const units = [...new Set(known)];
 
   if (units.length > 1) {

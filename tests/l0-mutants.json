@@ -20,8 +20,8 @@
   {
     "test": "L0 COUV C-P1-F04-m5 — un risque laissé ouvert bloque l'intégration",
     "file": "extensions/subagent/index.ts",
-    "find": "if (pending.length > 0) blocks.push(\"open-risks\");",
-    "replace": "void pending;"
+    "find": "              if (e.event === \"opened\") writes.push(risque(e.id, \"opened\", { by: qui }));",
+    "replace": "              if (e.event === \"opened\") void 0; // mutant m5 : opened reste en mémoire, jamais au registre"
   },
   {
     "test": "L0 COUV C-P1-F04-m10 — une revue après un worker qui n'a rien écrit est refusée",
@@ -630,5 +630,47 @@
     "file": "extensions/subagent/index.ts",
     "find": "            porteIntegration = { outcome: \"blocked\", policy_blockers: causesC3 };",
     "replace": "            porteIntegration = { outcome: \"blocked\", policy_blockers: causesC3.slice(1) }; // mutant : une cause vraie retirée"
+  },
+  {
+    "test": "L0 REG B2-risque-cle — le même identifiant sur deux unités fait deux risques distincts",
+    "file": "subagent-only/risk-ledger.ts",
+    "find": "  const known = new Set(next.map((r) => cle(r.workUnitId, r.id)));\n  for (const item of items) {\n    // An id is a coordinate within its unit, so a repeat is the same risk seen\n    // twice, not a second one. Nothing is compared textually anywhere in this module.\n    if (known.has(cle(workUnitId, item.id))) continue;\n    known.add(cle(workUnitId, item.id));",
+    "replace": "  const known = new Set(next.map((r) => r.id)); // mutant B2-risque-cle : clé par identifiant seul\n  for (const item of items) {\n    if (known.has(item.id)) continue;\n    known.add(item.id);"
+  },
+  {
+    "test": "L0 REG B2-risque-reload — un risque ouvert par task survit à la session",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (etat.connu && etat.risques.length > 0) blocks.push(\"open-risks\");",
+    "replace": "          if (RISKS.some((r) => r.workUnitId === lane.workUnitId && r.status !== \"resolved\")) blocks.push(\"open-risks\"); // mutant B2-risque-reload : la porte relit la mémoire de session"
+  },
+  {
+    "test": "L0 REG B2-risque-generation — un risque ouvert sur une génération bloque la suivante",
+    "file": "extensions/subagent/index.ts",
+    "find": "      risques: [...vu.snapshot.projections.risks.values()].filter((f) => f.work_unit === workUnit && f.open),",
+    "replace": "      risques: [...vu.snapshot.projections.risks.values()].filter((f) => f.work_unit === workUnit && f.open && vu.snapshot.read.events.some((e) => e.event === \"RISK\" && e.transition === \"opened\" && e.work_unit === workUnit && e.id === f.id && e.lane === laneId)), // mutant B2-risque-generation : seule la génération courante compte"
+  },
+  {
+    "test": "L0 REG B2-risque-routed — routed laisse le risque ouvert, seul resolved lève la porte",
+    "file": "extensions/subagent/index.ts",
+    "find": "      risques: [...vu.snapshot.projections.risks.values()].filter((f) => f.work_unit === workUnit && f.open),",
+    "replace": "      risques: [...vu.snapshot.projections.risks.values()].filter((f) => f.work_unit === workUnit && f.transition === \"opened\"), // mutant B2-risque-routed : routed tenu pour fermé"
+  },
+  {
+    "test": "L0 REG B2-risque-ignored — ignored n'est pas un événement du registre autoritaire",
+    "file": "subagent-only/risk-ledger.ts",
+    "find": "    if (!claimed.has(id)) {",
+    "replace": "    if (!claimed.has(id) && resolved.length === 0) { // mutant B2-risque-ignored : un resolved_risks ignoré ferme le risque confié"
+  },
+  {
+    "test": "L0 PRES B2-risque-reprise — après rechargement, un risque ouvert se route et se résout par le pont",
+    "file": "extensions/subagent/index.ts",
+    "find": "            const livre = grandLivre(etat.faits.values());",
+    "replace": "            const livre = RISKS; // mutant B2-risque-reprise : for_risks cherché dans la seule mémoire de session"
+  },
+  {
+    "test": "L0 PRES B2-journal-non-autoritaire — le journal des délégations ne décide dans aucun sens",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (etat.connu && etat.risques.length > 0) blocks.push(\"open-risks\");",
+    "replace": "          const journalMutant = (() => { try { return readFileSync(join(process.cwd(), RUNS_DIR, `${RUN_ID}-delegations.jsonl`), \"utf-8\"); } catch { return \"\"; } })(); // mutant B2-journal-non-autoritaire sens 1 : le journal ferme\n          if (etat.connu && etat.risques.some((f) => !journalMutant.includes(`\"risks_resolved\":[\"${f.id}\"]`))) blocks.push(\"open-risks\");"
   }
 ]

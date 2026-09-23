@@ -13,19 +13,21 @@
  * every version of this contract has refused. What is stored is the text as
  * written and the transitions that happened to it.
  *
- * An open risk is not a failure and does not hold a run back. We deliberately
- * created risks that cannot be settled — an absence with no exact target is one
- * — so making completion wait on them would make some runs unfinishable by
- * construction. The reviewer already holds the lever for the ones that matter:
- * it caps its own verdict. Nothing in this module is read by any guard, and
- * nothing here can refuse a delegation.
+ * An open risk blocks the integration of its own unit and the completion of the
+ * run (C3.4, `open-risks`; `run completed`). What decides is never this module
+ * nor the extension's memory: it is the durable RISK events of the lane ledger,
+ * folded by the LOT 2 projection under `(R, work_unit, id)`. The functions here
+ * compute which transitions a delegation produces; the ledger they are handed is
+ * built from that projection, and only its texts come from memory
+ * (PLAN-LOT7 Q5).
  *
- * Pure over a plain array, on the pattern of `review-boundary.ts`: the state
- * lives next to `HISTORY` in the extension, the transitions are testable
- * without a process, and the events are appended to a JSONL the external
- * reading folds back. Projection is not here — no `summarize`, no total, no
- * footer. `OPEN > 0` changes no decision pi makes today, so a function that
- * counted it would have no production consumer.
+ * A risk is identified by its unit AND its id: the same id raised on two units is
+ * two risks, and settling one leaves the other open (B2-risque-cle).
+ *
+ * Pure over a plain array, on the pattern of `review-boundary.ts`: the
+ * transitions are testable without a process, and the events are appended to a
+ * best-effort JSONL (T4) beside the authoritative ledger. `still-open` and
+ * `ignored` only ever reach that journal.
  */
 import type { ReviewRisk } from "./counts.js";
 
@@ -107,6 +109,11 @@ export function riskChannel(agent: string): "route" | "continuation" | "none" {
   return "none";
 }
 
+/** The key of a risk within a run: its unit and its id, never the id alone. */
+function cle(workUnitId: string | undefined, id: string): string {
+  return JSON.stringify([workUnitId ?? null, id]);
+}
+
 /** Records the risks a review just opened. Ids are assigned upstream, in `counts.ts`. */
 export function openRisks(
   ledger: readonly RiskRecord[],
@@ -118,12 +125,12 @@ export function openRisks(
   const events: LedgerEvent[] = [];
   if (!items || items.length === 0) return { ledger: next, events };
 
-  const known = new Set(next.map((r) => r.id));
+  const known = new Set(next.map((r) => cle(r.workUnitId, r.id)));
   for (const item of items) {
-    // An id is a coordinate, so a repeat is the same risk seen twice, not a
-    // second one. Nothing is compared textually anywhere in this module.
-    if (known.has(item.id)) continue;
-    known.add(item.id);
+    // An id is a coordinate within its unit, so a repeat is the same risk seen
+    // twice, not a second one. Nothing is compared textually anywhere in this module.
+    if (known.has(cle(workUnitId, item.id))) continue;
+    known.add(cle(workUnitId, item.id));
     next.push({ id: item.id, text: item.text, openedBy, status: "open", ...(workUnitId ? { workUnitId } : {}) });
     events.push({ event: "opened", id: item.id, by: openedBy, chars: item.text.length });
   }
@@ -142,11 +149,12 @@ export function routeRisks(
   ledger: readonly RiskRecord[],
   ids: readonly string[],
   routedTo: string,
+  workUnitId?: string,
 ): Applied {
   const next = ledger.map((r) => ({ ...r }));
   const events: LedgerEvent[] = [];
   for (const id of ids) {
-    const rec = next.find((r) => r.id === id);
+    const rec = next.find((r) => r.id === id && r.workUnitId === workUnitId);
     if (!rec) {
       events.push({ event: "ignored", id, reason: "unknown", by: routedTo });
       continue;
@@ -192,13 +200,14 @@ export function continuationReturned(
   entrusted: readonly string[],
   resolved: readonly string[],
   by: string,
+  workUnitId?: string,
 ): Applied {
   const next = ledger.map((r) => ({ ...r }));
   const events: LedgerEvent[] = [];
   const claimed = new Set(resolved);
 
   for (const id of entrusted) {
-    const rec = next.find((r) => r.id === id);
+    const rec = next.find((r) => r.id === id && r.workUnitId === workUnitId);
     if (!rec) {
       events.push({ event: "ignored", id, reason: "unknown", by });
       continue;

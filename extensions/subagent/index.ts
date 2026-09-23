@@ -12,12 +12,12 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
-import { actionLines, countsLine, riskLines } from "../../subagent-only/counts.js";
+import { actionLines, countsLine, reviewRisks, riskLines } from "../../subagent-only/counts.js";
 import {
   continuationReturned,
   openRisks,
@@ -26,7 +26,7 @@ import {
   type LedgerEvent,
   type RiskRecord,
 } from "../../subagent-only/risk-ledger.js";
-import { openLane, targetWorkUnit, type LaneContext } from "../../subagent-only/lane-context.js";
+import { openLane, targetWorkUnit, type LaneContext, type Target } from "../../subagent-only/lane-context.js";
 import { anySignal } from "../../subagent-only/signals.js";
 import { RUN_STATUS_KEY, type RunSnapshot } from "../../subagent-only/run-state.js";
 import {
@@ -44,7 +44,12 @@ import {
   appendLaneEvent,
   appendViolationEvent,
   NotOwnerError,
+  RiskNotRecordedError,
   ViolationNotRecordedError,
+  appendRiskEvents,
+  type CalculDesRisques,
+  type EtatDesRisques,
+  type RiskWrite,
   readManifest,
   readLaneEvents,
   allocateSeq,
@@ -102,7 +107,7 @@ import {
 } from "../../subagent-only/worktree.js";
 import {
   describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict,
-  type LaneEvent, type ProofMode, type ReviewFact, type ViolationFact, type ViolationKind,
+  type LaneEvent, type ProofMode, type ReviewFact, type RiskFact, type ViolationFact, type ViolationKind,
 } from "../../subagent-only/lane-ledger.js";
 import {
   deltaBetweenTrees, pathIdenticalBetweenTrees, pathsBetweenTrees, treeOfCommit, workingTree,
@@ -581,12 +586,15 @@ function retryLanding(unit: string, etat: AttemptState, lease: Lease): LandingRe
 
 
 /**
- * Every risk a review left open in this session, and what became of it.
+ * What this session knows of the risks beyond the ledger: their texts, and the
+ * risks that belong to no unit.
  *
- * Reassigned rather than mutated: the transitions in `risk-ledger.ts` are pure,
- * so the state cannot be half-applied by a throw between two writes. Nothing
- * reads this to allow or refuse anything — see the module header. It exists to
- * be written down.
+ * Not a source of decision (PLAN-LOT7 Q5). A risk of a unit is open, routed or
+ * resolved because the lane ledger says so, under `(R, work_unit, id)`; the
+ * gate, the routing and the continuation read that projection. This array is
+ * updated only after the durable write succeeded, so it is never ahead of the
+ * ledger. A risk raised with no unit — free regime, global reviewer — has no
+ * lane and no gate: it lives here and in the journal, and nowhere else.
  */
 let RISKS: RiskRecord[] = [];
 
@@ -982,6 +990,11 @@ function baseDeLane(events: readonly LaneEvent[], laneId: string): string | unde
  *
  * L'identité est celle de la délégation réelle ; la preuve est ce que le paquet contenait.
  * Le reviewer ne choisit rien de tout cela. L'écrivain revérifie la chaîne sous R.
+ *
+ * `risques` : les transitions RISK de la même enveloppe, calculées et écrites AVANT ce
+ * REVIEWED sous la même acquisition de R (PLAN-LOT7 § 3.3). Leur échec n'est pas une revue
+ * non enregistrée qu'on referme à la porte : il remonte, et l'appel s'arrête sur un refus
+ * nommé — avec vestige si une ligne a pu être écrite.
  */
 function enregistrerRevue(
   lane: LaneContext,
@@ -990,6 +1003,7 @@ function enregistrerRevue(
   identite: { agent: string; role: string },
   snapshot: { fromTree: string; tree: string; proof: DiffPackage["proof"] },
   lease: Lease,
+  risques?: CalculDesRisques,
 ): string | undefined {
   const verdict = resultat?.verdict;
   if (typeof verdict !== "string" || verdict === "") {
@@ -1010,9 +1024,11 @@ function enregistrerRevue(
         proof: snapshot.proof,
       },
       lease,
+      risques,
     );
     return undefined;
   } catch (err) {
+    if (risques !== undefined) throw err;
     return `revue non enregistrée : ${err instanceof Error ? err.message : String(err)}`;
   }
 }
@@ -1025,10 +1041,17 @@ function enregistrerRevue(
  * une chaîne rompue ou une observation git en échec rendent la lane inconnue.
  */
 type EtatDeLane =
-  | { connu: true; baseTree: string; reviews: ReviewFact[]; violations: ViolationFact[] }
+  | {
+      connu: true;
+      baseTree: string;
+      reviews: ReviewFact[];
+      violations: ViolationFact[];
+      /** Les risques ouverts de l'unité, toutes générations confondues (C3.4, PLAN-LOT7 Q7). */
+      risques: RiskFact[];
+    }
   | { connu: false; raison: string };
 
-function etatAutoritaire(laneId: string): EtatDeLane {
+function etatAutoritaire(laneId: string, workUnit: string): EtatDeLane {
   try {
     const lu = readLaneEvents(RUN_DIR, RUN_ID);
     const laneRead = { ...lu, version: lu.version };
@@ -1044,10 +1067,227 @@ function etatAutoritaire(laneId: string): EtatDeLane {
       baseTree: treeOfCommit(process.cwd(), base),
       reviews: vu.snapshot.projections.reviews.get(laneId) ?? [],
       violations: vu.snapshot.projections.violations.filter((v) => v.lane === laneId),
+      risques: [...vu.snapshot.projections.risks.values()].filter((f) => f.work_unit === workUnit && f.open),
     };
   } catch (err) {
     return { connu: false, raison: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Les risques du run, tels que le registre autoritaire les porte (PLAN-LOT7 Q5).
+ *
+ * `observeLanes` → `vu.usable` → `projections.risks`, sous `(R, work_unit, id)`. Un registre
+ * inexploitable n'est jamais lu comme « aucun risque » (T1).
+ */
+type RisquesDuRun = { connu: true; faits: RiskFact[] } | { connu: false; raison: string };
+function risquesAutoritaires(): RisquesDuRun {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead: { ...lu, version: lu.version } });
+    if (!vu.usable) return { connu: false, raison: vu.reason };
+    return { connu: true, faits: [...vu.snapshot.projections.risks.values()] };
+  } catch (err) {
+    return { connu: false, raison: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Le grand livre que reçoivent les transitions pures : les FAITS autoritaires, et de la
+ * mémoire seulement les textes (PLAN-LOT7 Q5). Connu, ouvert, routé, résolu, l'unité d'un
+ * risque : tout vient du registre. Un risque sans unité n'a ni lane ni registre ; il reste
+ * tel que la session le connaît.
+ */
+function grandLivre(faits: Iterable<RiskFact>): RiskRecord[] {
+  const livre: RiskRecord[] = [];
+  for (const f of faits) {
+    const memo = RISKS.find((r) => r.workUnitId === f.work_unit && r.id === f.id);
+    livre.push({
+      id: f.id,
+      text: memo?.text ?? texteRelu(f.id),
+      openedBy: memo?.openedBy ?? "",
+      workUnitId: f.work_unit,
+      status: !f.open ? "resolved" : f.transition === "routed" ? "routed" : "open",
+      ...(memo?.routedTo !== undefined ? { routedTo: memo.routedTo } : {}),
+      ...(memo?.resolvedBy !== undefined ? { resolvedBy: memo.resolvedBy } : {}),
+    });
+  }
+  for (const r of RISKS) if (r.workUnitId === undefined) livre.push({ ...r });
+  return livre;
+}
+
+/**
+ * Le texte d'un risque ouvert dans une session précédente, relu dans l'artefact de la revue
+ * qui l'a ouvert. Best-effort : aucune décision n'en dépend (PLAN-LOT7 Q8).
+ *
+ * Un identifiant de production est `<runId>-<seq>-<n>` (`reviewRisks`) : il désigne
+ * l'artefact `<runId>-<seq>-<agent>.json` et la position `n` de ses `open_risks`. Les ids
+ * sont recalculés par la même fonction que celle qui les a émis ; rien d'autre n'est lu.
+ */
+function texteRelu(id: string): string {
+  try {
+    const m = /^(.+)-[1-9][0-9]*$/.exec(id);
+    if (m) {
+      for (const nom of readdirSync(RUN_DIR)) {
+        if (!nom.startsWith(`${m[1]}-`) || !nom.endsWith(".json")) continue;
+        const doc = JSON.parse(readFileSync(join(RUN_DIR, nom), "utf-8")) as {
+          runId?: unknown;
+          envelope?: Record<string, unknown> | null;
+        };
+        if (doc.runId !== RUN_ID || !doc.envelope) continue;
+        const payload = doc.envelope.payload as Record<string, unknown> | undefined;
+        const trouve = reviewRisks(doc.envelope.open_risks ?? payload?.open_risks, m[1])?.find((r) => r.id === id);
+        if (trouve) return trouve.text;
+      }
+    }
+  } catch {
+    // Best-effort : un artefact absent ou illisible laisse la mention ci-dessous.
+  }
+  return `(texte non relu — risque ${id} ouvert dans une session précédente ; voir les artefacts de revue sous ${RUNS_DIR}/)`;
+}
+
+/**
+ * L'unité d'un appel qui porte `for_risks`, lue sur la projection autoritaire (PLAN-LOT7
+ * § 3.4). Sans `for_risks`, rien n'est lu : seule la déclaration compte. Un état des risques
+ * inexploitable refuse l'appel plutôt que de le rattacher au hasard.
+ */
+function cibleDesRisques(
+  declared: string | undefined,
+  forRisks: readonly string[],
+): { cible: Target; livre: RiskRecord[] } {
+  if (forRisks.length === 0) return { cible: targetWorkUnit(declared, [], []), livre: [] };
+  const vu = risquesAutoritaires();
+  if (!vu.connu) {
+    return { cible: { kind: "conflict", reason: `état des risques inconnu : ${vu.raison}` }, livre: [] };
+  }
+  const livre = grandLivre(vu.faits);
+  return { cible: targetWorkUnit(declared, forRisks, livre), livre };
+}
+
+/**
+ * Ce qui interdit d'intégrer une tentative (C3.4, PLAN-LOT7 Q10, § 3.1/F5), ou rien.
+ *
+ * Seul un snapshot v2 autoritaire et utilisable, sans risque ouvert pour l'unité, laisse la
+ * tentative aller jusqu'à `M` :
+ *
+ *   v2 KNOWN, aucun risque ouvert   → passage (undefined)
+ *   v2 KNOWN, risque ouvert         → open-risks (C3.7)
+ *   v1 legacy                        → fermé : l'absence de RISK v1 n'autorise rien
+ *   inexploitable, autre version     → fermé sur état inconnu, sans liste
+ *
+ * Le legacy s'identifie par la seule lecture `present && version === LANE_LEDGER_VERSION` ;
+ * tout le reste passe par la lecture autoritaire.
+ */
+function barriereDesRisques(
+  unit: string,
+  resultat: RunResult | undefined,
+): { ouverts: boolean; raison: string } | undefined {
+  let lu: LedgerRead;
+  try {
+    lu = readLaneEvents(RUN_DIR, RUN_ID);
+  } catch (err) {
+    return { ouverts: false, raison: `état des risques inconnu : ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (lu.present && lu.version === LANE_LEDGER_VERSION) {
+    if ((resultat?.openRiskItems?.length ?? 0) > 0) {
+      return { ouverts: true, raison: "open-risks (registre legacy : le risque ouvert par cette revue n'a pas pu s'écrire)" };
+    }
+    return {
+      ouverts: false,
+      raison: "état durable des risques indisponible : le registre legacy (v1) ne porte aucun RISK, " +
+        "et leur absence n'autorise aucune intégration",
+    };
+  }
+  let vu: ReturnType<typeof observeLanes>;
+  try {
+    vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead: { ...lu, version: lu.version } });
+  } catch (err) {
+    return { ouverts: false, raison: `état des risques inconnu : ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!vu.usable) return { ouverts: false, raison: `état des risques inconnu : ${vu.reason}` };
+  if (!vu.snapshot.read.present || vu.snapshot.read.version !== LANE_LEDGER_V2) {
+    return {
+      ouverts: false,
+      raison: `état des risques inconnu : registre des lanes ${vu.snapshot.read.present ? `en version ${String(vu.snapshot.read.version)}` : "absent"}`,
+    };
+  }
+  const ouverts = [...vu.snapshot.projections.risks.values()]
+    .filter((f) => f.work_unit === unit && f.open).map((f) => f.id).sort();
+  return ouverts.length > 0 ? { ouverts: true, raison: `open-risks ${ouverts.join(", ")}` } : undefined;
+}
+
+/**
+ * Le régime des risques d'un appel, relu APRÈS le retour de l'enfant (PLAN-LOT7 § 3.1, Q5).
+ *
+ * La reconstruction faite avant le départ ne suffit pas : l'état a pu changer pendant la
+ * délégation. Pour un appel qui porte une unité et peut produire une transition, la
+ * lecture autoritaire (`observeLanes` → `vu.usable` → `vu.snapshot.read`) décide :
+ *
+ *   v2 présent et utilisable   → durable : l'écrivain relit et revalide sous R
+ *   v1 présent et utilisable   → mémoire et journal, compatibilité legacy
+ *   tout autre état            → refus nommé : ni transition calculée depuis RISKS,
+ *                                ni REVIEWED, ni décision partielle
+ *
+ * Sans unité ou sans transition possible, il n'y a rien d'autoritaire à écrire : mémoire.
+ */
+function regimeDesRisques(
+  unit: string | undefined,
+  transitionPossible: boolean,
+): "durable" | "memoire" | { refus: string } {
+  if (unit === undefined || !transitionPossible) return "memoire";
+  let vu: ReturnType<typeof observeLanes>;
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead: { ...lu, version: lu.version } });
+  } catch (err) {
+    return { refus: `lecture autoritaire impossible : ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!vu.usable) return { refus: `registre des lanes ${vu.state} : ${vu.reason}` };
+  const lu = vu.snapshot.read;
+  if (lu.present && lu.version === LANE_LEDGER_V2) return "durable";
+  if (lu.present && lu.version === LANE_LEDGER_VERSION) return "memoire";
+  return {
+    refus: `registre des lanes ${lu.present ? `en version ${String(lu.version)}` : "absent"} pour ${unit} : ` +
+      "aucun état des risques n'y est établi",
+  };
+}
+
+/** Le refus d'un appel dont l'état des risques est inconnu après le retour de l'enfant. */
+function refusEtatDesRisques(raison: string) {
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `[run: état des risques inconnu] ${raison}\n` +
+        "Rien n'est écrit ni retenu : ni risque, ni revue, ni intégration. Un état inconnu n'est " +
+        "jamais lu comme un registre legacy.",
+    }],
+    isError: true,
+  };
+}
+
+/** La mémoire après une écriture durable réussie : textes et observabilité, jamais en avance. */
+function retenirRisques(ledger: readonly RiskRecord[]): void {
+  const cle = (r: RiskRecord) => JSON.stringify([r.workUnitId ?? null, r.id]);
+  const nouveaux = new Set(ledger.map(cle));
+  RISKS = [...RISKS.filter((r) => !nouveaux.has(cle(r))), ...ledger.map((r) => ({ ...r }))];
+}
+
+/** Le refus d'une transition de risque non enregistrée (PLAN-LOT7 Q6). */
+function refusRisqueNonEnregistre(err: unknown) {
+  const vestige = err instanceof RiskNotRecordedError;
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `[run: risque non enregistré] ${err instanceof Error ? err.message : String(err)}\n` +
+        (vestige
+          ? "Une séquence de risques a commencé sans s'achever : le verrou du run est conservé, et " +
+            "les appels suivants rencontreront RUN_TRANSITION_LOCKED jusqu'à la réconciliation."
+          : "Rien n'a été écrit : ni risque, ni revue. Aucune suite n'est donnée à cet appel."),
+    }],
+    isError: true,
+  };
 }
 
 /**
@@ -2383,9 +2623,13 @@ export default function (pi: ExtensionAPI) {
         // Les rôles globaux et le régime libre gardent le garde global, ici. La désignation
         // se lit comme la file la lit (`unitesDeLAppel`) : `targetWorkUnit` est pur, rien
         // n'est résolu deux fois différemment.
-        const designe = params as unknown as { work_unit?: string; for_risks?: string[] };
+        //
+        // `for_risks` se résout une fois, sur la projection autoritaire (PLAN-LOT7 § 3.4) : la
+        // désignation, l'unité de l'appel et le texte de continuation lisent le même état.
+        const forRisks = params.for_risks ?? [];
+        const { cible: target, livre: livreDesRisques } = cibleDesRisques(params.work_unit, forRisks);
         const designation = isLaneBound(agent.envelopeRole ?? agent.name) && plan().status === "usable"
-          ? targetWorkUnit(designe.work_unit, designe.for_risks ?? [], RISKS).kind
+          ? target.kind
           : "none";
         const gardeDiffere = designation === "unit";
         const blocked =
@@ -2405,9 +2649,6 @@ export default function (pi: ExtensionAPI) {
         // started being recorded, an orchestrator marking `DESIGN.md` as
         // implemented between a worker and its review would have shadowed the
         // code entirely, handing the reviewer a diff of a status field.
-        const forRisks = params.for_risks ?? [];
-        const cont =
-          params.agent === "reviewer" ? continuationSection(forRisks, RISKS) : "";
 
         // L'orchestrateur choisit l'unité ; le runtime dérive tout le reste.
         // Il ne redonne ni cwd, ni branche, ni identifiant de lane. Un scout de
@@ -2443,7 +2684,6 @@ export default function (pi: ExtensionAPI) {
          * `params.work_unit` seul réintroduirait l'obligation de déclarer que
          * le lot 1 a construite pour la supprimer.
          */
-        const target = targetWorkUnit(params.work_unit, forRisks, RISKS);
         if (target.kind === "conflict") {
           return {
             content: [{ type: "text" as const, text: `Refused: lane provenance conflict — ${target.reason}` }],
@@ -2451,6 +2691,11 @@ export default function (pi: ExtensionAPI) {
           };
         }
         const unit = target.kind === "unit" ? target.workUnitId : undefined;
+        // Les textes des risques confiés, de CETTE unité : le même id sous une autre unité est
+        // un autre risque.
+        const cont = params.agent === "reviewer"
+          ? continuationSection(forRisks, livreDesRisques.filter((r) => r.workUnitId === unit))
+          : "";
 
         const policy = validateTaskCall({
           agent: params.agent,
@@ -3417,30 +3662,113 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
+        /*
+         * Les risques de cette délégation (C3.4, PLAN-LOT7 §§ 3.1–3.7).
+         *
+         * Registre v2 et unité connue : les transitions se calculent SOUS R, sur l'état relu
+         * sous R, s'écrivent avant le REVIEWED de la même enveloppe et sous la même
+         * acquisition ; la mémoire ne suit qu'après. Rien à transiter — ni `for_risks`, ni
+         * risque ouvert par l'enveloppe — : rien n'est pris. Registre v1, ou risque sans
+         * unité : mémoire et journal seulement, et rien n'en fait une autorisation.
+         */
         const events: LedgerEvent[] = [];
         const channel = riskChannel(params.agent);
-        if (channel === "continuation") {
-          for (const r of results) {
-            const back = r.failure
-              ? routeRisks(RISKS, forRisks, `call:${batch}`)
-              : continuationReturned(RISKS, forRisks, r.resolvedRisks ?? [], r.artifact);
-            RISKS = back.ledger;
-            events.push(...back.events);
+        const roleRisque = agent.envelopeRole ?? agent.name;
+        /*
+         * Les transitions de cette délégation, sur un grand livre donné.
+         *
+         * Les fonctions de `risk-ledger.ts` décident ; elles rendent le livre suivant, le
+         * journal best-effort, et ce que le registre autoritaire reçoit. `still-open` et
+         * `ignored` ne vont qu'au journal. Sans unité ou sans lane courante, rien n'est
+         * écrit. `by`/`to` : `<rôle>#<delegation_seq>`, provenance opaque (PLAN-LOT7 Q3).
+         */
+        const transiter = (livre: RiskRecord[], laneDuRisque: string | undefined) => {
+          let ledger = livre;
+          const journal: LedgerEvent[] = [];
+          const writes: RiskWrite[] = [];
+          const at = new Date().toISOString();
+          const durable = (evts: readonly LedgerEvent[], qui: string): void => {
+            if (unit === undefined || laneDuRisque === undefined) return;
+            const risque = (id: string, transition: RiskWrite["transition"], p: { by: string } | { to: string }): RiskWrite =>
+              ({ event: "RISK", work_unit: unit, at, lane: laneDuRisque, id, transition, ...p });
+            for (const e of evts) {
+              if (e.event === "opened") writes.push(risque(e.id, "opened", { by: qui }));
+              else if (e.event === "routed") writes.push(risque(e.id, "routed", { to: qui }));
+              else if (e.event === "resolved") writes.push(risque(e.id, "resolved", { by: qui }));
+            }
+          };
+          if (channel === "continuation") {
+            results.forEach((r, i) => {
+              const qui = `${roleRisque}#${seqs[i]}`;
+              const back = r.failure
+                ? routeRisks(ledger, forRisks, `call:${batch}`, unit)
+                : continuationReturned(ledger, forRisks, r.resolvedRisks ?? [], r.artifact, unit);
+              ledger = back.ledger;
+              journal.push(...back.events);
+              durable(back.events, qui);
 
-            // New concerns after old ones, so a follow-up review that closes one
-            // and raises another reads in that order in the journal.
-            const fresh = openRisks(RISKS, r.openRiskItems, r.artifact, unit);
-            RISKS = fresh.ledger;
-            events.push(...fresh.events);
+              // New concerns after old ones, so a follow-up review that closes one
+              // and raises another reads in that order in the journal and the ledger.
+              const fresh = openRisks(ledger, r.openRiskItems, r.artifact, unit);
+              ledger = fresh.ledger;
+              journal.push(...fresh.events);
+              durable(fresh.events, qui);
+            });
+          } else if (channel === "route") {
+            // Once per call, outside the loop over children. `routedTo` names the
+            // call and not a child, so a fan-out of three scouts carrying two
+            // risks is two transitions, not six — the same child-versus-call
+            // ambiguity the streak guard and the scout counter both had to lose.
+            const out = routeRisks(ledger, forRisks, `call:${batch}`, unit);
+            ledger = out.ledger;
+            journal.push(...out.events);
+            durable(out.events, `${roleRisque}#${Math.min(...seqs)}`);
           }
-        } else if (channel === "route" && forRisks.length > 0) {
-          // Once per call, outside the loop over children. `routedTo` names the
-          // call and not a child, so a fan-out of three scouts carrying two
-          // risks is two transitions, not six — the same child-versus-call
-          // ambiguity the streak guard and the scout counter both had to lose.
-          const out = routeRisks(RISKS, forRisks, `call:${batch}`);
-          RISKS = out.ledger;
-          events.push(...out.events);
+          return { ledger, events: journal, writes };
+        };
+        const peutTransiter = forRisks.length > 0 || results.some((r) => (r.openRiskItems?.length ?? 0) > 0);
+        const regime = regimeDesRisques(unit, channel !== "none" && peutTransiter);
+        if (typeof regime !== "string") return refusEtatDesRisques(regime.refus);
+        const risquesDurables = regime === "durable";
+        // La revue de lane dont le REVIEWED s'écrit ICI, derrière ses risques ; sinon à la porte.
+        let revueTraitee: { refus: string | undefined } | undefined;
+        if (risquesDurables && unit !== undefined) {
+          const uniteDuRisque = unit;
+          let calcul: ReturnType<typeof transiter> | undefined;
+          const produire: CalculDesRisques = (etat: EtatDesRisques) => {
+            const livre = grandLivre(etat.faits.values());
+            calcul = transiter(livre, lane?.laneId ?? etat.laneCourante(uniteDuRisque));
+            return calcul.writes;
+          };
+          const revueDeLane = lane && !attempt && params.agent === "reviewer" && !results[0]?.failure &&
+            snapshotDeRevue !== undefined && typeof results[0]?.verdict === "string" && results[0].verdict !== "";
+          try {
+            if (revueDeLane) {
+              revueTraitee = {
+                refus: enregistrerRevue(
+                  lane!,
+                  results[0],
+                  seqs[0],
+                  { agent: String(params.agent), role: roleRisque },
+                  { fromTree: snapshotDeRevue!.fromTree, tree: snapshotDeRevue!.tree, proof: pkg.proof },
+                  lease,
+                  produire,
+                ),
+              };
+            } else {
+              appendRiskEvents(RUN_DIR, uniteDuRisque, produire, lease);
+            }
+          } catch (err) {
+            return refusRisqueNonEnregistre(err);
+          }
+          if (calcul) {
+            retenirRisques(calcul.ledger);
+            events.push(...calcul.events);
+          }
+        } else {
+          const calcul = transiter(RISKS, undefined);
+          RISKS = calcul.ledger;
+          events.push(...calcul.events);
         }
         logLedger(RUN_ID, events);
 
@@ -3593,8 +3921,23 @@ export default function (pi: ExtensionAPI) {
                * La garde du chemin ordinaire ne sera jamais revisitée ici. On la rejoue
                * donc avant même de construire M, et a fortiori avant son atterrissage.
                */
+              /*
+               * La barrière des risques, avant toute construction de `M` (C3.4, PLAN-LOT7 Q10).
+               *
+               * Le reviewer de tentative a écrit ses transitions RISK plus haut, sans REVIEWED ;
+               * la projection autoritaire de l'unité est relue ici. Un risque ouvert ferme la
+               * tentative par la cause C3.7 `open-risks` ; un état inconnu la ferme sans liste.
+               * LOT 9 reste propriétaire de la transition d'intégration complète.
+               */
+              const barriere = barriereDesRisques(unit, results[0]);
               const statutFerme = refusDesignUpdate(unit);
-              if (statutFerme) {
+              if (barriere) {
+                if (barriere.ouverts) porteIntegration = { outcome: "blocked", policy_blockers: ["open-risks"] };
+                integration =
+                  `  NON INTÉGRABLE  ${unit} : ${barriere.raison}\n` +
+                  `    la tentative ${attempt.id} reste ouverte ; aucun commit d'intégration, ` +
+                  "aucun merge, aucun INTEGRATED.";
+              } else if (statutFerme) {
                 integration =
                   `  NON INTÉGRABLE  ${unit} : ${statutFerme}\n` +
                   `    la tentative ${attempt.id} reste ouverte ; aucun commit d'intégration, ` +
@@ -3687,7 +4030,9 @@ export default function (pi: ExtensionAPI) {
            * ou si l'écriture échoue, rien n'est enregistré et la porte se ferme : une
            * approbation qu'aucune relecture ne retrouverait n'autorise rien.
            */
-          const revueNonEnregistree = snapshotDeRevue === undefined
+          const revueNonEnregistree = revueTraitee !== undefined
+            ? revueTraitee.refus
+            : snapshotDeRevue === undefined
             ? "le paquet de revue n'a pas été observé ; aucune revue n'est enregistrée"
             : enregistrerRevue(
               lane,
@@ -3704,7 +4049,7 @@ export default function (pi: ExtensionAPI) {
            * décision (Q8) : chaîne des revues, violations historiques, base. La porte ne lit
            * aucun cache de l'appel.
            */
-          const etat = etatAutoritaire(lane.laneId);
+          const etat = etatAutoritaire(lane.laneId, lane.workUnitId);
           const fermeC2 = revueNonEnregistree ?? refusDeCouverture(lane, etat);
           /*
            * Les causes C3 (C3.1, C3.7), toutes calculées ici et seulement ici : la décision
@@ -3722,11 +4067,11 @@ export default function (pi: ExtensionAPI) {
            * la continuation repartirait d'une base contenant déjà le changement :
            * son diff serait vide pendant que la frontière de review croit encore
            * avoir quelque chose à poursuivre.
+           *
+           * Lu au registre autoritaire, sous `(R, work_unit, id)`, toutes générations
+           * confondues (C3.4, PLAN-LOT7 Q7) ; jamais dans la mémoire de la session.
            */
-          const pending = RISKS.filter(
-            (r) => r.workUnitId === lane.workUnitId && r.status !== "resolved",
-          );
-          if (pending.length > 0) blocks.push("open-risks");
+          if (etat.connu && etat.risques.length > 0) blocks.push("open-risks");
 
           /*
            * Le dépassement de scope est recalculé sur l'état final de la lane,
@@ -3990,7 +4335,7 @@ export default function (pi: ExtensionAPI) {
     const agent = agents.get(p.agent);
     if (!agent || !isLaneBound(agent.envelopeRole ?? agent.name)) return [];
     if (p.batch !== undefined) return p.batch.map((b) => b.work_unit?.trim() ?? "").filter(Boolean);
-    const cible = targetWorkUnit(p.work_unit, p.for_risks ?? [], RISKS);
+    const cible = cibleDesRisques(p.work_unit, p.for_risks ?? []).cible;
     return cible.kind === "unit" ? [cible.workUnitId] : [];
   }
 }
