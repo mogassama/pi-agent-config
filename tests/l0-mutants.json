@@ -8,14 +8,14 @@
   {
     "test": "L0 COUV C-P1-F04-m4a — une écriture réservée dans un lot bloque l'intégration",
     "file": "extensions/subagent/index.ts",
-    "find": "if (reservedTouched(result.changedFiles ?? []).length > 0) {",
-    "replace": "if (false) {"
+    "find": "enregistrerViolations(lane, seq, agent.name, lease, tlAvant);",
+    "replace": "void 0; // mutant m4a : le producteur du lot n'écrit rien"
   },
   {
     "test": "L0 COUV C-P1-F04-m4b — une écriture réservée par le chemin simple bloque l'intégration",
     "file": "extensions/subagent/index.ts",
-    "find": "if (reservedTouched(r.changedFiles ?? []).length > 0) {",
-    "replace": "if (false) {"
+    "find": "enregistrerViolations(lane, seqs[i], agent.name, lease, tlAvant);",
+    "replace": "void 0; // mutant m4b : le producteur du chemin simple n'écrit rien"
   },
   {
     "test": "L0 COUV C-P1-F04-m5 — un risque laissé ouvert bloque l'intégration",
@@ -63,13 +63,13 @@
     "test": "L0 PRES B2-scope-breach-etat — un rework qui répare le scope rend la lane intégrable",
     "file": "extensions/subagent/index.ts",
     "find": "          if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push(\"scope-breach\");",
-    "replace": "          // mutant B2-scope-breach-etat : le dépassement devient historique\n          if (scopeBreach(unitDef, finalFiles).length > 0) LANE_BLOCKS.set(lane.laneId, new Set([...(LANE_BLOCKS.get(lane.laneId) ?? []), \"scope-breach\"]));\n          if ((LANE_BLOCKS.get(lane.laneId) ?? new Set()).has(\"scope-breach\")) blocks.push(\"scope-breach\");"
+    "replace": "          // mutant B2-scope-breach-etat : le dépassement devient historique\n          const vus = ((globalThis as { __horsScope?: Set<string> }).__horsScope ??= new Set<string>());\n          if (scopeBreach(unitDef, finalFiles).length > 0) vus.add(lane.laneId);\n          if (vus.has(lane.laneId)) blocks.push(\"scope-breach\");"
   },
   {
     "test": "L0 PRES B2-journal-non-autoritaire — le journal des délégations ne décide dans aucun sens",
     "file": "extensions/subagent/index.ts",
-    "find": "          if (results[0]?.verdict !== \"approved\") blocks.push(\"not-approved\");",
-    "replace": "          if (results[0]?.verdict !== \"approved\") blocks.push(\"not-approved\");\n          // mutant B2-journal-non-autoritaire : le journal best-effort décide\n          try {\n            const journal = readFileSync(\n              join(process.cwd(), RUNS_DIR, `${RUN_ID}-delegations.jsonl`),\n              \"utf-8\",\n            );\n            if (journal.includes(\"DESIGN.md\")) blocks.push(\"reserved-violation\");\n          } catch {\n            /* journal absent : rien */\n          }"
+    "find": "          const causesC3 = [...new Set(blocks)].sort();",
+    "replace": "          // mutant B2-journal-non-autoritaire : le journal best-effort décide\n          try {\n            const journal = readFileSync(\n              join(process.cwd(), RUNS_DIR, `${RUN_ID}-delegations.jsonl`),\n              \"utf-8\",\n            );\n            if (journal.includes(\"DESIGN.md\")) blocks.push(\"reserved-violation\");\n          } catch {\n            /* journal absent : rien */\n          }\n          const causesC3 = [...new Set(blocks)].sort();"
   },
   {
     "test": "L0 PRES B3-racine-propre — une racine propre sans Statut à écrire reste intégrable",
@@ -577,5 +577,58 @@
     "file": "extensions/subagent/index.ts",
     "find": "  const delta = cheminsDuDelta;\n",
     "replace": "  const delta = cheminsDuDelta.filter((f) => frontiere.includes(f)); // mutant D3 : la frontière borne la preuve\n"
+  },
+  {
+    "test": "L0 REG B2-violation-reload — une violation constatée survit à une nouvelle session",
+    "file": "extensions/subagent/index.ts",
+    "find": "          observed_tree: tl,\n",
+    "replace": "          observed_tree: treeOfCommit(process.cwd(), \"HEAD\"), // mutant B2-violation-reload : le fait relu n'est pas celui observé\n"
+  },
+  {
+    "test": "L0 REG B2-violation-retablie — rétablir le fichier gelé ne lève pas la violation",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "          if (recalcul.reserved.length > 0 || histoire.some((v) => v.kind === \"reserved-violation\")) {",
+        "replace": "          if (recalcul.reserved.length > 0) { // mutant B2-violation-retablie : la restauration efface l'histoire"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "          if (recalcul.bundle.length > 0 || histoire.some((v) => v.kind === \"bundle-violation\")) {",
+        "replace": "          if (recalcul.bundle.length > 0) { // mutant B2-violation-retablie : la restauration efface l'histoire"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG B2-violation-bail — sous bail perdu rien ne s'écrit, et le nouveau propriétaire recalcule",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "                if (!stillOwns(lease)) return result;",
+        "replace": "                if (!stillOwns(lease)) { enregistrerViolations(lane, seq, agent.name, lease, tlAvant); return result; } // mutant B2-violation-bail"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  tlAvant: string,\n): void {\n  // Seule la perte de bail garde la règle « rien n'est écrit, le nouveau propriétaire\n  // recalcule » (C3.2). Tout le reste se regarde, ou s'arrête.\n  if (!stillOwns(lease)) return;",
+        "replace": "  tlAvant: string,\n): void {\n  // mutant B2-violation-bail : le producteur ne contrôle plus le bail"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  withRunGuard(dir, lease.runId, () => {\n    assertOwner(dir, lease, `enregistrer VIOLATION sur ${event.work_unit}`);",
+        "replace": "  withRunGuard(dir, lease.runId, () => {\n    // mutant B2-violation-bail : l'append VIOLATION ne contrôle plus le bail"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG C-P1-F04-m28 — après perte du bail, le nouveau propriétaire recalcule la violation réservée",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (recalcul.reserved.length > 0 || histoire.some((v) => v.kind === \"reserved-violation\")) {",
+    "replace": "          if (histoire.some((v) => v.kind === \"reserved-violation\")) { // mutant m28 : pas de recalcul R"
+  },
+  {
+    "test": "L0 REG B2-porte-blocages — la porte rend l'ensemble exact de ses causes de politique",
+    "file": "extensions/subagent/index.ts",
+    "find": "            porteIntegration = { outcome: \"blocked\", policy_blockers: causesC3 };",
+    "replace": "            porteIntegration = { outcome: \"blocked\", policy_blockers: causesC3.slice(1) }; // mutant : une cause vraie retirée"
   }
 ]

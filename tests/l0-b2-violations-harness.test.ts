@@ -26,6 +26,13 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+/**
+ * Une régression CORRIGÉE : même nom, même scénario, mêmes assertions, sans `todo`, et un
+ * mutant qui réintroduit le défaut.
+ */
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
 }
@@ -39,7 +46,7 @@ const NATURES = [
 
 // ================================================================== survivre à la session
 
-regression("B2-violation-reload", "une violation constatée survit à une nouvelle session", async () => {
+regressionCorrigee("B2-violation-reload", "une violation constatée survit à une nouvelle session", async () => {
   const manques: string[] = [];
   for (const nature of NATURES) {
     const h = await monter({ bundle: true });
@@ -54,18 +61,26 @@ regression("B2-violation-reload", "une violation constatée survit à une nouvel
 
       const lane = laneActive(h, "W03");
       const treeObserve = treeDeTravail(h, lane);
+      /*
+       * Avant le rechargement, une seule chose se constate : l'événement existe. Sa FORME
+       * se juge sur le fait RELU (B3) — c'est la survie à la session qui est la propriété
+       * ici, et une assertion antérieure au rechargement tuerait tout mutant du fait
+       * durable sans rien dire de sa relecture.
+       */
       const ecrit = h.evenements().find((e) => e.event === "VIOLATION" && e.work_unit === "W03");
-      const source = ecrit?.source as Record<string, unknown> | undefined;
-      const forme = [
-        ...enveloppeComplete(ecrit, "W03", lane),
-        ...(ecrit?.kind === nature.kind ? [] : [`kind ${JSON.stringify(ecrit?.kind)}`]),
-        ...(trieSansDoublon(ecrit?.paths) &&
-          JSON.stringify(ecrit?.paths) === JSON.stringify([nature.fichier])
-          ? [] : [`paths ${JSON.stringify(ecrit?.paths)}`]),
-        ...(Number.isInteger(source?.delegation_seq) ? [] : ["source.delegation_seq"]),
-        ...(source?.agent === "worker" ? [] : [`source.agent ${JSON.stringify(source?.agent)}`]),
-        ...(ecrit?.observed_tree === treeObserve ? [] : [`observed_tree ${JSON.stringify(ecrit?.observed_tree)}`]),
-      ];
+      const avantRechargement = ecrit === undefined ? ["aucun VIOLATION écrit"] : [];
+      const decrire = (e: Record<string, unknown> | undefined): string[] => {
+        const source = e?.source as Record<string, unknown> | undefined;
+        return [
+          ...enveloppeComplete(e, "W03", lane),
+          ...(e?.kind === nature.kind ? [] : [`kind ${JSON.stringify(e?.kind)}`]),
+          ...(trieSansDoublon(e?.paths) && JSON.stringify(e?.paths) === JSON.stringify([nature.fichier])
+            ? [] : [`paths ${JSON.stringify(e?.paths)}`]),
+          ...(Number.isInteger(source?.delegation_seq) ? [] : ["source.delegation_seq"]),
+          ...(source?.agent === "worker" ? [] : [`source.agent ${JSON.stringify(source?.agent)}`]),
+          ...(e?.observed_tree === treeObserve ? [] : [`observed_tree ${JSON.stringify(e?.observed_tree)}`]),
+        ];
+      };
 
       /*
        * Le journal a le droit de refléter la violation (T4 n'interdit que d'y fonder la
@@ -84,10 +99,12 @@ regression("B2-violation-reload", "une violation constatée survit à une nouvel
         !integree(neuve.root, nature.fichier, "touché par l'enfant") &&
         (blocages(resultat.value) ?? []).includes(nature.kind);
       const identique = JSON.stringify(relu) === JSON.stringify(ecrit);
+      const forme = decrire(relu);
 
-      if (forme.length > 0 || !refuse || !identique) {
+      if (avantRechargement.length > 0 || forme.length > 0 || !refuse || !identique) {
         manques.push(
-          `${nature.kind} : forme ${JSON.stringify(forme)}, refus après rechargement et ` +
+          `${nature.kind} : ${JSON.stringify(avantRechargement)} avant rechargement, forme relue ` +
+            `${JSON.stringify(forme)}, refus après rechargement et ` +
             `journal contradictoire ${refuse} (blocages ${JSON.stringify(blocages(resultat.value))}), ` +
             `événement identique après rechargement ${identique}`,
         );
@@ -96,13 +113,14 @@ regression("B2-violation-reload", "une violation constatée survit à une nouvel
   }
   propriete(
     manques.length === 0,
-    `chaque nature historique doit s'écrire en entier — enveloppe, kind, paths triés, source, ` +
-      `observed_tree — puis refuser après rechargement malgré un journal contradictoire ; ` +
+    `chaque nature historique doit se RELIRE en entier après rechargement — enveloppe, kind, ` +
+      `paths triés, source, observed_tree —, à l'identique de ce qui a été écrit, et refuser ` +
+      `malgré un journal contradictoire ; ` +
       `${manques.join(" · ")}`,
   );
 });
 
-regression("B2-violation-retablie", "rétablir le fichier gelé ne lève pas la violation", async () => {
+regressionCorrigee("B2-violation-retablie", "rétablir le fichier gelé ne lève pas la violation", async () => {
   const manques: string[] = [];
   for (const nature of NATURES) {
     const h = await monter({ bundle: true });
@@ -142,7 +160,7 @@ regression("B2-violation-retablie", "rétablir le fichier gelé ne lève pas la 
   );
 });
 
-regression("B2-violation-bail", "sous bail perdu rien ne s'écrit, et le nouveau propriétaire recalcule", async () => {
+regressionCorrigee("B2-violation-bail", "sous bail perdu rien ne s'écrit, et le nouveau propriétaire recalcule", async () => {
   const h = await monter({ bundle: true });
   try {
     /*

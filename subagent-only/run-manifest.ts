@@ -34,6 +34,7 @@ import {
 import { hostname } from "node:os";
 import {
   laneLedgerIncoherences, parseLaneEventV2, type LaneEvent, type LaneEventV1, type ProofMode,
+  type ViolationKind,
 } from "./lane-ledger.ts";
 import { verifierCompleted } from "./run-end.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
@@ -1212,6 +1213,22 @@ export type LaneWrite =
       verdict: string;
       reviewer: { delegation_seq: number; agent: string; role: string };
       proof: { mode: ProofMode; paths?: string[] };
+    }
+  /*
+   * Une violation historique observée (C3.1, § F). Même discipline que REVIEWED : la lane
+   * est un contrôle, l'enveloppe se déduit sous R, et l'écriture passe par
+   * `appendViolationEvent`, qui garde le verrou R si elle échoue (PLAN-LOT6 Q7).
+   */
+  | {
+      event: "VIOLATION";
+      event_seq?: never;
+      work_unit: string;
+      at: string;
+      lane: string;
+      kind: ViolationKind;
+      paths: string[];
+      source: { delegation_seq: number; agent: string };
+      observed_tree: string;
     };
 
 /**
@@ -1314,6 +1331,24 @@ function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<st
     throw new RecoveryError(`${quoi} : le registre n'a jamais ouvert de lane pour ${event.work_unit}`);
   }
   const enveloppe = { event_seq: seq, work_unit: event.work_unit, lane: ouverte.lane, at: event.at };
+  if (event.event === "VIOLATION") {
+    if (event.lane !== ouverte.lane) {
+      throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
+    }
+    if (lu.events.some((e) => e.event === "ABANDONED" && "lane" in e && e.lane === ouverte.lane)) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} est abandonnée, aucune violation ne s'y enregistre`);
+    }
+    const doc = {
+      ...enveloppe,
+      event: "VIOLATION",
+      kind: event.kind,
+      paths: [...event.paths],
+      source: { delegation_seq: event.source.delegation_seq, agent: event.source.agent },
+      observed_tree: event.observed_tree,
+    };
+    if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
+    return doc;
+  }
   if (event.event === "REVIEWED") {
     if (event.lane !== ouverte.lane) {
       throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
@@ -1387,6 +1422,43 @@ export function appendLaneEvent(dir: string, event: LaneWrite, lease: Lease): vo
   withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.work_unit}`);
     ajouterSousR(dir, event, lease);
+  });
+}
+
+/**
+ * Une violation observée sous bail valide, et que le registre n'a pas pu recevoir.
+ *
+ * Ce n'est pas une panne ordinaire : le fait historique existe, il n'est écrit nulle part,
+ * et une restauration du fichier l'effacerait du seul recalcul qui resterait. Le verrou R
+ * de l'append est donc CONSERVÉ comme vestige de transition inachevée (PLAN-LOT6 Q7) :
+ * l'appel suivant, même d'un autre propriétaire et même après restauration, rencontre
+ * C1.10 et son refus `RUN_TRANSITION_LOCKED`, jusqu'à une réconciliation opérateur.
+ */
+export class ViolationNotRecordedError extends RecoveryError {}
+
+/**
+ * Enregistre une VIOLATION (C3.1, C3.2).
+ *
+ * Bail perdu : `assertOwner` refuse, le verrou est libéré, rien n'est écrit — le nouveau
+ * propriétaire recalculera. Bail tenu et écriture en échec : le verrou reste, et l'erreur
+ * le dit (`ViolationNotRecordedError`).
+ */
+export function appendViolationEvent(
+  dir: string,
+  event: Extract<LaneWrite, { event: "VIOLATION" }>,
+  lease: Lease,
+): void {
+  withRunGuard(dir, lease.runId, () => {
+    assertOwner(dir, lease, `enregistrer VIOLATION sur ${event.work_unit}`);
+    try {
+      ajouterSousR(dir, event, lease);
+    } catch (err) {
+      throw new ViolationNotRecordedError(
+        `VIOLATION ${event.kind} sur ${event.lane} observée sous bail valide et non enregistrée : ` +
+          `${messageOf(err)}. Le verrou ${guardPath(dir, lease.runId)} est conservé comme vestige ; ` +
+          "réconcilier le registre, le tree et la cause avant de le lever.",
+      );
+    }
   });
 }
 
@@ -1479,10 +1551,10 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
       `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
     );
   }
-  if (event.event === "REVIEWED") {
+  if (event.event === "REVIEWED" || event.event === "VIOLATION") {
     throw new RecoveryError(
-      `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : sa grammaire ne porte aucune ` +
-        "revue durable ; REVIEWED n'existe qu'en v2",
+      `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : sa grammaire ne porte ni ` +
+        `revue ni violation durable ; ${event.event} n'existe qu'en v2`,
     );
   }
   if (event.event === "OPENED") {
@@ -2014,12 +2086,17 @@ function messageOf(err: unknown): string {
  */
 function sousGuardAcquis<T>(path: string, label: string, fn: () => T): T {
   let sortieNormale = false;
+  // Le seul échec qui garde le verrou : une violation constatée et non écrite (Q7).
+  let vestige = false;
   try {
     const resultat = fn();
     sortieNormale = true;
     return resultat;
+  } catch (err) {
+    vestige = err instanceof ViolationNotRecordedError;
+    throw err;
   } finally {
-    try {
+    if (!vestige) try {
       rmSync(path, { recursive: true, force: true });
     } catch (err) {
       if (sortieNormale) {

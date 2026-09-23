@@ -259,7 +259,7 @@ preservation("B2-paquet-complet", "la revue reçoit tout le delta, même ce qu'u
 
 // ================================================================== la porte, C3.7
 
-regression("B2-porte-blocages", "la porte rend l'ensemble exact de ses causes de politique", async () => {
+regressionCorrigee("B2-porte-blocages", "la porte rend l'ensemble exact de ses causes de politique", async () => {
   const h = await monter({ bundle: true });
   try {
     /*

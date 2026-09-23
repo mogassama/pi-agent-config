@@ -401,7 +401,7 @@ regressionCorrigee("C-P1-F05b", "une lane dont HEAD n'est plus sa base, sans FRO
 
 // ================================================================== C3 — violations
 
-regression("C-P1-F04-m28", "après perte du bail, le nouveau propriétaire recalcule la violation réservée", async () => {
+regressionCorrigee("C-P1-F04-m28", "après perte du bail, le nouveau propriétaire recalcule la violation réservée", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = (a) => {
@@ -463,30 +463,63 @@ couverture("C-P1-F04-m3", "un fichier hors scope bloque l'intégration", async (
 });
 
 couverture("C-P1-F04-m4a", "une écriture réservée dans un lot bloque l'intégration", async () => {
-  const h = await monter();
-  try {
-    PILOTE.pendant = ecrire("DESIGN.md", "design\n");
-    await h.outil.execute("1", { agent: "worker", batch: [{ work_unit: "W03", task: "écrire pour W03" }] });
-    PILOTE.pendant = undefined;
-    await h.outil.execute("2", revue("W03"));
-    PILOTE.resultat = undefined;
-    precondition(compter("reviewer") === 1, "la revue doit être partie");
-    propriete(!existsSync(join(h.root, "DESIGN.md")), "DESIGN.md ne doit pas atteindre la racine");
-  } finally { h.fin(); }
+  await ecritureReserveeRetablie("lot");
 });
 
 couverture("C-P1-F04-m4b", "une écriture réservée par le chemin simple bloque l'intégration", async () => {
+  await ecritureReserveeRetablie("simple");
+});
+
+/*
+ * m4a / m4b (PLAN-LOT6 Q9) : l'écriture réservée est rétablie DANS LA MÊME SESSION avant
+ * la porte. Le recalcul sur l'état final est alors vide ; seul l'événement VIOLATION
+ * écrit par le producteur de ce chemin peut encore fermer la porte. La revue doit être
+ * recevable — un diff réel, approuvé — sans quoi le refus ne prouverait rien du producteur.
+ */
+async function ecritureReserveeRetablie(chemin: "lot" | "simple"): Promise<void> {
   const h = await monter();
+  const deleguer = (id: string) => chemin === "lot"
+    ? h.outil.execute(id, { agent: "worker", batch: [{ work_unit: "W03", task: "écrire pour W03" }] })
+    : h.outil.execute(id, tache("W03"));
   try {
-    PILOTE.pendant = ecrire("DESIGN.md", "design\n");
-    await h.outil.execute("1", tache("W03"));
-    PILOTE.pendant = undefined;
-    await h.outil.execute("2", revue("W03"));
+    const cheminLane = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    PILOTE.pendant = (a) => {
+      if (!a.cwd) return;
+      writeFileSync(join(a.cwd, "DESIGN.md"), "design\n");
+      writeFileSync(join(a.cwd, "src", "a.py"), "a = 2\n");
+    };
+    try {
+      await deleguer("1");
+    } finally {
+      PILOTE.pendant = undefined;
+    }
+    precondition(existsSync(join(cheminLane, "DESIGN.md")), "l'écriture réservée doit avoir eu lieu dans la lane");
+    // Le rework rétablit le fichier réservé : l'état final ne le porte plus.
+    PILOTE.pendant = (a) => {
+      if (a.cwd) rmSync(join(a.cwd, "DESIGN.md"), { force: true });
+    };
+    try {
+      await deleguer("2");
+    } finally {
+      PILOTE.pendant = undefined;
+    }
+    precondition(!existsSync(join(cheminLane, "DESIGN.md")), "le rework doit avoir rétabli DESIGN.md");
+    await h.outil.execute("3", revue("W03"));
     PILOTE.resultat = undefined;
     precondition(compter("reviewer") === 1, "la revue doit être partie");
-    propriete(!existsSync(join(h.root, "DESIGN.md")), "DESIGN.md ne doit pas atteindre la racine");
+    const paquet = APPELS.filter((a) => a.agent === "reviewer").at(-1)?.task ?? "";
+    const revues = evenements(h).filter((e) => e.event === "REVIEWED") as Array<Evenement & { proof?: { mode?: string }; verdict?: string }>;
+    precondition(
+      paquet.includes("diff --git a/src/a.py b/src/a.py") && revues.at(-1)?.proof?.mode === "diff" &&
+        revues.at(-1)?.verdict === "approved",
+      "la revue doit être recevable : un diff réel, approuvé",
+    );
+    propriete(
+      lire(h.root, "src/a.py") === "a = 1" && lanes(h.root).includes(`${h.runId}-W03-g1`),
+      `une écriture réservée, même rétablie, ferme la porte (chemin ${chemin}) : la lane ne doit pas être intégrée`,
+    );
   } finally { h.fin(); }
-});
+}
 
 couverture("C-P1-F04-m5", "un risque laissé ouvert bloque l'intégration", async () => {
   const h = await monter();

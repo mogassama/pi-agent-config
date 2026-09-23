@@ -42,6 +42,9 @@ import {
   type LedgerRead,
   appendIntegrationEvent,
   appendLaneEvent,
+  appendViolationEvent,
+  NotOwnerError,
+  ViolationNotRecordedError,
   readManifest,
   readLaneEvents,
   allocateSeq,
@@ -95,11 +98,11 @@ import {
 } from "../../subagent-only/run-report.js";
 import {
   confirmIntegrations, ensureLane, integrateLane, isMerged, laneChanges, laneTip,
-  mergeMessage, openLanes, runBranches, type MergeBlock,
+  mergeMessage, openLanes, runBranches,
 } from "../../subagent-only/worktree.js";
 import {
   describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict,
-  type LaneEvent, type ProofMode, type ReviewFact,
+  type LaneEvent, type ProofMode, type ReviewFact, type ViolationFact, type ViolationKind,
 } from "../../subagent-only/lane-ledger.js";
 import {
   deltaBetweenTrees, pathIdenticalBetweenTrees, pathsBetweenTrees, treeOfCommit, workingTree,
@@ -125,6 +128,7 @@ import {
 } from "../../subagent-only/work-units.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
+import { BUNDLE_FILES, bundleRoot } from "../../subagent-only/role-rules.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -414,16 +418,6 @@ function vueDeRevue(unit: string): Delegation[] {
     (d.laneId === undefined && d.readOnly && d.agent !== "orchestrator"));
 }
 
-/**
- * Ce qui empêche une lane d'être intégrée, et que l'orchestrateur ne peut pas
- * oublier de signaler.
- *
- * Accumulé par le runtime au fil des délégations. Une violation ou un
- * dépassement constaté une fois ne s'efface pas parce qu'une review ultérieure
- * approuve : ce n'est pas le reviewer qui juge si une hypothèse de concurrence
- * tient encore.
- */
-const LANE_BLOCKS = new Map<string, Set<MergeBlock>>();
 
 /**
  * Le cache mémoire de l'état reconstruit, par unité.
@@ -585,11 +579,6 @@ function retryLanding(unit: string, etat: AttemptState, lease: Lease): LandingRe
   };
 }
 
-function blockLane(laneId: string, block: MergeBlock): void {
-  const set = LANE_BLOCKS.get(laneId) ?? new Set<MergeBlock>();
-  set.add(block);
-  LANE_BLOCKS.set(laneId, set);
-}
 
 /**
  * Every risk a review left open in this session, and what became of it.
@@ -1036,7 +1025,7 @@ function enregistrerRevue(
  * une chaîne rompue ou une observation git en échec rendent la lane inconnue.
  */
 type EtatDeLane =
-  | { connu: true; baseTree: string; reviews: ReviewFact[] }
+  | { connu: true; baseTree: string; reviews: ReviewFact[]; violations: ViolationFact[] }
   | { connu: false; raison: string };
 
 function etatAutoritaire(laneId: string): EtatDeLane {
@@ -1054,6 +1043,7 @@ function etatAutoritaire(laneId: string): EtatDeLane {
       connu: true,
       baseTree: treeOfCommit(process.cwd(), base),
       reviews: vu.snapshot.projections.reviews.get(laneId) ?? [],
+      violations: vu.snapshot.projections.violations.filter((v) => v.lane === laneId),
     };
   } catch (err) {
     return { connu: false, raison: err instanceof Error ? err.message : String(err) };
@@ -1069,8 +1059,7 @@ function etatAutoritaire(laneId: string): EtatDeLane {
  * couvrir ; un maillon `none` qui change le tree laisse ce changement non couvert, et
  * aucune revue ultérieure sans preuve ne le couvre.
  */
-function refusDeCouverture(lane: LaneContext): string | undefined {
-  const etat = etatAutoritaire(lane.laneId);
+function refusDeCouverture(lane: LaneContext, etat: EtatDeLane): string | undefined {
   if (!etat.connu) return `état de la lane inconnu : ${etat.raison}`;
   let tl: string;
   try {
@@ -1095,6 +1084,144 @@ function refusDeCouverture(lane: LaneContext): string | undefined {
       `${nue.from_tree.slice(0, 12)} → ${nue.tree.slice(0, 12)}, et aucune revue ne le couvre (C2.3)`;
   }
   return undefined;
+}
+
+/**
+ * R et B (C3.6, PLAN-LOT6 Q6) : deux ensembles, deux étiquettes, aucune intersection.
+ *
+ * R = les chemins réservés du plan ; B = les fichiers du bundle gelé moins R, et vide hors
+ * régime bundle. `DESIGN.md` appartient aux deux listes sources : il reçoit une seule
+ * nature, `reserved-violation`. `RESERVED_WRITE_PATHS` n'est pas étendu.
+ */
+function naturesViolees(paths: readonly string[]): { reserved: string[]; bundle: string[] } {
+  const reserved = trierChemins(reservedTouched(paths));
+  const bundle = bundleRoot(process.cwd()) === null
+    ? []
+    : trierChemins(paths.filter((p) => BUNDLE_FILES.includes(p) && !reserved.includes(p)));
+  return { reserved, bundle };
+}
+
+/**
+ * La violation historique, rendue durable après une délégation writer (C3.1, C3.2, Q7).
+ *
+ * Observée par git sur la lane — jamais sur `changedFiles`, ni sur le journal — et écrite
+ * sous le bail, au plus une par nature. Une observation qui échoue — T_L, delta ou lecture
+ * autoritaire du registre — lève `ObservationViolationInconnueError` : l'appel s'arrête sur
+ * un refus nommé. Un bail perdu n'écrit rien : le nouveau propriétaire recalcule. Une écriture en échec sous bail valide lève
+ * `ViolationNotRecordedError` et garde le verrou R : l'appelant ne revient pas au flot.
+ * Une violation déjà enregistrée à l'identique pour cette lane n'est pas répétée.
+ */
+function enregistrerViolations(
+  lane: LaneContext,
+  seq: number,
+  agentName: string,
+  lease: Lease,
+  tlAvant: string,
+): void {
+  // Seule la perte de bail garde la règle « rien n'est écrit, le nouveau propriétaire
+  // recalcule » (C3.2). Tout le reste se regarde, ou s'arrête.
+  if (!stillOwns(lease)) return;
+  let observe: { reserved: string[]; bundle: string[] };
+  let tl: string;
+  let deja: ViolationFact[];
+  try {
+    // Ce que CETTE délégation a changé, lu entre deux trees : un chemin interdit écrit par
+    // une autre — sous un bail perdu, par exemple — n'est pas mis à son compte ; le
+    // recalcul de la porte le verra (C3.1, C3.2).
+    tl = workingTree(lane.cwd);
+    observe = naturesViolees(pathsBetweenTrees(process.cwd(), tlAvant, tl));
+    // La lecture autoritaire, jugée comme à la porte : un registre présent mais
+    // inexploitable (ligne illisible, version inconnue) n'est jamais projeté en partie.
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    const laneRead = { ...lu, version: lu.version };
+    const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead });
+    if (!vu.usable) {
+      throw new Error(`registre des lanes inexploitable : ${vu.reason}`);
+    }
+    deja = vu.snapshot.projections.violations
+      .filter((v) => v.lane === lane.laneId);
+  } catch (err) {
+    throw new ObservationViolationInconnueError(
+      `observation de violation inconnue après la délégation ${seq} sur ${lane.laneId} — ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (observe.reserved.length === 0 && observe.bundle.length === 0) return;
+  const natures: Array<[ViolationKind, string[]]> = [
+    ["reserved-violation", observe.reserved],
+    ["bundle-violation", observe.bundle],
+  ];
+  for (const [kind, paths] of natures) {
+    if (paths.length === 0) continue;
+    if (deja.some((v) => v.kind === kind && JSON.stringify(v.paths) === JSON.stringify(paths))) continue;
+    try {
+      appendViolationEvent(
+        RUN_DIR,
+        {
+          event: "VIOLATION",
+          work_unit: lane.workUnitId,
+          at: new Date().toISOString(),
+          lane: lane.laneId,
+          kind,
+          paths,
+          source: { delegation_seq: seq, agent: agentName },
+          observed_tree: tl,
+        },
+        lease,
+      );
+    } catch (err) {
+      if (err instanceof NotOwnerError) return;
+      throw err;
+    }
+  }
+}
+
+/**
+ * Une observation du producteur de violations qui n'a pas pu être faite (B2, C3.3).
+ *
+ * Ni un constat d'absence, ni une raison d'écrire : ce qu'on n'a pas su regarder ferme
+ * l'appel. Avant la délégation, aucun enfant ne part ; après, rien ne continue — ni
+ * journal, ni risque, ni revue, ni intégration.
+ */
+class ObservationViolationInconnueError extends Error {}
+
+/** T_L avant une délégation writer. Inobservable : l'appel s'arrête, l'enfant ne part pas. */
+function arbreAvant(cwd: string): string {
+  try {
+    return workingTree(cwd);
+  } catch (err) {
+    throw new ObservationViolationInconnueError(
+      `observation de violation inconnue : le T_L de ${cwd} est inobservable avant la ` +
+        `délégation — ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** Le refus d'une observation de violation impossible. */
+function refusObservationInconnue(err: ObservationViolationInconnueError) {
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `[run: observation de violation inconnue] ${err.message}\n` +
+        "Rien n'est journalisé, revu ni intégré : une observation impossible n'est pas un constat " +
+        "d'absence de violation.",
+    }],
+    isError: true,
+  };
+}
+
+/** Le refus d'une violation constatée et non écrite : aucun retour au flot de `task`. */
+function refusViolationNonEnregistree(err: ViolationNotRecordedError) {
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `[run: violation non enregistrée] ${err.message}\n` +
+        "Aucune suite n'est donnée à cet appel : la violation existe et le registre ne la porte pas.",
+    }],
+    isError: true,
+  };
 }
 
 function reconstruire(): void {
@@ -2988,6 +3115,7 @@ export default function (pi: ExtensionAPI) {
                 const ouverture = lanesDuLot.get(workUnit.id);
                 if (!ouverture) throw new Error(`${workUnit.id} n'a pas de lane allouée pour ce lot`);
                 const lane = ouverture.lane;
+                const tlAvant = arbreAvant(lane.cwd);
                 const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
                   ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd },
                   seq,
@@ -3012,9 +3140,8 @@ export default function (pi: ExtensionAPI) {
                   changedFiles: result.changedFiles ?? [],
                   readOnly: isReadOnly(agent.tools),
                 });
-                if (reservedTouched(result.changedFiles ?? []).length > 0) {
-                  blockLane(lane.laneId, "reserved-violation");
-                }
+                // La violation, observée et durable avant toute porte (C3.1, Q7).
+                enregistrerViolations(lane, seq, agent.name, lease, tlAvant);
                 rows.push({
                   seq,
                   batch: batchId,
@@ -3047,6 +3174,16 @@ export default function (pi: ExtensionAPI) {
               };
             }
             throw err;
+          }
+          // Une violation constatée et non écrite arrête l'appel entier (Q7) : le verrou R est
+          // resté en place, et rien ne doit continuer comme si le registre la portait.
+          const nonEnregistree = outcomes.find((o) => o.error instanceof ViolationNotRecordedError);
+          if (nonEnregistree) {
+            return refusViolationNonEnregistree(nonEnregistree.error as ViolationNotRecordedError);
+          }
+          const inobservable = outcomes.find((o) => o.error instanceof ObservationViolationInconnueError);
+          if (inobservable) {
+            return refusObservationInconnue(inobservable.error as ObservationViolationInconnueError);
           }
           // `rows` s'accumule dans l'ordre des fins ; `seq` est l'ordre des
           // démarrages. Laisser le journal physique contredire son propre ordre
@@ -3155,6 +3292,17 @@ export default function (pi: ExtensionAPI) {
         // given. Reading it back off the artefact path would work and would tie
         // the journal to a filename format.
 
+        // Le T_L d'avant la délégation writer : ce qu'elle aura changé se lira contre lui.
+        // Inobservable : l'appel s'arrête ici, aucun enfant ne part (B2).
+        let tlAvant: string | undefined;
+        if (lane && !attempt && !isReadOnly(agent.tools)) {
+          try {
+            tlAvant = arbreAvant(lane.cwd);
+          } catch (err) {
+            if (err instanceof ObservationViolationInconnueError) return refusObservationInconnue(err);
+            throw err;
+          }
+        }
         let results: RunResult[];
         try {
           const settled = await Promise.allSettled(
@@ -3255,13 +3403,17 @@ export default function (pi: ExtensionAPI) {
          * avec une erreur de code — mais il ferme la porte du merge jusqu'à ce
          * qu'il soit traité.
          */
-        if (lane) {
-          for (const r of results) {
-            // Une violation de chemin réservé est un événement : la lane n'a
-            // jamais eu le droit d'écrire là, et aucune reprise ne l'annule.
-            if (reservedTouched(r.changedFiles ?? []).length > 0) {
-              blockLane(lane.laneId, "reserved-violation");
+        if (lane && !attempt && tlAvant !== undefined) {
+          // Une violation de chemin réservé ou du bundle est un événement : la lane n'a
+          // jamais eu le droit d'écrire là, et aucune reprise ne l'annule (C3.1, Q7).
+          try {
+            for (let i = 0; i < results.length; i++) {
+              enregistrerViolations(lane, seqs[i], agent.name, lease, tlAvant);
             }
+          } catch (err) {
+            if (err instanceof ViolationNotRecordedError) return refusViolationNonEnregistree(err);
+            if (err instanceof ObservationViolationInconnueError) return refusObservationInconnue(err);
+            throw err;
           }
         }
 
@@ -3344,6 +3496,7 @@ export default function (pi: ExtensionAPI) {
          * reprendra, et l'effacer sur une review perdrait le travail.
          */
         let integration = "";
+        let porteIntegration: { outcome: "blocked"; policy_blockers: string[] } | undefined;
 
         /*
          * Le cycle d'une tentative d'intégration, décidé par le runtime.
@@ -3493,7 +3646,6 @@ export default function (pi: ExtensionAPI) {
                   if (atterri.ok) {
                     noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "integrated" }, lease);
                     ATTEMPTS.delete(unit);
-                    LANE_BLOCKS.delete(lane?.laneId ?? "");
                     INTEGRATED.add(unit);
                     OPEN_UNITS.delete(unit);
                     integration = `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`;
@@ -3535,7 +3687,7 @@ export default function (pi: ExtensionAPI) {
            * ou si l'écriture échoue, rien n'est enregistré et la porte se ferme : une
            * approbation qu'aucune relecture ne retrouverait n'autorise rien.
            */
-          const fermeC2 = (snapshotDeRevue === undefined
+          const revueNonEnregistree = snapshotDeRevue === undefined
             ? "le paquet de revue n'a pas été observé ; aucune revue n'est enregistrée"
             : enregistrerRevue(
               lane,
@@ -3546,10 +3698,21 @@ export default function (pi: ExtensionAPI) {
               { agent: params.agent, role: agent.envelopeRole ?? agent.name },
               { fromTree: snapshotDeRevue.fromTree, tree: snapshotDeRevue.tree, proof: pkg.proof },
               lease,
-            )) ??
-            refusDeCouverture(lane);
-          const blocks = [...(LANE_BLOCKS.get(lane.laneId) ?? [])];
-          if (results[0]?.verdict !== "approved") blocks.push("not-approved");
+            );
+          /*
+           * L'état autoritaire de la lane, relu APRÈS l'écriture de la revue et avant toute
+           * décision (Q8) : chaîne des revues, violations historiques, base. La porte ne lit
+           * aucun cache de l'appel.
+           */
+          const etat = etatAutoritaire(lane.laneId);
+          const fermeC2 = revueNonEnregistree ?? refusDeCouverture(lane, etat);
+          /*
+           * Les causes C3 (C3.1, C3.7), toutes calculées ici et seulement ici : la décision
+           * et la sortie structurée dérivent du même ensemble. `inconnu` dit qu'on n'a pas pu
+           * les établir : la porte se ferme alors sans présenter une liste partielle.
+           */
+          const blocks: string[] = [];
+          let inconnu: string | undefined = etat.connu ? undefined : etat.raison;
 
           /*
            * Une review approuvée qui laisse un risque ouvert n'est pas terminée.
@@ -3576,8 +3739,30 @@ export default function (pi: ExtensionAPI) {
            * lane contient, pas ce qu'elle a traversé.
            */
           const unitDef = plan().units.find((u) => u.id === lane.workUnitId);
-          const finalFiles = laneChanges(process.cwd(), lane.laneId);
+          let finalFiles: string[] = [];
+          try {
+            finalFiles = laneChanges(process.cwd(), lane.laneId);
+          } catch (err) {
+            inconnu ??= `observation de la lane impossible : ${err instanceof Error ? err.message : String(err)}`;
+          }
           if (scopeBreach(unitDef, finalFiles).length > 0) blocks.push("scope-breach");
+          /*
+           * Les violations historiques (C3.1) : vraies si le recalcul sur l'état final
+           * contre la base est non vide, OU si un VIOLATION existe pour la lane. Ni une
+           * restauration, ni une revue ne les lèvent ; seul l'abandon de la lane (C3.5).
+           */
+          const recalcul = naturesViolees(finalFiles);
+          const histoire = etat.connu ? etat.violations : [];
+          if (recalcul.reserved.length > 0 || histoire.some((v) => v.kind === "reserved-violation")) {
+            blocks.push("reserved-violation");
+          }
+          if (recalcul.bundle.length > 0 || histoire.some((v) => v.kind === "bundle-violation")) {
+            blocks.push("bundle-violation");
+          }
+          const causesC3 = [...new Set(blocks)].sort();
+          if (!inconnu && causesC3.length > 0) {
+            porteIntegration = { outcome: "blocked", policy_blockers: causesC3 };
+          }
           /*
            * L'ordre — merge, puis preuve, puis nettoyage — est tenu par
            * `integrateLane`, pas par la disposition des lignes ci-dessous.
@@ -3590,14 +3775,17 @@ export default function (pi: ExtensionAPI) {
            * il ne touche ni la lane ni la racine, et un rework ne le lève pas — seul le
            * plan le peut.
            */
-          const statutFerme = blocks.length === 0 && !fermeC2 ? refusDesignUpdate(lane.workUnitId) : undefined;
-          const ferme = blocks.length === 0 ? fermeC2 ?? statutFerme : undefined;
-          const merged: ReturnType<typeof integrateLane> = ferme
-            ? { ok: false, conflicts: [], reason: ferme }
+          const fermeInconnu = inconnu ? `état de la lane inconnu : ${inconnu}` : undefined;
+          const statutFerme = causesC3.length === 0 && !fermeC2 && !fermeInconnu
+            ? refusDesignUpdate(lane.workUnitId)
+            : undefined;
+          const ferme = fermeInconnu ?? (causesC3.length === 0 ? fermeC2 ?? statutFerme : undefined);
+          const merged: ReturnType<typeof integrateLane> = ferme || causesC3.length > 0
+            ? { ok: false, conflicts: [], reason: ferme ?? causesC3.join(", ") }
             : integrateLane(
             process.cwd(),
             lane.laneId,
-            blocks,
+            [],
             mergeMessage(lane.workUnitId),
             (commit) =>
               appendLaneEvent(
@@ -3612,14 +3800,13 @@ export default function (pi: ExtensionAPI) {
               ),
           );
           if (merged.ok) {
-            LANE_BLOCKS.delete(lane.laneId);
             INTEGRATED.add(lane.workUnitId);
             OPEN_UNITS.delete(lane.workUnitId);
             integration = `  intégrée : ${lane.workUnitId}`;
           } else if (ferme) {
             integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${ferme}`;
-          } else if (blocks.length > 0) {
-            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${blocks.join(", ")}` +
+          } else if (causesC3.length > 0) {
+            integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${causesC3.join(", ")}` +
               (fermeC2 ? ` ; ${fermeC2}` : "");
           } else if (merged.conflicts.length > 0) {
             /*
@@ -3779,7 +3966,8 @@ export default function (pi: ExtensionAPI) {
 
         return {
           content: [{ type: "text" as const, text: body }],
-          details,
+          // C3.7 : les causes de politique, structurées, seulement quand la porte les a établies.
+          details: porteIntegration ? { ...details, integration_gate: porteIntegration } : details,
           isError: details.status === "failed",
         };
         }
