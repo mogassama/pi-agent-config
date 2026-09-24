@@ -1230,7 +1230,28 @@ export type LaneWrite =
       source: { delegation_seq: number; agent: string };
       observed_tree: string;
     }
-  | RiskWrite;
+  | RiskWrite
+  | FrozenWrite;
+
+/**
+ * Le gel durable d'une lane (C2.4, § F, PLAN-LOT8 Q5).
+ *
+ * Même discipline que REVIEWED : la lane est un contrôle, l'enveloppe se déduit sous R. Les
+ * faits git — le commit existe, ses vrais parent et tree — sont établis par le runtime avant
+ * l'appel ; l'écrivain vérifie sous R ce que le registre sait : la dernière approbation, son
+ * tree, la base ouverte, et qu'aucun gel vivant ne précède celui-ci.
+ */
+export type FrozenWrite = {
+  event: "FROZEN";
+  event_seq?: never;
+  work_unit: string;
+  at: string;
+  lane: string;
+  commit: string;
+  parent: string;
+  tree: string;
+  reviewed_event_seq: number;
+};
 
 /**
  * Une transition de risque (C3.4, § F). Même discipline que REVIEWED et VIOLATION : la lane
@@ -1326,7 +1347,12 @@ function creerRegistreV2(dir: string, lease: Lease, path: string): void {
  * peut pas fournir — une lane pour une unité qui n'en a pas d'ouverte, un commit
  * d'intégration absent — ne se complète pas : il se refuse.
  */
-function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<string, unknown> {
+function evenementV2(
+  lu: LedgerRead,
+  event: LaneWrite,
+  runId: string,
+  integrations?: readonly IntegrationEvent[],
+): Record<string, unknown> {
   const seq = lu.events.reduce((m, e) => ("event_seq" in e ? Math.max(m, e.event_seq) : m), 0) + 1;
   const quoi = `${event.event} sur ${event.work_unit}`;
   if (event.event === "OPENED") {
@@ -1434,6 +1460,102 @@ function evenementV2(lu: LedgerRead, event: LaneWrite, runId: string): Record<st
     };
     // La forme d'une ligne se juge par le lecteur lui-même : l'écrivain n'écrit rien
     // qu'une relecture compterait abîmée.
+    if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
+    return doc;
+  }
+  if (event.event === "FROZEN") {
+    if (event.lane !== ouverte.lane) {
+      throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
+    }
+    if (lu.events.some((e) => e.event === "ABANDONED" && "lane" in e && e.lane === ouverte.lane)) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} est abandonnée, aucun gel ne s'y enregistre`);
+    }
+    let base: string | undefined;
+    let derniere: { event_seq: number; verdict: string; tree: string } | undefined;
+    const gels: Array<{ event_seq: number; commit: string; reviewed_event_seq: number }> = [];
+    let integree = false;
+    for (const e of lu.events) {
+      if (!("lane" in e) || e.lane !== ouverte.lane) continue;
+      if (e.event === "OPENED") base = e.base;
+      else if (e.event === "REVIEWED") derniere = { event_seq: e.event_seq, verdict: e.verdict, tree: e.tree };
+      else if (e.event === "FROZEN") {
+        gels.push({ event_seq: e.event_seq, commit: e.commit, reviewed_event_seq: e.reviewed_event_seq });
+      } else if (e.event === "INTEGRATED") integree = true;
+    }
+    // Le gel se fonde sur la DERNIÈRE revue de la lane, et elle doit approuver : un gel
+    // appuyé sur une approbation qu'une revue plus récente a remplacée gèlerait un arbre
+    // que plus rien n'autorise.
+    if (derniere === undefined || derniere.verdict !== "approved" || derniere.event_seq !== event.reviewed_event_seq) {
+      throw new RecoveryError(
+        `${quoi} : reviewed_event_seq ${event.reviewed_event_seq} n'est pas la dernière approbation ` +
+          `de ${ouverte.lane} (${derniere === undefined ? "aucune revue" : `${derniere.event_seq} ${derniere.verdict}`})`,
+      );
+    }
+    if (event.tree !== derniere.tree) {
+      throw new RecoveryError(`${quoi} : tree ${event.tree} n'est pas le tree approuvé ${derniere.tree}`);
+    }
+    if (base === undefined || event.parent !== base) {
+      throw new RecoveryError(`${quoi} : parent ${event.parent} n'est pas la base ouverte ${String(base)}`);
+    }
+    /*
+     * Un seul gel VIVANT par lane (PLAN-LOT8 Q5, adjudication L8-A1).
+     *
+     * Un gel précédent ne cède la place que s'il a été durablement consommé sans
+     * intégration : une tentative de cette unité, dont `p2` est exactement ce gel, close
+     * `returned-to-lane` ; aucune tentative encore vivante ni intégrée sur le même `p2` ;
+     * aucune intégration de la lane ; et une approbation plus récente que celle qui l'a
+     * fondé. La preuve est au registre des intégrations, relu sous le même R.
+     */
+    const precedent = gels.at(-1);
+    if (precedent !== undefined) {
+      if (integrations === undefined) {
+        throw new RecoveryError(
+          `${quoi} : un gel existe déjà pour ${ouverte.lane} (${precedent.commit.slice(0, 12)}) ; ` +
+            "sa consommation ne se prouve que par le registre des intégrations",
+        );
+      }
+      if (integree) throw new RecoveryError(`${quoi} : ${ouverte.lane} est déjà intégrée`);
+      const tentatives = new Map<string, { p2: string; ferme?: string; remplacee: boolean }>();
+      for (const i of integrations) {
+        if (i.event === "ATTEMPT_OPENED") {
+          if (i.work_unit === event.work_unit) tentatives.set(i.id, { p2: i.p2, remplacee: false });
+        } else if (i.event === "CLOSED") {
+          const t = tentatives.get(i.id);
+          if (t) t.ferme = i.outcome;
+        } else if (i.event === "SUPERSEDED") {
+          const t = tentatives.get(i.id);
+          if (t) t.remplacee = true;
+        }
+      }
+      const surCeGel = [...tentatives.values()].filter((t) => t.p2 === precedent.commit);
+      const rendue = surCeGel.some((t) => t.ferme === "returned-to-lane");
+      const vivante = surCeGel.some((t) => t.ferme === undefined && !t.remplacee);
+      const consommeeParIntegration = surCeGel.some((t) => t.ferme === "integrated");
+      if (!rendue || vivante || consommeeParIntegration) {
+        throw new RecoveryError(
+          `${quoi} : le gel ${precedent.commit.slice(0, 12)} de ${ouverte.lane} est encore vivant ` +
+            `(tentative returned-to-lane ${rendue}, tentative vivante ${vivante}, intégrée ` +
+            `${consommeeParIntegration}) ; aucun second gel`,
+        );
+      }
+      if (event.reviewed_event_seq <= precedent.reviewed_event_seq) {
+        throw new RecoveryError(
+          `${quoi} : aucune approbation plus récente que ${precedent.reviewed_event_seq}, qui a fondé ` +
+            `le gel ${precedent.commit.slice(0, 12)}`,
+        );
+      }
+      if (gels.some((g) => g.commit === event.commit)) {
+        throw new RecoveryError(`${quoi} : le commit ${event.commit.slice(0, 12)} a déjà été gelé ; un gel consommé ne revit pas`);
+      }
+    }
+    const doc = {
+      ...enveloppe,
+      event: "FROZEN",
+      commit: event.commit,
+      parent: event.parent,
+      tree: event.tree,
+      reviewed_event_seq: event.reviewed_event_seq,
+    };
     if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
     return doc;
   }
@@ -1619,6 +1741,92 @@ export function appendViolationEvent(
 }
 
 /**
+ * Un gel refusé avant tout octet, sous R et bail vérifié (PLAN-LOT8 Q6, classe 1).
+ *
+ * Le registre n'a rien reçu, et l'appel possédait le run au moment du refus : c'est le
+ * seul cas où le runtime peut défaire le commit de gel qu'il vient de créer.
+ */
+export class FrozenRefusedError extends RecoveryError {}
+
+/**
+ * Un gel dont l'append a été tenté et dont l'issue est incertaine (PLAN-LOT8 Q6, classe 3).
+ *
+ * Aucun octet ne se reprend : le verrou R reste comme vestige de transition (C1.10), la
+ * branche reste sur le commit de gel, et rien n'est mergé. L'appel suivant rencontre
+ * `RUN_TRANSITION_LOCKED` jusqu'à la réconciliation opérateur.
+ */
+export class FrozenNotRecordedError extends RecoveryError {}
+
+/**
+ * Enregistre le gel d'une lane (C2.4, § F, PLAN-LOT8 Q5 et Q6).
+ *
+ * Trois issues d'échec, que l'appelant ne confond pas :
+ *   - `NotOwnerError` (ou toute erreur avant la vérification du bail) : l'appel ne possède
+ *     plus le run ; il ne mute plus la lane — C2.5, aucun reset ;
+ *   - `FrozenRefusedError` : bail vérifié sous R, rien n'est écrit — le gel se défait ;
+ *   - `FrozenNotRecordedError` : l'append a été tenté — vestige, aucun reset.
+ *
+ * Le registre des intégrations n'est lu qu'ici, sous le même R que ses propres ajouts
+ * (`appendIntegrationEvent`) : c'est une dépendance de preuve pour un second gel, pas un
+ * verrou de plus.
+ */
+export function appendFrozenEvent(dir: string, event: FrozenWrite, lease: Lease): void {
+  withRunGuard(dir, lease.runId, () => {
+    assertOwner(dir, lease, `enregistrer FROZEN sur ${event.work_unit}`);
+    const path = laneLedgerPath(dir, lease.runId);
+    let ligne: string;
+    try {
+      if (!existsSync(path)) {
+        throw new RecoveryError(`registre ${lease.runId} absent : aucune lane à geler`);
+      }
+      const lu = readLaneEvents(dir, lease.runId);
+      if (lu.malformedLines.length > 0) {
+        throw new RecoveryError(`registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`);
+      }
+      if (lu.version !== LANE_LEDGER_V2) {
+        throw new RecoveryError(
+          `registre ${lease.runId} en version ${String(lu.version)} : FROZEN n'existe qu'en v2`,
+        );
+      }
+      /*
+       * Q5 : les deux registres lus, puis les témoins relus UNE fois, puis les deux états
+       * établis — lanes d'abord, intégrations ensuite. Aucun événement d'intégration n'est
+       * consommé avant. EMPTY est un constat d'absence, jamais la preuve qu'un gel a été
+       * consommé ; tout autre état qu'un état exploitable refuse avant l'append.
+       */
+      const integ = readIntegrationEvents(dir, lease.runId);
+      const temoins = readWitnesses(dir, lease.runId);
+      const etatLanes = laneState(temoins, { ...lu, version: lu.version }, lease.runId);
+      if (etatLanes !== "KNOWN") {
+        throw new RecoveryError(
+          `registre ${lease.runId} ${etatLanes} : un registre v2 qui n'est pas KNOWN ne reçoit aucun FROZEN ; rien n'est écrit`,
+        );
+      }
+      const etatIntegrations = integrationLedgerState(temoins, integ, etatLanes);
+      if (etatIntegrations !== "KNOWN" && etatIntegrations !== "EMPTY") {
+        throw new RecoveryError(
+          `registre des intégrations ${lease.runId} ${etatIntegrations} : la consommation d'un gel ne s'y ` +
+            "prouve pas ; rien n'est écrit",
+        );
+      }
+      const prouvees = etatIntegrations === "KNOWN" ? integ.events : [];
+      ligne = JSON.stringify(evenementV2(lu, event, lease.runId, prouvees));
+    } catch (err) {
+      throw new FrozenRefusedError(`FROZEN refusé avant tout octet : ${messageOf(err)}`);
+    }
+    try {
+      appendFileSync(path, `${ligne}\n`);
+    } catch (err) {
+      throw new FrozenNotRecordedError(
+        `FROZEN de ${event.lane} tenté et non confirmé : ${messageOf(err)}. Le verrou ` +
+          `${guardPath(dir, lease.runId)} est conservé comme vestige ; réconcilier le registre ` +
+          "et la branche avant de le lever.",
+      );
+    }
+  });
+}
+
+/**
  * Une lane dont l'artefact existe et dont l'ouverture n'a pas pu être enregistrée.
  *
  * C0 la classe inconnue : un worktree sans `OPENED`, que la lecture suivante nommera
@@ -1728,10 +1936,10 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
       `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
     );
   }
-  if (event.event === "REVIEWED" || event.event === "VIOLATION" || event.event === "RISK") {
+  if (event.event === "REVIEWED" || event.event === "VIOLATION" || event.event === "RISK" || event.event === "FROZEN") {
     throw new RecoveryError(
       `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : sa grammaire ne porte ni ` +
-        `revue, ni violation, ni risque durable ; ${event.event} n'existe qu'en v2`,
+        `revue, ni violation, ni risque, ni gel durable ; ${event.event} n'existe qu'en v2`,
     );
   }
   if (event.event === "OPENED") {
@@ -2264,14 +2472,16 @@ function messageOf(err: unknown): string {
 function sousGuardAcquis<T>(path: string, label: string, fn: () => T): T {
   let sortieNormale = false;
   // Les seuls échecs qui gardent le verrou : une violation constatée et non écrite (LOT 6
-  // Q7), une séquence de risques commencée et non achevée (LOT 7 Q6).
+  // Q7), une séquence de risques commencée et non achevée (LOT 7 Q6), un gel dont l'append
+  // a été tenté (LOT 8 Q6).
   let vestige = false;
   try {
     const resultat = fn();
     sortieNormale = true;
     return resultat;
   } catch (err) {
-    vestige = err instanceof ViolationNotRecordedError || err instanceof RiskNotRecordedError;
+    vestige = err instanceof ViolationNotRecordedError || err instanceof RiskNotRecordedError ||
+      err instanceof FrozenNotRecordedError;
     throw err;
   } finally {
     if (!vestige) try {

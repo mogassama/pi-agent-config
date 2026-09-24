@@ -22,8 +22,11 @@ import {
 } from "./l0-b3-fixtures.ts";
 
 type Preuve = (t: TestContext) => Promise<void> | void;
-function regression(id: string, titre: string, fn: Preuve): void {
-  test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
+function preservation(id: string, titre: string, fn: Preuve): void {
+  test(`L0 PRES ${id} — ${titre}`, fn);
 }
 test.after(() => {
   nettoyerHooks();
@@ -32,7 +35,7 @@ test.after(() => {
 
 // ================================================================== Q1.3 — le gel enregistré
 
-regression("B3-frozen-ecrit", "le gel ordinaire s'enregistre avant le merge, et en entier", async () => {
+regressionCorrigee("B3-frozen-ecrit", "le gel ordinaire s'enregistre avant le merge, et en entier", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
@@ -56,7 +59,12 @@ regression("B3-frozen-ecrit", "le gel ordinaire s'enregistre avant le merge, et 
     const decrire = (evts: Array<Record<string, unknown>>): string[] => {
       const gel = evts.find((e) => e.event === "FROZEN" && e.work_unit === "W03");
       const revueEvt = evts.find((e) => e.event === "REVIEWED" && e.work_unit === "W03");
-      const merge = evts.find((e) => e.event === "MERGED" && e.work_unit === "W03");
+      /*
+       * Le premier événement d'intégration de la lane : MERGED dès le LOT 9, la forme
+       * transitoire d'INTEGRATED avant lui (C0 v1.8). Exiger MERGED ici faisait dépendre la
+       * preuve du gel d'un événement que seul le LOT 9 écrit.
+       */
+      const merge = evts.find((e) => (e.event === "MERGED" || e.event === "INTEGRATED") && e.work_unit === "W03");
       const commit = typeof gel?.commit === "string" ? (gel.commit as string) : undefined;
       const existe = commit !== undefined && teteDeLane(h.root, lane) === commit;
       const parentGit = existe ? git(h.root, "rev-parse", `${commit}^`).trim() : undefined;
@@ -72,7 +80,7 @@ regression("B3-frozen-ecrit", "le gel ordinaire s'enregistre avant le merge, et 
         ...(Number.isInteger(gel?.reviewed_event_seq) && gel?.reviewed_event_seq === revueEvt?.event_seq
           ? [] : [`reviewed_event_seq ${JSON.stringify(gel?.reviewed_event_seq)}`]),
         ...(gel !== undefined && merge !== undefined && Number(gel.event_seq) < Number(merge.event_seq)
-          ? [] : ["FROZEN ne précède pas MERGED"]),
+          ? [] : ["FROZEN ne précède pas l'intégration enregistrée"]),
       ];
     };
     const ecrit = decrire(h.evenements());
@@ -88,7 +96,7 @@ regression("B3-frozen-ecrit", "le gel ordinaire s'enregistre avant le merge, et 
   } finally { h.fin(); }
 });
 
-regression("B3-frozen-crash", "un gel sans FROZEN est refusé, là où un gel enregistré passe", async () => {
+preservation("B3-frozen-crash", "un gel sans FROZEN est refusé, là où un gel enregistré passe", async () => {
   /*
    * Deux états canoniques, et il faut les deux.
    *
@@ -122,6 +130,9 @@ regression("B3-frozen-crash", "un gel sans FROZEN est refusé, là où un gel en
 
     // Le témoin : FROZEN est au registre, la provenance est connue, l'intégration passe.
     const etatAvec = etatCanonique(avecGel, { jusqua: "FROZEN" });
+    // La fixture merge après FROZEN : c'est la fenêtre du LOT 9 (merge sans MERGED). Le
+    // témoin du gel s'arrête au gel enregistré, avant tout merge.
+    git(avecGel.root, "reset", "-q", "--hard", etatAvec.base);
     const neuveAvec = await avecGel.recharger();
     const rAvec = await issue(() => neuveAvec.outil.execute("1", revue("W03")));
     PILOTE.resultat = undefined;
@@ -169,7 +180,7 @@ async function prete(conflit: boolean) {
   return h;
 }
 
-regression("B3-hook-fichiers", "un hook qui réécrit les fichiers rend l'approbation caduque", async () => {
+regressionCorrigee("B3-hook-fichiers", "un hook qui réécrit les fichiers rend l'approbation caduque", async () => {
   const manques: string[] = [];
   for (const chemin of CHEMINS) {
     const h = await prete(chemin.conflit);
@@ -189,6 +200,10 @@ regression("B3-hook-fichiers", "un hook qui réécrit les fichiers rend l'approb
         readFileSync(join(cwd, "src", "a.py"), "utf-8").includes("transformé");
       const refuse = !integree(h.root, "src/a.py", "a = 2") && !integree(h.root, "src/a.py", "transformé par le hook");
       const gelDefait = teteDeLane(h.root, lane) === avant;
+      // C2.6 : le gel transformé n'ouvre aucune tentative d'intégration.
+      const journalTentatives = join(h.runDir, `${h.runId}-integrations.jsonl`);
+      const sansTentative = !existsSync(journalTentatives) ||
+        !/"event":"ATTEMPT_OPENED"/.test(readFileSync(journalTentatives, "utf-8"));
       const uneSeuleRevue = compter("reviewer") === reviewersAvant + 1;
       const treeTransforme = existsSync(cwd) ? treeDeTravail(h, lane) : undefined;
       // L'arbre transformé appelle une nouvelle revue : c'est la sortie prévue par C2.4.
@@ -200,11 +215,11 @@ regression("B3-hook-fichiers", "un hook qui réécrit les fichiers rend l'approb
       const surLArbreTransforme = derniere?.tree === treeTransforme;
 
       // Sans marqueur, le chemin conflit peut refuser sans jamais avoir exécuté le hook.
-      if (!aTourne(marqueur) || !transforme || !refuse || !gelDefait || !uneSeuleRevue ||
+      if (!aTourne(marqueur) || !transforme || !refuse || !gelDefait || !sansTentative || !uneSeuleRevue ||
           !deuxRevues || !surLArbreTransforme) {
         manques.push(
           `${chemin.nom} : hook exécuté ${aTourne(marqueur)}, arbre transformé ${transforme}, ` +
-            `refus ${refuse}, gel défait ${gelDefait}, une revue puis deux ` +
+            `refus ${refuse}, gel défait ${gelDefait}, aucune tentative ${sansTentative}, une revue puis deux ` +
             `${uneSeuleRevue}/${deuxRevues}, nouveau REVIEWED sur l'arbre transformé ` +
             `${surLArbreTransforme} ; ${montrer(resultat)} · ${montrer(suivante)}`,
         );
@@ -218,7 +233,7 @@ regression("B3-hook-fichiers", "un hook qui réécrit les fichiers rend l'approb
   );
 });
 
-regression("B3-hook-index", "un hook qui ne touche que l'index est refusé sans amorcer de boucle", async () => {
+regressionCorrigee("B3-hook-index", "un hook qui ne touche que l'index est refusé sans amorcer de boucle", async () => {
   const manques: string[] = [];
   for (const chemin of CHEMINS) {
     const h = await prete(chemin.conflit);
@@ -248,14 +263,20 @@ regression("B3-hook-index", "un hook qui ne touche que l'index est refusé sans 
       const sansBoucle = compter("reviewer") === reviewersAvant + 1;
 
       const brancheRendue = teteDeLane(h.root, lane) === teteAvant;
+      // L'approbation de cet appel est enregistrée avant le gel (C2.4) : une, et une seule.
       const sansNouveauReviewed =
-        h.evenements().filter((e) => e.event === "REVIEWED").length === revuesAvant;
+        h.evenements().filter((e) => e.event === "REVIEWED").length === revuesAvant + 1;
+      // C2.6 : le gel dont l'index a été transformé n'ouvre aucune tentative d'intégration.
+      const journalTentatives = join(h.runDir, `${h.runId}-integrations.jsonl`);
+      const sansTentative = !existsSync(journalTentatives) ||
+        !/"event":"ATTEMPT_OPENED"/.test(readFileSync(journalTentatives, "utf-8"));
 
-      if (!aTourne(marqueur) || !arbreIntact || !refuse || !sansBoucle || !brancheRendue ||
+      if (!aTourne(marqueur) || !arbreIntact || !refuse || !sansBoucle || !brancheRendue || !sansTentative ||
           !sansNouveauReviewed) {
         manques.push(
           `${chemin.nom} : hook exécuté ${aTourne(marqueur)}, arbre intact ${arbreIntact}, ` +
-            `branche rendue ${brancheRendue}, aucun nouveau REVIEWED ${sansNouveauReviewed}, ` +
+            `branche rendue ${brancheRendue}, une seule approbation ${sansNouveauReviewed}, ` +
+            `aucune tentative ${sansTentative}, ` +
             `refus ${refuse} (racine : ` +
             `${readFileSync(join(h.root, "src", "a.py"), "utf-8").trim()}), une seule délégation ` +
             `reviewer ${sansBoucle} (${compter("reviewer") - reviewersAvant}) ; ${montrer(resultat)}`,

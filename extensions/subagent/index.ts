@@ -12,7 +12,7 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
@@ -43,6 +43,9 @@ import {
   appendIntegrationEvent,
   appendLaneEvent,
   appendViolationEvent,
+  appendFrozenEvent,
+  FrozenNotRecordedError,
+  FrozenRefusedError,
   NotOwnerError,
   RiskNotRecordedError,
   ViolationNotRecordedError,
@@ -102,8 +105,8 @@ import {
   type RunMetrics,
 } from "../../subagent-only/run-report.js";
 import {
-  confirmIntegrations, ensureLane, integrateLane, isMerged, laneChanges, laneTip,
-  mergeMessage, openLanes, runBranches,
+  commitFacts, commitLane, confirmIntegrations, ensureLane, freezeMessage, integrateLane, isMerged,
+  laneChanges, laneIsClean, laneTip, mergeMessage, openLanes, resetLaneTo, runBranches,
 } from "../../subagent-only/worktree.js";
 import {
   describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict,
@@ -883,6 +886,227 @@ function refusDesignUpdate(unit: string): string | undefined {
       "runtime, l'intégration est fermée avant le merge";
   }
   return undefined;
+}
+
+/**
+ * Le gel d'une lane est-il consommé sans intégration (PLAN-LOT8 Q5, adjudication L8-A1) ?
+ *
+ * Oui seulement si une tentative de l'unité, ouverte sur ce commit exact, a été close
+ * `returned-to-lane`, et qu'aucune autre tentative sur ce même gel n'est vivante ni
+ * intégrée. Le même jugement que l'écrivain refait sous R ; ici, il choisit seulement
+ * entre réutiliser le gel et en demander un nouveau.
+ */
+function gelConsomme(events: readonly IntegrationEvent[], unit: string, commit: string): boolean {
+  const tentatives = new Map<string, { p2: string; ferme?: string; remplacee: boolean }>();
+  for (const e of events) {
+    if (e.event === "ATTEMPT_OPENED") {
+      if (e.work_unit === unit) tentatives.set(e.id, { p2: e.p2, remplacee: false });
+    } else if (e.event === "CLOSED") {
+      const t = tentatives.get(e.id);
+      if (t) t.ferme = e.outcome;
+    } else if (e.event === "SUPERSEDED") {
+      const t = tentatives.get(e.id);
+      if (t) t.remplacee = true;
+    }
+  }
+  const surCeGel = [...tentatives.values()].filter((t) => t.p2 === commit);
+  return surCeGel.some((t) => t.ferme === "returned-to-lane") &&
+    !surCeGel.some((t) => (t.ferme === undefined && !t.remplacee) || t.ferme === "integrated");
+}
+
+/**
+ * L'issue du gel : le commit gelé et son tree, ou la raison nommée qui ferme la porte.
+ * `commit` absent : lane sans aucun changement, qui garde le chemin d'entrée (PLAN-LOT8 Q7).
+ */
+type IssueDuGel = { ok: true; commit?: string; parent?: string; tree?: string } | { ok: false; raison: string };
+
+/**
+ * Geler une lane v2 approuvée, avant tout merge (C2.4, C2.6, PLAN-LOT8 Q3 à Q7).
+ *
+ *   gel vivant exact          réutilisé : ni commit, ni second FROZEN
+ *   gel vivant non exact      refus : un gel vivant ne se remplace pas
+ *   gel consommé              la branche revient sur OPENED.base (reset --mixed), puis
+ *                             nouveau gel fondé sur l'approbation plus récente
+ *   commit de gel             parent et tree relus par git ; non conformes → reset
+ *                             --mixed previousHead tant que l'appel possède le run, puis
+ *                             classement sur l'arbre de travail : transformé → nouvelle
+ *                             revue ; inchangé → index seul, refus sans nouvelle revue
+ *   FROZEN                    écrit sous R ; refusé avant octet → gel défait ; bail perdu
+ *                             ou issue incertaine → aucun reset (C2.5, vestige)
+ */
+function gelerLane(lane: LaneContext, lease: Lease): IssueDuGel {
+  const root = process.cwd();
+  let lu: LedgerRead;
+  let vu: ReturnType<typeof observeLanes>;
+  try {
+    lu = readLaneEvents(RUN_DIR, RUN_ID);
+    vu = observeLanes({ root, runId: RUN_ID, laneRead: { ...lu, version: lu.version } });
+  } catch (err) {
+    return { ok: false, raison: `état de la lane inconnu avant le gel : ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!vu.usable) return { ok: false, raison: `état de la lane inconnu avant le gel : ${vu.reason}` };
+  if (!vu.snapshot.read.present || vu.snapshot.read.version !== LANE_LEDGER_V2) {
+    return { ok: false, raison: "le gel durable n'existe qu'en registre v2 ; aucun gel" };
+  }
+  const events = vu.snapshot.read.events;
+  const base = baseDeLane(events, lane.laneId);
+  if (base === undefined) return { ok: false, raison: `aucune ouverture enregistrée pour ${lane.laneId} ; aucun gel` };
+  const derniere = (vu.snapshot.projections.reviews.get(lane.laneId) ?? []).at(-1);
+  if (derniere === undefined || derniere.verdict !== "approved") {
+    return { ok: false, raison: "aucune approbation durable à geler" };
+  }
+  const approuve = derniere.tree;
+  let precedent: { commit: string; parent: string; tree: string } | undefined;
+  for (const e of events) {
+    if (e.event === "FROZEN" && e.lane === lane.laneId) precedent = { commit: e.commit, parent: e.parent, tree: e.tree };
+  }
+  let consomme = false;
+  if (precedent !== undefined) {
+    /*
+     * Q5 : la consommation d'un gel antérieur ne se prouve que par l'observation autoritaire
+     * des intégrations, sur le même snapshot des lanes. Un registre qui n'est ni KNOWN ni EMPTY
+     * refuse ici, avant toute mutation git ; sa liste brute ne fonde aucune décision. EMPTY est
+     * un constat d'absence : aucune tentative, donc aucun gel consommé.
+     */
+    let integ: ReturnType<typeof observeIntegrations>;
+    try {
+      integ = observeIntegrations({ root, runDir: RUN_DIR, runId: RUN_ID, laneRead: { ...lu, version: lu.version } });
+    } catch (err) {
+      return { ok: false, raison: `état des intégrations inexploitable avant le gel : ${err instanceof Error ? err.message : String(err)} ; aucun gel` };
+    }
+    if (!integ.usable) {
+      return { ok: false, raison: `état des intégrations inexploitable avant le gel (${integ.state}) : ${integ.reason} ; aucun gel` };
+    }
+    consomme = gelConsomme(integ.snapshot.read.events, lane.workUnitId, precedent.commit);
+  }
+  const tete = laneTip(root, lane.laneId);
+
+  if (precedent !== undefined && !consomme) {
+    // Le gel vivant se réutilise tel quel, ou ne se remplace pas.
+    const propre = laneIsClean(root, lane.laneId);
+    const faits = commitFacts(root, precedent.commit);
+    const exact = tete === precedent.commit && propre === true && faits.ok &&
+      faits.parents.length === 1 && faits.parents[0] === base && faits.tree === precedent.tree &&
+      precedent.parent === base && approuve === precedent.tree;
+    if (exact) return { ok: true, commit: precedent.commit, parent: precedent.parent, tree: precedent.tree };
+    return {
+      ok: false,
+      raison: `le gel vivant ${precedent.commit.slice(0, 12)} de ${lane.laneId} ne se réutilise pas ` +
+        `(tête ${String(tete).slice(0, 12)}, lane propre ${String(propre)}, tree approuvé ` +
+        `${approuve.slice(0, 12)}, tree gelé ${precedent.tree.slice(0, 12)}${faits.ok ? "" : `, ${faits.reason}`}) ; ` +
+        "aucun second gel tant qu'il n'est pas consommé",
+    };
+  }
+  if (tete !== base) {
+    // Seule une tête posée sur un gel consommé revient à la base ; toute autre est inconnue.
+    if (!(precedent !== undefined && consomme && tete === precedent.commit)) {
+      return { ok: false, raison: `tête ${String(tete).slice(0, 12)} de ${lane.laneId} inattendue avant le gel ; aucun gel` };
+    }
+    if (!ownsRun(RUN_DIR, lease) || !resetLaneTo(root, lane.laneId, base)) {
+      return { ok: false, raison: `la lane ${lane.laneId} n'a pas pu revenir sur sa base avant un nouveau gel` };
+    }
+  }
+
+  const gel = commitLane(root, lane.laneId, freezeMessage(lane.laneId));
+  if (gel.status === "failed") return { ok: false, raison: `gel impossible : ${gel.reason}` };
+  // Lane sans aucun changement : pas de FROZEN synthétique au LOT 8 (Q7) ; chemin d'entrée.
+  if (gel.status === "clean") return { ok: true };
+  const commit = gel.commit;
+  const avant = gel.previousHead;
+  if (commit === undefined || avant === undefined) {
+    return { ok: false, raison: "commit de gel sans identité observable ; aucun FROZEN, aucun merge" };
+  }
+
+  const faits = commitFacts(root, commit);
+  const conforme = faits.ok && faits.parents.length === 1 && faits.parents[0] === base && faits.tree === approuve;
+  if (!conforme) {
+    const detail = faits.ok
+      ? `parent ${faits.parents.join(",").slice(0, 40)} pour la base ${base.slice(0, 12)}, tree ` +
+        `${faits.tree.slice(0, 12)} pour l'approuvé ${approuve.slice(0, 12)}`
+      : faits.reason;
+    // Tant que l'appel possède le run, et seulement alors, le gel se défait.
+    if (!ownsRun(RUN_DIR, lease)) {
+      return { ok: false, raison: `commit de gel non conforme (${detail}) et propriété du run perdue : aucun reset (C2.5)` };
+    }
+    if (!resetLaneTo(root, lane.laneId, avant)) {
+      return { ok: false, raison: `commit de gel non conforme (${detail}) ; le gel n'a pas pu être défait` };
+    }
+    let apres: string;
+    try {
+      apres = workingTree(lane.cwd);
+    } catch (err) {
+      return { ok: false, raison: `commit de gel non conforme (${detail}) ; arbre de travail inobservable : ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (apres !== approuve) {
+      return {
+        ok: false,
+        raison: `le commit de gel ne porte pas l'arbre approuvé (${detail}) : un hook a transformé ` +
+          `les fichiers de la lane (${approuve.slice(0, 12)} → ${apres.slice(0, 12)}). Le gel est ` +
+          "défait, l'approbation est caduque ; une nouvelle revue de l'arbre transformé est requise (C2.4)",
+      };
+    }
+    return {
+      ok: false,
+      raison: `le commit de gel ne porte pas l'arbre approuvé (${detail}), alors que l'arbre de ` +
+        "travail est resté celui de l'approbation : la transformation n'existait que dans l'index. " +
+        "Le gel est défait ; refus, sans nouvelle revue (C2.4)",
+    };
+  }
+
+  try {
+    appendFrozenEvent(RUN_DIR, {
+      event: "FROZEN",
+      work_unit: lane.workUnitId,
+      at: new Date().toISOString(),
+      lane: lane.laneId,
+      commit,
+      parent: base,
+      tree: approuve,
+      reviewed_event_seq: derniere.event_seq,
+    }, lease);
+  } catch (err) {
+    const quoi = err instanceof Error ? err.message : String(err);
+    if (err instanceof FrozenRefusedError) {
+      if (ownsRun(RUN_DIR, lease) && resetLaneTo(root, lane.laneId, avant)) {
+        return { ok: false, raison: `${quoi} ; le gel est défait, rien n'est mergé` };
+      }
+      return { ok: false, raison: `${quoi} ; le gel n'a pas pu être défait, rien n'est mergé (C2.5)` };
+    }
+    if (err instanceof FrozenNotRecordedError) return { ok: false, raison: `${quoi} ; rien n'est mergé` };
+    // Bail perdu, garde de transition, tout le reste : l'appel ne mute plus la lane.
+    return {
+      ok: false,
+      raison: `FROZEN non enregistré : ${quoi}. Le commit de gel ${commit.slice(0, 12)} reste sans ` +
+        "FROZEN : provenance inconnue, aucun reset, aucun merge (C2.5)",
+    };
+  }
+  return { ok: true, commit, parent: base, tree: approuve };
+}
+
+/**
+ * L'arbre d'une lane a-t-il changé depuis sa dernière revue durable (C2.1, PLAN-LOT8 Q8) ?
+ *
+ * Lu sur la vue autoritaire v2 — jamais sur un marqueur de session — : le `tree` du dernier
+ * `REVIEWED` de la lane courante de l'unité, contre le `T_L` recalculé maintenant. Tout ce
+ * qui n'est pas établi rend `false` : la garde de revue reste alors ce qu'elle était.
+ */
+function arbreChangeDepuisRevue(unit: string): boolean {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead: { ...lu, version: lu.version } });
+    if (!vu.usable || !vu.snapshot.read.present || vu.snapshot.read.version !== LANE_LEDGER_V2) return false;
+    let lane: string | undefined;
+    for (const e of vu.snapshot.read.events) {
+      if (e.event === "OPENED" && e.work_unit === unit && "lane" in e) lane = e.lane;
+    }
+    if (lane === undefined) return false;
+    const derniere = (vu.snapshot.projections.reviews.get(lane) ?? []).at(-1);
+    const cwd = join(process.cwd(), ".git", "pi-lanes", lane);
+    if (derniere === undefined || !existsSync(cwd)) return false;
+    return workingTree(cwd) !== derniere.tree;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1825,7 +2049,12 @@ function checkScoutInput(params: { find?: string | string[]; scope?: string[] })
  * régime planifié (C1.7). Dans cette vue, une globale readOnly ne compte pas comme une
  * écriture et ne crée ni ne prolonge le streak d'un reviewer de la lane.
  */
-function refuse(agentName: string, tools: readonly string[], view: readonly Delegation[] = HISTORY): string | null {
+function refuse(
+  agentName: string,
+  tools: readonly string[],
+  view: readonly Delegation[] = HISTORY,
+  arbreChange = false,
+): string | null {
   const last = view[view.length - 1];
   const before = view[view.length - 2];
 
@@ -1834,8 +2063,15 @@ function refuse(agentName: string, tools: readonly string[], view: readonly Dele
   // field being parsed correctly; this does not. The exception is a review
   // that returned nothing — refusing its replacement would trap the session —
   // and two failures in a row still stop, so the retry is bounded at one.
+  //
+  // One exception, and it is not the orchestrator's to claim: the lane's own tree has
+  // changed since its last durable review (C2.1, PLAN-LOT8 Q8) — a commit hook rewrote
+  // the files the approval was about. The approval is void and C2.4 calls for a new
+  // review of the transformed tree. Read from the authoritative ledger, never from
+  // memory; an unchanged tree keeps both rules below.
   if (
     agentName === "reviewer" &&
+    !arbreChange &&
     last?.agent === "reviewer" &&
     (last.produced || before?.agent === "reviewer")
   ) {
@@ -1853,7 +2089,7 @@ function refuse(agentName: string, tools: readonly string[], view: readonly Dele
   // round only when it made material changes"; changed_files is what makes it
   // computable rather than a judgement call.
   const sinceReview = [...view].reverse().findIndex((d) => d.agent === "reviewer");
-  if (agentName === "reviewer" && sinceReview > 0) {
+  if (agentName === "reviewer" && !arbreChange && sinceReview > 0) {
     const between = view.slice(view.length - sinceReview);
     // A writer that wrote nothing leaves the tree as the last review found it.
     // A scout does too, and that is not the same thing: reviewer.md tells a
@@ -2876,7 +3112,12 @@ export default function (pi: ExtensionAPI) {
          * l'historique entier (C1).
          */
         if (gardeDiffere) {
-          const refusRevue = refuse(agent.name, agent.tools, unit ? vueDeRevue(unit) : HISTORY);
+          const refusRevue = refuse(
+            agent.name,
+            agent.tools,
+            unit ? vueDeRevue(unit) : HISTORY,
+            unit !== undefined && agent.name === "reviewer" && arbreChangeDepuisRevue(unit),
+          );
           if (refusRevue) {
             logRefusal(RUN_ID, agent.name, refusRevue);
             return { content: [{ type: "text" as const, text: refusRevue }], isError: true };
@@ -4124,7 +4365,15 @@ export default function (pi: ExtensionAPI) {
           const statutFerme = causesC3.length === 0 && !fermeC2 && !fermeInconnu
             ? refusDesignUpdate(lane.workUnitId)
             : undefined;
-          const ferme = fermeInconnu ?? (causesC3.length === 0 ? fermeC2 ?? statutFerme : undefined);
+          const fermeAvantGel = fermeInconnu ?? (causesC3.length === 0 ? fermeC2 ?? statutFerme : undefined);
+          /*
+           * Le gel (C2.4, PLAN-LOT8 Q3) : seulement quand plus rien d'autre ne ferme la porte.
+           * Commit, relecture par git du parent et du tree, `FROZEN` durable — et seulement
+           * ensuite le merge. Un gel non conforme se défait et se classe ; un `FROZEN` non
+           * écrit ferme sans merge.
+           */
+          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : gelerLane(lane, lease);
+          const ferme = fermeAvantGel ?? (gel !== undefined && !gel.ok ? gel.raison : undefined);
           const merged: ReturnType<typeof integrateLane> = ferme || causesC3.length > 0
             ? { ok: false, conflicts: [], reason: ferme ?? causesC3.join(", ") }
             : integrateLane(
@@ -4143,6 +4392,10 @@ export default function (pi: ExtensionAPI) {
                 },
                 lease,
               ),
+            // R2 : un FROZEN durable fait de son commit le seul candidat au merge.
+            gel?.ok && gel.commit !== undefined && gel.parent !== undefined && gel.tree !== undefined
+              ? { commit: gel.commit, parent: gel.parent, tree: gel.tree }
+              : undefined,
           );
           if (merged.ok) {
             INTEGRATED.add(lane.workUnitId);
@@ -4167,8 +4420,27 @@ export default function (pi: ExtensionAPI) {
              * alors le bon `P2`, et c'est le seul cas où on le lit.
              */
             const p2 = merged.frozenCommit ?? laneTip(process.cwd(), lane.laneId);
-            const seqTentative = p2 ? allocateSeq(RUN_DIR, lease).seq : 0;
-            const ouverture = p2
+            /*
+             * C2.6, PLAN-LOT8 Q4 : `p2` est le gel vivant de la lane, et rien d'autre. Son
+             * commit est celui du `FROZEN`, son tree celui que ce `FROZEN` porte ; sinon aucune
+             * tentative ne s'ouvre.
+             */
+            const horsGel = gel?.ok && gel.commit !== undefined
+              ? p2 !== gel.commit
+                ? `p2 ${String(p2).slice(0, 12)} n'est pas le gel ${gel.commit.slice(0, 12)}`
+                : (() => {
+                  try {
+                    const t2 = treeOfCommit(process.cwd(), p2);
+                    return t2 === gel.tree ? undefined : `tree(p2) ${t2.slice(0, 12)} n'est pas le tree gelé`;
+                  } catch (err) {
+                    return err instanceof Error ? err.message : String(err);
+                  }
+                })()
+              : undefined;
+            const seqTentative = p2 && !horsGel ? allocateSeq(RUN_DIR, lease).seq : 0;
+            const ouverture = horsGel
+              ? { ok: false as const, reason: `aucune tentative sur un commit hors gel : ${horsGel}` }
+              : p2
               ? openIntegration(
                   process.cwd(),
                   attemptId(RUN_ID, lane.workUnitId, seqTentative),

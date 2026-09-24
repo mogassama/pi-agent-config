@@ -385,6 +385,11 @@
         "file": "subagent-only/lane-ledger.ts",
         "find": "        if (worktrees.has(unit) && sales.has(unit)) {",
         "replace": "        if (false && worktrees.has(unit) && sales.has(unit)) { // mutant B3 : une unité intégrée au worktree sale n'est plus une contradiction"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : gelerLane(lane, lease);",
+        "replace": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : undefined; void gelerLane; // mutant B3 : sans le gel, la seconde barrière contre un remerge tombe aussi"
       }
     ],
     "runs": 20
@@ -557,6 +562,11 @@
         "file": "extensions/subagent/index.ts",
         "find": "  if (!derniere) return \"aucune revue durable de cette lane\";",
         "replace": "  if (!derniere) return undefined; // mutant B2-reviewed-reload : la porte se contente de la session"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : gelerLane(lane, lease);",
+        "replace": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : undefined; void gelerLane; // mutant B2-reviewed-reload : le gel ne relit plus l'approbation durable"
       }
     ]
   },
@@ -672,5 +682,54 @@
     "file": "extensions/subagent/index.ts",
     "find": "          if (etat.connu && etat.risques.length > 0) blocks.push(\"open-risks\");",
     "replace": "          const journalMutant = (() => { try { return readFileSync(join(process.cwd(), RUNS_DIR, `${RUN_ID}-delegations.jsonl`), \"utf-8\"); } catch { return \"\"; } })(); // mutant B2-journal-non-autoritaire sens 1 : le journal ferme\n          if (etat.connu && etat.risques.some((f) => !journalMutant.includes(`\"risks_resolved\":[\"${f.id}\"]`))) blocks.push(\"open-risks\");"
+  },
+  {
+    "test": "L0 REG B3-frozen-ecrit — le gel ordinaire s'enregistre avant le merge, et en entier",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "type IssueDuGel = { ok: true; commit?: string; parent?: string; tree?: string } | { ok: false; raison: string };",
+        "replace": "type IssueDuGel = { ok: true; commit?: string; parent?: string; tree?: string } | { ok: false; raison: string };\nconst GEL_DIFFERE: Array<() => void> = []; // mutant B3-frozen-ecrit : FROZEN écrit après l'intégration"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  try {\n    appendFrozenEvent(RUN_DIR, {",
+        "replace": "  try {\n    GEL_DIFFERE.push((): void => appendFrozenEvent(RUN_DIR, {"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "      reviewed_event_seq: derniere.event_seq,\n    }, lease);",
+        "replace": "      reviewed_event_seq: derniere.event_seq,\n    }, lease));"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "            (commit) =>\n              appendLaneEvent(\n                RUN_DIR,\n                {\n                  event: \"INTEGRATED\",\n                  work_unit: lane.workUnitId,\n                  at: new Date().toISOString(),\n                  integration_commit: commit,\n                },\n                lease,\n              ),",
+        "replace": "            (commit) => {\n              appendLaneEvent(\n                RUN_DIR,\n                {\n                  event: \"INTEGRATED\",\n                  work_unit: lane.workUnitId,\n                  at: new Date().toISOString(),\n                  integration_commit: commit,\n                },\n                lease,\n              );\n              for (const differe of GEL_DIFFERE.splice(0)) differe();\n            },"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG B3-hook-fichiers — un hook qui réécrit les fichiers rend l'approbation caduque",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const conforme = faits.ok && faits.parents.length === 1 && faits.parents[0] === base && faits.tree === approuve;",
+    "replace": "  const conforme = faits.ok && faits.parents.length === 1 && faits.parents[0] === base; // mutant B3-hook-fichiers m1 : le tree du gel n'est plus relu"
+  },
+  {
+    "test": "L0 REG B3-hook-fichiers — un hook qui réécrit les fichiers rend l'approbation caduque",
+    "file": "extensions/subagent/index.ts",
+    "find": "    agentName === \"reviewer\" &&\n    !arbreChange &&\n    last?.agent === \"reviewer\" &&",
+    "replace": "    agentName === \"reviewer\" &&\n    (void arbreChange, true) && // mutant B3-hook-fichiers m2 : le changement durable de T_L est ignoré\n    last?.agent === \"reviewer\" &&"
+  },
+  {
+    "test": "L0 REG B3-hook-index — un hook qui ne touche que l'index est refusé sans amorcer de boucle",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (!resetLaneTo(root, lane.laneId, avant)) {\n      return { ok: false, raison: `commit de gel non conforme (${detail}) ; le gel n'a pas pu être défait` };",
+    "replace": "    if (false) { // mutant B3-hook-index : le gel non conforme n'est pas défait\n      return { ok: false, raison: `commit de gel non conforme (${detail}) ; le gel n'a pas pu être défait` };"
+  },
+  {
+    "test": "L0 PRES B3-frozen-crash — un gel sans FROZEN est refusé, là où un gel enregistré passe",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;",
+    "replace": "  if (integrated && isMerged(root, laneId, base)) return undefined; void frozenExact; // mutant B3-frozen-crash : un FROZEN exact n'excuse plus la tête"
   }
 ]

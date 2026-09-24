@@ -353,14 +353,106 @@ export function commitLane(root: string, laneId: string, message: string): Commi
   };
 }
 
+/**
+ * Les parents et le tree d'un commit, tels que git les donne (C2.4).
+ *
+ * Après le commit de gel, ce sont eux — et non ce que le runtime a voulu commiter — qui
+ * disent si le gel est celui de l'approbation. Un hook `pre-commit` peut réécrire les
+ * fichiers ou l'index entre le `git add` et l'objet final : seul l'objet fait foi.
+ */
+export function commitFacts(
+  root: string,
+  sha: string,
+): { ok: true; parents: string[]; tree: string } | { ok: false; reason: string } {
+  const lignee = tryGit(root, ["rev-list", "--parents", "-n", "1", sha]);
+  const tree = tryGit(root, ["rev-parse", "--verify", `${sha}^{tree}`]);
+  if (!lignee.ok) return { ok: false, reason: `git rev-list : ${lignee.out.trim()}` };
+  if (!tree.ok) return { ok: false, reason: `git rev-parse : ${tree.out.trim()}` };
+  const [soi, ...parents] = lignee.out.trim().split(/\s+/);
+  if (!soi) return { ok: false, reason: `commit ${sha} introuvable` };
+  return { ok: true, parents, tree: tree.out.trim() };
+}
+
+/**
+ * La lane est-elle propre — rien de modifié, rien de non suivi ? `undefined` si git ne
+ * peut pas le dire : ne pas savoir n'est pas savoir qu'elle est propre (T1).
+ */
+export function laneIsClean(root: string, laneId: string): boolean | undefined {
+  const cwd = join(lanesDir(root), laneId);
+  if (!existsSync(cwd)) return undefined;
+  const etat = tryGit(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+  return etat.ok ? etat.out.trim() === "" : undefined;
+}
+
+/**
+ * Ramener la branche et l'index d'une lane sur `vers`, sans toucher à l'arbre de travail.
+ *
+ * `reset --mixed` : le commit défait reste un objet du dépôt, les fichiers restent tels
+ * quels. C'est ce qui défait un gel non conforme (C2.4), et ce qui repose une lane sur sa
+ * base avant de geler de nouveau après un gel consommé `returned-to-lane` (PLAN-LOT8 Q7).
+ */
+export function resetLaneTo(root: string, laneId: string, vers: string): boolean {
+  return tryGit(join(lanesDir(root), laneId), ["reset", "-q", "--mixed", vers]).ok;
+}
+
+/** Le gel durable d'une lane : l'objet que son `FROZEN` désigne (C2.4, PLAN-LOT8 Q4). */
+export interface GelDurable {
+  commit: string;
+  parent: string;
+  tree: string;
+}
+
+/**
+ * Le gel durable est-il encore, juste avant le merge, exactement le candidat ?
+ *
+ * Tête de la lane sur le commit gelé, worktree et index propres, et parent/tree réels du commit
+ * inchangés. Un hook `post-commit` du commit de gel, ou toute écriture ultérieure, peut avoir
+ * modifié la lane après le `FROZEN` : ce contenu n'a jamais été approuvé. Rend la divergence
+ * nommée, ou undefined.
+ */
+export function divergenceDuGel(root: string, laneId: string, gel: GelDurable): string | undefined {
+  const tete = laneTip(root, laneId);
+  if (tete !== gel.commit) return `tête ${String(tete).slice(0, 12)} au lieu du gel ${gel.commit.slice(0, 12)}`;
+  const propre = laneIsClean(root, laneId);
+  if (propre !== true) {
+    return propre === undefined ? "état du worktree de la lane inobservable" : "worktree ou index de la lane modifiés après le gel";
+  }
+  const faits = commitFacts(root, gel.commit);
+  if (!faits.ok) return faits.reason;
+  if (faits.parents.length !== 1 || faits.parents[0] !== gel.parent) {
+    return `parent réel ${faits.parents.join(",").slice(0, 40)} au lieu de ${gel.parent.slice(0, 12)}`;
+  }
+  if (faits.tree !== gel.tree) return `tree réel ${faits.tree.slice(0, 12)} au lieu du tree gelé ${gel.tree.slice(0, 12)}`;
+  return undefined;
+}
+
 export function mergeLane(
   root: string,
   laneId: string,
   blocks: readonly MergeBlock[],
   message?: string,
+  gele?: GelDurable,
 ): LaneMerge {
   if (blocks.length > 0) {
     return { ok: false, conflicts: [], reason: `non intégrable : ${blocks.join(", ")}` };
+  }
+  /*
+   * Un `FROZEN` durable fait de son commit l'unique candidat (PLAN-LOT8 Q4, correction R2) :
+   * aucun second commit ne se fabrique ici. Toute divergence constatée juste avant le merge
+   * refuse, avant le merge et donc avant toute tentative, sans reset derrière le gel et sans
+   * sauver les modifications dans un commit : la lane et son `FROZEN` restent pour reprise.
+   */
+  if (gele !== undefined) {
+    const ecart = divergenceDuGel(root, laneId, gele);
+    if (ecart !== undefined) {
+      return {
+        ok: false,
+        conflicts: [],
+        reason: `la lane a changé après son FROZEN (${ecart}) : le gel ${gele.commit.slice(0, 12)} ` +
+          "reste le seul candidat ; aucun merge, aucune tentative, aucun reset, la lane et son FROZEN " +
+          "sont conservés (C2.4)",
+      };
+    }
   }
   /*
    * Figer avant d'intégrer, et refuser si le gel échoue.
@@ -378,7 +470,9 @@ export function mergeLane(
    * « voici son intégration dans la base ». Un journal qui les confond ne
    * distingue plus la lane de son entrée.
    */
-  const frozen = commitLane(root, laneId, freezeMessage(laneId));
+  const frozen: CommitResult = gele !== undefined
+    ? { status: "clean", reason: "" }
+    : commitLane(root, laneId, freezeMessage(laneId));
   if (frozen.status === "failed") {
     return { ok: false, conflicts: [], reason: `gel impossible : ${frozen.reason}` };
   }
@@ -423,6 +517,11 @@ export function mergeLane(
    *
    * `reset --mixed` remet le HEAD et l'index où ils étaient et laisse l'arbre de
    * travail intact : la lane redevient sale, comme avant la tentative.
+   *
+   * Seul CE gel se défait. Une lane arrivée avec un gel durable — le runtime a commité,
+   * vérifié et enregistré son `FROZEN` avant d'appeler ici (C2.4, PLAN-LOT8 Q3) — n'a rien
+   * commité ici : rien n'est défait, et la branche reste sur le gel durable. Aucun abort ne
+   * ramène jamais une branche derrière un `FROZEN` (PLAN-LOT8 Q4).
    */
   if (frozen.status === "committed" && frozen.previousHead) {
     tryGit(join(lanesDir(root), laneId), ["reset", "--mixed", frozen.previousHead]);
@@ -431,7 +530,7 @@ export function mergeLane(
     ok: false,
     conflicts: files,
     reason: `conflit git sur ${files.length} fichier(s)`,
-    frozenCommit: frozen.commit,
+    frozenCommit: gele?.commit ?? frozen.commit,
   };
 }
 
@@ -458,8 +557,9 @@ export function integrateLane(
   blocks: readonly MergeBlock[],
   message: string | undefined,
   enregistrer: (commit?: string) => void,
+  gele?: GelDurable,
 ): LaneMerge {
-  const merge = mergeLane(root, laneId, blocks, message);
+  const merge = mergeLane(root, laneId, blocks, message, gele);
   if (!merge.ok) return merge;
   enregistrer(merge.commit);
   removeLane(root, laneId);
