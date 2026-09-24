@@ -8,7 +8,8 @@
  * Montage : `l0-b2-harness.ts` et `l0-b3-fixtures.ts`. Espèces : voir `l0-a2-units.test.ts`.
  */
 import { test, type TestContext } from "node:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { PILOTE } from "./stubs/dispatch.ts";
@@ -17,9 +18,10 @@ import {
   precondition, propriete, revue, tache, treeDeTravail,
 } from "./l0-b2-harness.ts";
 import {
-  aTourne, CONTENU_INDEX, etatCanonique, HOOK_FICHIERS, HOOK_INDEX, marqueurHook, nettoyerHooks,
-  poserPreCommit, teteDe, teteDeLane, treeDe,
+  ajouterEvenement, aTourne, cheminLanes, CONTENU_INDEX, etatCanonique, HOOK_FICHIERS, HOOK_INDEX, marqueurHook,
+  nettoyerHooks, poserPreCommit, teteDe, teteDeLane, treeDe,
 } from "./l0-b3-fixtures.ts";
+import { releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
 
 type Preuve = (t: TestContext) => Promise<void> | void;
 function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
@@ -27,6 +29,9 @@ function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
 }
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
+}
+function couverture(id: string, titre: string, fn: Preuve): void {
+  test(`L0 COUV ${id} — ${titre}`, fn);
 }
 test.after(() => {
   nettoyerHooks();
@@ -150,6 +155,121 @@ preservation("B3-frozen-crash", "un gel sans FROZEN est refusé, là où un gel 
         `${montrer(rAvec)}`,
     );
   } finally { sansGel.fin(); avecGel.fin(); }
+});
+
+// ================================================================== C2.5 — adopt-frozen
+
+/** Le verbe de reprise, comme un opérateur le tape : un processus, à la racine. */
+const recover = (root: string, ...args: string[]): { status: number | null; sortie: string } => {
+  const majeur = Number(process.versions.node.split(".")[0]);
+  const p = spawnSync(
+    process.execPath,
+    [...(majeur < 23 ? ["--experimental-strip-types"] : []),
+      join(import.meta.dirname, "..", "bin", "subagent-recover"), ...args],
+    { cwd: root, encoding: "utf-8" },
+  );
+  return { status: p.status, sortie: `${p.stdout}${p.stderr}` };
+};
+
+/** La session du montage rend son bail : l'opérateur tranche un run dont la session est morte. */
+function rendreBail(h: Awaited<ReturnType<typeof monter>>): boolean {
+  const owner = join(h.runDir, `${h.runId}.lease`, "owner.json");
+  if (existsSync(owner)) releaseRunOwnership(h.runDir, JSON.parse(readFileSync(owner, "utf-8")) as Lease);
+  return !existsSync(owner);
+}
+
+couverture("B3-adoption-frozen", "un commit de gel sans FROZEN ne s'adopte que s'il est exactement le gel approuvé", async () => {
+  /*
+   * La fenêtre de C2.5 : le commit de gel existe, son FROZEN non. L'état canonique s'arrête
+   * à REVIEWED — le commit de gel est la tête de la lane, l'approbation porte son tree.
+   *
+   * Chaque variante fausse part du même état et n'en change qu'un fait : le parent, le tree,
+   * la propreté, un FROZEN vivant qui désigne un autre commit. Aucune ne doit être adoptée,
+   * et aucune ne doit rien défaire : ni la tête de la lane, ni le registre, ni les fichiers.
+   */
+  type Variante = "parent faux" | "tree faux" | "lane sale" | "FROZEN contradictoire";
+  const fausser: Record<Variante, (cwd: string, h: Awaited<ReturnType<typeof monter>>, e: ReturnType<typeof etatCanonique>) => void> = {
+    "parent faux": (cwd) => git(cwd, "commit", "-q", "--allow-empty", "-m", "intercalé sur le gel"),
+    "tree faux": (cwd) => {
+      writeFileSync(join(cwd, "src", "a.py"), "W03 = 3\n");
+      git(cwd, "commit", "-q", "-a", "--amend", "-m", "gel W03 autre");
+    },
+    "lane sale": (cwd) => writeFileSync(join(cwd, "src", "non-commite.py"), "x = 1\n"),
+    "FROZEN contradictoire": (cwd, h, e) => {
+      ajouterEvenement(h, {
+        event: "FROZEN", work_unit: "W03", lane: e.lane, commit: e.gel, parent: e.base, tree: e.treeGel,
+        reviewed_event_seq: e.seq.reviewed,
+      });
+      // Même parent, même tree, autre objet : seul le FROZEN vivant le distingue.
+      git(cwd, "commit", "-q", "--amend", "-m", "gel W03 rejoué");
+    },
+  };
+
+  const adoptees: string[] = [];
+  const defaites: string[] = [];
+  const nonRefusees: string[] = [];
+  for (const nom of Object.keys(fausser) as Variante[]) {
+    const h = await monter();
+    try {
+      const e = etatCanonique(h, { jusqua: "REVIEWED" });
+      const cwd = join(h.root, ".git", "pi-lanes", e.lane);
+      fausser[nom](cwd, h, e);
+      precondition(rendreBail(h), `${nom} : la session du montage doit avoir rendu son bail`);
+      const teteAvant = teteDeLane(h.root, e.lane);
+      const registreAvant = readFileSync(cheminLanes(h), "utf-8");
+      const statutAvant = git(cwd, "status", "--porcelain", "--untracked-files=all");
+      const r = recover(h.root, "W03", "adopt-frozen");
+      const registreApres = readFileSync(cheminLanes(h), "utf-8");
+      if (r.status === 0) nonRefusees.push(`${nom} (${r.sortie.trim().split("\n").at(-1)})`);
+      if (registreApres !== registreAvant) adoptees.push(nom);
+      if (teteDeLane(h.root, e.lane) !== teteAvant || git(cwd, "status", "--porcelain", "--untracked-files=all") !== statutAvant) {
+        defaites.push(nom);
+      }
+    } finally { h.fin(); }
+  }
+
+  // L'exacte : un FROZEN canonique, confronté à git ; puis la relance n'ajoute rien ; puis
+  // le runtime reconnaît la provenance et intègre — l'adoption rouvre réellement la porte.
+  const h = await monter();
+  let exacte = false;
+  let relance = false;
+  let temoin = false;
+  let detail = "";
+  try {
+    const e = etatCanonique(h, { jusqua: "REVIEWED" });
+    precondition(
+      teteDeLane(h.root, e.lane) === e.gel && !h.evenements().some((x) => x.event === "FROZEN"),
+      "l'état doit être la fenêtre de C2.5 : le gel est la tête de la lane, sans FROZEN",
+    );
+    precondition(rendreBail(h), "la session du montage doit avoir rendu son bail");
+    const r1 = recover(h.root, "W03", "adopt-frozen");
+    const gels = h.evenements().filter((x) => x.event === "FROZEN");
+    const gel = gels[0];
+    exacte = r1.status === 0 && gels.length === 1 && gel.lane === e.lane && gel.commit === e.gel &&
+      gel.parent === e.base && gel.tree === e.treeGel && gel.reviewed_event_seq === e.seq.reviewed &&
+      git(h.root, "rev-parse", `${e.gel}^`).trim() === e.base && treeDe(h.root, e.gel) === e.treeGel &&
+      teteDeLane(h.root, e.lane) === e.gel;
+    const apres1 = readFileSync(cheminLanes(h), "utf-8");
+    const r2 = recover(h.root, "W03", "adopt-frozen");
+    relance = r2.status === 0 && readFileSync(cheminLanes(h), "utf-8") === apres1;
+    detail = `${r1.sortie.trim().split("\n").at(-1)} · ${r2.sortie.trim().split("\n").at(-1)}`;
+
+    const racineAvant = teteDe(h.root);
+    const neuve = await h.recharger();
+    const rIntegre = await issue(() => neuve.outil.execute("1", revue("W03")));
+    PILOTE.resultat = undefined;
+    temoin = neuve.evenements().some((x) => x.event === "INTEGRATED" && x.work_unit === "W03") &&
+      teteDe(neuve.root) !== racineAvant;
+    if (!temoin) detail += ` · ${montrer(rIntegre)}`;
+  } finally { h.fin(); }
+
+  propriete(
+    exacte && relance && temoin && adoptees.length === 0 && defaites.length === 0 && nonRefusees.length === 0,
+    `adopt-frozen écrit le FROZEN canonique du gel exact (${exacte}), la relance n'ajoute rien ` +
+      `(${relance}), le runtime intègre ensuite (${temoin}) ; ` +
+      `${adoptees.length > 0 ? `variante fausse adoptée : ${adoptees.join(", ")}` : "aucune variante fausse adoptée"}, ` +
+      `refus manquants ${JSON.stringify(nonRefusees)}, reset ou fichiers touchés ${JSON.stringify(defaites)} ; ${detail}`,
+  );
 });
 
 // ================================================================== C2.4 — les deux hooks

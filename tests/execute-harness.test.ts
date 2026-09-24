@@ -27,7 +27,10 @@ import { join } from "node:path";
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
 import {
   acquireRunOwnership,
+  appendFrozenEvent,
+  appendIntegratedEvent,
   appendLaneEvent,
+  appendMergedEvent,
   laneAllocationSections,
   planHash,
   readManifest,
@@ -656,6 +659,37 @@ function ajouterV2(h: { runDir: string; runId: string }, docs: Array<Record<stri
 }
 
 /** Le commit que la racine porte maintenant : celui du merge qu'un scénario vient de faire. */
+/**
+ * La chaîne v2 d'une intégration de W03 déjà faite dans git (PLAN-LOT9 § 7.1) : la revue qui
+ * approuve le commit de la lane, son FROZEN, le MERGED du merge observé, puis l'INTEGRATED final.
+ */
+function chaineV2Integree(h: { root: string; runDir: string; runId: string }, bail: Lease, integration: string): void {
+  const lane = `${h.runId}-W03-g1`;
+  const rev = (x: string): string => execFileSync("git", ["rev-parse", x], { cwd: h.root, encoding: "utf-8" }).trim();
+  const dernierSeq = (): number => Number((JSON.parse(
+    readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8").trim().split("\n").at(-1)!,
+  ) as { event_seq: number }).event_seq);
+  const gel = rev(`pi-lane/${lane}`);
+  const parent = rev(`${gel}^`);
+  const tree = rev(`${gel}^{tree}`);
+  appendLaneEvent(h.runDir, {
+    event: "REVIEWED", work_unit: "W03", at: new Date().toISOString(), lane, from_tree: rev(`${parent}^{tree}`), tree,
+    verdict: "approved", reviewer: { delegation_seq: 1, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" },
+  }, bail);
+  appendFrozenEvent(h.runDir, {
+    event: "FROZEN", work_unit: "W03", at: new Date().toISOString(), lane, commit: gel, parent, tree,
+    reviewed_event_seq: dernierSeq(),
+  }, bail);
+  appendMergedEvent(h.runDir, {
+    event: "MERGED", work_unit: "W03", at: new Date().toISOString(), lane, integration_commit: integration,
+    frozen_event_seq: dernierSeq(),
+  }, bail);
+  appendIntegratedEvent(h.runDir, {
+    event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), lane, integration_commit: integration,
+    status: { outcome: "not-applicable" },
+  }, bail);
+}
+
 const teteRacine = (root: string): string =>
   execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf-8" }).trim();
 
@@ -692,10 +726,10 @@ test("un worktree sale après intégration ferme le run", async () => {
         lane: `${h.runId}-W03-g1`, generation: 1,
       },
       (bail as { lease: Lease }).lease);
-    // Sous v2 l'intégration porte son commit exact (C0 v1.8) : celui du merge observé.
-    appendLaneEvent(h.runDir,
-      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), integration_commit: teteRacine(h.root) },
-      (bail as { lease: Lease }).lease);
+    // PLAN-LOT9 § 7.1 : la préparation est une chaîne v2 valide — REVIEWED → FROZEN → MERGED →
+    // INTEGRATED { integration_commit, status } —, not-applicable sans design_update. Le gel est
+    // le commit de la lane ; l'intégration, le merge observé.
+    chaineV2Integree(h, (bail as { lease: Lease }).lease, teteRacine(h.root));
     releaseRunOwnership(h.runDir, (bail as { lease: Lease }).lease);
 
     reinitialiser();
@@ -829,10 +863,10 @@ test("une lane adoptée peut travailler puis s'intégrer sans reconflit", async 
     execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03-g1`],
       { cwd: h.root, stdio: "ignore" });
     const bail = acquireRunOwnership(h.runDir, h.runId, "s-poseur");
-    // Sous v2 l'intégration porte son commit exact (C0 v1.8) : celui du merge observé.
-    appendLaneEvent(h.runDir,
-      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), integration_commit: teteRacine(h.root) },
-      (bail as { lease: Lease }).lease);
+    // PLAN-LOT9 § 7.1 : la préparation est une chaîne v2 valide — REVIEWED → FROZEN → MERGED →
+    // INTEGRATED { integration_commit, status } —, not-applicable sans design_update. Le gel est
+    // le commit de la lane ; l'intégration, le merge observé.
+    chaineV2Integree(h, (bail as { lease: Lease }).lease, teteRacine(h.root));
     releaseRunOwnership(h.runDir, (bail as { lease: Lease }).lease);
 
     // Et la réconciliation suivante ne trouve rien à redire.
@@ -899,10 +933,10 @@ test("une lane divergée exige sa base, et la vérifie", async () => {
     execFileSync("git", ["merge", "--no-ff", "-m", "merge", `pi-lane/${h.runId}-W03-g1`],
       { cwd: h.root, stdio: "ignore" });
     const bail = acquireRunOwnership(h.runDir, h.runId, "s-poseur");
-    // Sous v2 l'intégration porte son commit exact (C0 v1.8) : celui du merge observé.
-    appendLaneEvent(h.runDir,
-      { event: "INTEGRATED", work_unit: "W03", at: new Date().toISOString(), integration_commit: teteRacine(h.root) },
-      (bail as { lease: Lease }).lease);
+    // PLAN-LOT9 § 7.1 : la préparation est une chaîne v2 valide — REVIEWED → FROZEN → MERGED →
+    // INTEGRATED { integration_commit, status } —, not-applicable sans design_update. Le gel est
+    // le commit de la lane ; l'intégration, le merge observé.
+    chaineV2Integree(h, (bail as { lease: Lease }).lease, teteRacine(h.root));
     releaseRunOwnership(h.runDir, (bail as { lease: Lease }).lease);
 
     const r = await h.outil.execute("1", tache("W09"));
@@ -3158,16 +3192,23 @@ test("un design_update ferme l'intégration avant le merge", async () => {
 });
 
 // L'autre moitié : sans design_update, l'intégration écrit la forme historique, et elle seule.
-test("sans design_update, l'intégration écrit l'INTEGRATED historique de C0 v1.8", async () => {
+test("sans design_update, l'intégration écrit MERGED puis l'INTEGRATED final not-applicable", async () => {
   const h = await monter();
   try {
     const r = await travaillerPuisApprouver(h);
     assert.match(texte(r), /intégrée : W03/, texte(r));
+    const merge = evenementsDe(h).filter((e) => e.event === "MERGED");
     const fin = evenementsDe(h).filter((e) => e.event === "INTEGRATED");
+    assert.equal(merge.length, 1);
     assert.equal(fin.length, 1);
-    assert.deepEqual(Object.keys(fin[0]).sort(), ["at", "event", "event_seq", "integration_commit", "lane", "work_unit"]);
+    assert.deepEqual(
+      Object.keys(fin[0]).sort(),
+      ["at", "event", "event_seq", "integration_commit", "lane", "status", "work_unit"],
+    );
+    assert.deepEqual(fin[0].status, { outcome: "not-applicable" });
     assert.equal(fin[0].lane, `${h.runId}-W03-g1`);
     assert.equal(fin[0].integration_commit, git(h.root, "rev-parse", "HEAD").trim());
+    assert.equal(fin[0].integration_commit, merge[0].integration_commit);
   } finally {
     h.done();
   }

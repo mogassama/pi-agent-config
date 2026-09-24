@@ -12,9 +12,10 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createHash, randomBytes } from "node:crypto";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
 import { actionLines, countsLine, reviewRisks, riskLines } from "../../subagent-only/counts.js";
@@ -44,8 +45,17 @@ import {
   appendLaneEvent,
   appendViolationEvent,
   appendFrozenEvent,
+  appendIntegratedEvent,
+  appendMergedEvent,
+  classerGel,
+  transitionsEnCours,
+  type TransitionEnCours,
   FrozenNotRecordedError,
   FrozenRefusedError,
+  integrationLedgerState,
+  laneState,
+  readIntegrationEvents,
+  readWitnesses,
   NotOwnerError,
   RiskNotRecordedError,
   ViolationNotRecordedError,
@@ -61,13 +71,15 @@ import {
   inspectRun,
   openRun,
   ownsRun,
+  poserBlocageContinuation,
+  RUN_CONTINUATION_BLOCKED,
   releaseRunOwnership,
   startHeartbeat,
   type Heartbeat,
   type Lease,
 } from "../../subagent-only/run-manifest.js";
 import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
-import { validerDesignUpdates } from "../../subagent-only/design-update.js";
+import { validerDesignUpdates, type DesignUpdate } from "../../subagent-only/design-update.js";
 import {
   SchedulerInputError,
   admettre,
@@ -106,11 +118,11 @@ import {
   type RunMetrics,
 } from "../../subagent-only/run-report.js";
 import {
-  commitFacts, commitLane, confirmIntegrations, ensureLane, freezeMessage, integrateLane, isMerged,
-  laneChanges, laneIsClean, laneTip, mergeMessage, openLanes, resetLaneTo, runBranches,
+  commitFacts, commitGelVide, commitLane, confirmIntegrations, ensureLane, freezeMessage, isMerged,
+  laneChanges, laneIsClean, laneTip, mergeLane, mergeMessage, openLanes, removeLane, resetLaneTo, runBranches,
 } from "../../subagent-only/worktree.js";
 import {
-  describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict,
+  describeConflicts, foldLedger, integrationCommits, reconcile, type Conflict, type IntegrationStatus,
   type LaneEvent, type ProofMode, type ReviewFact, type RiskFact, type ViolationFact, type ViolationKind,
 } from "../../subagent-only/lane-ledger.js";
 import {
@@ -118,11 +130,20 @@ import {
 } from "../../subagent-only/tree.js";
 import {
   commitIntegration,
+  commitStatut,
+  dirtyRoot,
+  fenetreDeReprise,
+  preuveMergeEffectue,
+  type MergeAttendu,
+  attribuerDesign,
+  instantaneDesign,
+  type InstantaneDesign,
   integrationReview,
   integrationTree,
   integrationsDir,
   landIntegration,
   openIntegration,
+  preuveCommitStatut,
   removeIntegration,
   supersedeAttempt,
   type IntegrationAttempt,
@@ -527,7 +548,7 @@ function reopenStaleAttempt(
 }
 
 type LandingRetry =
-  | { done: true; text: string }
+  | { done: true; text: string; details: DetailsIntegration }
   | { blocked: true; text: string };
 
 /**
@@ -561,19 +582,29 @@ function retryLanding(unit: string, etat: AttemptState, lease: Lease): LandingRe
         "aucun INTEGRATED.",
     };
   }
-  const atterri = landIntegration(process.cwd(), etat.landing!, (commit) =>
-    appendLaneEvent(
-      RUN_DIR,
-      { event: "INTEGRATED", work_unit: unit, at: new Date().toISOString(), integration_commit: commit },
-      lease,
-    ),
-  );
+  // L9-Q5, étape 1 : les transitions inachevées d'abord ; la racine propre, landIntegration la revalide.
+  const fermeReprise = reprendreTransitions(lease);
+  if (fermeReprise) {
+    return {
+      blocked: true,
+      text: `  NON INTÉGRABLE  ${unit} : ${fermeReprise}\n    ${etat.landing!.commit.slice(0, 12)} reste prêt à atterrir ; aucun merge.`,
+    };
+  }
+  const atterri = landIntegration(process.cwd(), etat.landing!, () => undefined);
   if (atterri.ok) {
-    noteAttempt({ event: "CLOSED", id: etat.attempt.id, outcome: "integrated" }, lease);
+    const fin = conclureAtterrissage(unit, etat.attempt, etat.landing!, lease);
+    if (!fin.ok) {
+      return {
+        blocked: true,
+        text:
+          `  INTÉGRATION INACHEVÉE  ${unit} : ${fin.raison}\n` +
+          "    l'atterrissage a eu lieu ; ce qui est durable reste, rien n'est défait.",
+      };
+    }
     ATTEMPTS.delete(unit);
     INTEGRATED.add(unit);
     OPEN_UNITS.delete(unit);
-    return { done: true, text: `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}` };
+    return { done: true, text: `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`, details: fin.details };
   }
   if (atterri.stale) {
     return { blocked: true, text: reopenStaleAttempt(unit, etat.attempt, lease, atterri.reason) };
@@ -890,34 +921,753 @@ function refusDesignUpdate(unit: string): string | undefined {
 }
 
 /**
- * Le gel d'une lane est-il consommé sans intégration (PLAN-LOT8 Q5, adjudication L8-A1) ?
+ * Le `design_update` d'une unité, tel que le plan gelé le porte (C6.1, PLAN-LOT9 L9-Q9).
  *
- * Oui seulement si une tentative de l'unité, ouverte sur ce commit exact, a été close
- * `returned-to-lane`, et qu'aucune autre tentative sur ce même gel n'est vivante ni
- * intégrée. Le même jugement que l'écrivain refait sous R ; ici, il choisit seulement
- * entre réutiliser le gel et en demander un nouveau.
+ * `undefined` : l'unité n'en porte pas. `"inconnu"` : l'unité ne se retrouve pas dans le texte
+ * du plan, ou sa désignation n'a pas la forme que C6.1 a validée — ne pas savoir n'est pas
+ * savoir qu'il est absent. Seule autorité de la phase Statut : jamais la prose du plan.
  */
-function gelConsomme(events: readonly IntegrationEvent[], unit: string, commit: string): boolean {
-  const tentatives = new Map<string, { p2: string; ferme?: string; remplacee: boolean }>();
-  for (const e of events) {
-    if (e.event === "ATTEMPT_OPENED") {
-      if (e.work_unit === unit) tentatives.set(e.id, { p2: e.p2, remplacee: false });
-    } else if (e.event === "CLOSED") {
-      const t = tentatives.get(e.id);
-      if (t) t.ferme = e.outcome;
-    } else if (e.event === "SUPERSEDED") {
-      const t = tentatives.get(e.id);
-      if (t) t.remplacee = true;
+function designUpdateDe(unit: string): DesignUpdate | undefined | "inconnu" {
+  let doc: unknown;
+  try {
+    doc = PLAN_TEXT === undefined ? undefined : JSON.parse(PLAN_TEXT);
+  } catch {
+    return "inconnu";
+  }
+  const unites = (doc as { work_units?: unknown } | undefined)?.work_units;
+  const entree = Array.isArray(unites)
+    ? unites.find((u) =>
+      typeof u === "object" && u !== null && !Array.isArray(u) &&
+      typeof (u as { id?: unknown }).id === "string" && (u as { id: string }).id.trim() === unit)
+    : undefined;
+  if (entree === undefined) return "inconnu";
+  if (!("design_update" in (entree as object))) return undefined;
+  const du = (entree as { design_update: unknown }).design_update;
+  if (typeof du !== "object" || du === null || Array.isArray(du)) return "inconnu";
+  const { decision_id, from_status, to_status } = du as Record<string, unknown>;
+  if (Object.keys(du).length !== 3 || typeof decision_id !== "string" || typeof from_status !== "string" ||
+    typeof to_status !== "string") {
+    return "inconnu";
+  }
+  return { decision_id, from_status, to_status };
+}
+
+/** La sortie publique d'une intégration aboutie (C5.7), relue au registre autoritaire. */
+interface DetailsIntegration {
+  outcome: "integrated";
+  work_unit: string;
+  lane: string;
+  integration_commit: string;
+  integrated_event_seq: number;
+  status: IntegrationStatus;
+}
+
+type IssueFinale =
+  | { ok: true; details: DetailsIntegration }
+  | { ok: false; etape: "section" | "registres" | "merged" | "statut" | "integrated" | "relecture"; raison: string };
+
+/**
+ * Les registres sur lesquels une transition d'intégration se fonde, relus maintenant
+ * (PLAN-LOT9 L9-Q18) : lanes KNOWN v2 ; intégrations KNOWN, ou EMPTY sur le chemin sans
+ * tentative. Rend la raison du refus, ou `undefined`.
+ */
+function registresInexploitables(avecTentative: boolean): string | undefined {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    if (!lu.present || lu.version !== LANE_LEDGER_V2) return "le registre des lanes n'est pas un registre v2 présent";
+    const temoins = readWitnesses(RUN_DIR, RUN_ID);
+    const etatLanes = laneState(temoins, { ...lu, version: lu.version }, RUN_ID);
+    if (etatLanes !== "KNOWN") return `registre des lanes ${etatLanes}`;
+    const etatIntegrations = integrationLedgerState(temoins, readIntegrationEvents(RUN_DIR, RUN_ID), etatLanes);
+    if (etatIntegrations !== "KNOWN" && (avecTentative || etatIntegrations !== "EMPTY")) {
+      return `registre des intégrations ${etatIntegrations}`;
+    }
+    return undefined;
+  } catch (err) {
+    return `registres illisibles : ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/**
+ * Le finaliseur commun de l'intégration (PLAN-LOT9 L9-Q5 étapes 5 à 9, L9-Q13).
+ *
+ * Préparé à l'étape 3 du LOT 9, et appelé par personne : les appelants basculent à l'étape 5
+ * (chemin ordinaire, atterrissage, `retryLanding`) et la reprise des fenêtres à l'étape 6.
+ *
+ * Il part d'un merge DÉJÀ réel dont `integrationCommit` est la preuve, et enchaîne, chaque
+ * étape reprenant ce qui est déjà durable au lieu de le refaire :
+ *
+ *   autorité      le `design_update` du plan gelé s'établit AVANT MERGED ; inconnu, rien
+ *                 n'est écrit
+ *   MERGED        écrit sur le gel vivant ; déjà présent, il doit porter ce même commit
+ *   Statut        C6.2 depuis ce `design_update` : not-applicable sans lui, racine propre
+ *                 sur integration_commit exigée ;
+ *                 HEAD = integration_commit → `commitStatut` ; HEAD posé sur lui → le commit
+ *                 de Statut s'adopte seulement s'il se prouve exactement (L9-Q8)
+ *   INTEGRATED    final, avec son `status`
+ *   relecture     `details.integration` se construit sur l'événement durable relu, jamais
+ *                 sur ce que le finaliseur croit avoir écrit (C5.7)
+ *   clôture       la tentative, s'il y en a une ; puis la lane et le contexte sont retirés
+ *
+ * Aucune dépendance n'est rejugée (L9-Q15). Tout échec avant INTEGRATED laisse ce qui est
+ * durable en place — MERGED conservé, aucun INTEGRATED — et nomme l'étape.
+ */
+function finaliserIntegration(
+  f: { unit: string; laneId: string; integrationCommit: string; attemptId?: string; clore?: () => void },
+  lease: Lease,
+): IssueFinale {
+  const root = process.cwd();
+  const at = (): string => new Date().toISOString();
+  const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+  const inexploitables = registresInexploitables(f.attemptId !== undefined);
+  if (inexploitables) return { ok: false, etape: "registres", raison: inexploitables };
+  // L'autorité de la phase Statut s'établit avant MERGED : ce qui ne s'établirait qu'après
+  // laisserait un MERGED qu'aucun Statut ne suivrait.
+  const du = designUpdateDe(f.unit);
+  if (du === "inconnu") {
+    return { ok: false, etape: "statut", raison: `design_update de ${f.unit} impossible à établir dans le plan gelé` };
+  }
+
+  // ---- MERGED
+  const etat = classerGel(
+    readLaneEvents(RUN_DIR, RUN_ID).events, f.laneId, f.unit, readIntegrationEvents(RUN_DIR, RUN_ID).events,
+  );
+  if (etat.etat === "vivant") {
+    try {
+      appendMergedEvent(RUN_DIR, {
+        event: "MERGED", work_unit: f.unit, at: at(), lane: f.laneId,
+        integration_commit: f.integrationCommit, frozen_event_seq: etat.gel.event_seq,
+      }, lease);
+    } catch (err) {
+      return { ok: false, etape: "merged", raison: message(err) };
+    }
+  } else if (etat.etat === "fusionne" && !etat.integre) {
+    if (etat.merged.integration_commit !== f.integrationCommit) {
+      return {
+        ok: false,
+        etape: "merged",
+        raison: `le MERGED durable porte ${etat.merged.integration_commit.slice(0, 12)}, pas ` +
+          `${f.integrationCommit.slice(0, 12)} ; rien ne s'infère`,
+      };
+    }
+  } else {
+    return { ok: false, etape: "merged", raison: `aucun gel à consommer sur ${f.laneId} (${etat.etat})` };
+  }
+
+  // ---- Statut (C6.2)
+  let status: IntegrationStatus;
+  if (du === undefined) {
+    // Rien à écrire, mais rien d'autre non plus : la racine est le commit d'intégration, propre.
+    const sale = dirtyRoot(root);
+    if (baseCommit() !== f.integrationCommit || sale.length > 0) {
+      return {
+        ok: false,
+        etape: "statut",
+        raison: `la racine n'est pas le commit d'intégration ${f.integrationCommit.slice(0, 12)}, propre ` +
+          `(${sale.length > 0 ? `sale : ${sale.slice(0, 3).join(", ")}` : "HEAD ailleurs"})`,
+      };
+    }
+    status = { outcome: "not-applicable" };
+  } else {
+    // Après MERGED, aucun commit de Statut sur un registre qui n'est plus exploitable.
+    const avantStatut = registresInexploitables(f.attemptId !== undefined);
+    if (avantStatut) return { ok: false, etape: "registres", raison: avantStatut };
+    if (baseCommit() === f.integrationCommit) {
+      const r = commitStatut(root, f.integrationCommit, du);
+      if (!r.ok) return { ok: false, etape: "statut", raison: r.raison };
+      status = r.outcome === "unchanged"
+        ? { outcome: "unchanged", decision_id: du.decision_id, target_status: du.to_status }
+        : { outcome: "committed", decision_id: du.decision_id, target_status: du.to_status, status_commit: r.commit };
+    } else {
+      const preuve = preuveCommitStatut(root, f.integrationCommit, du);
+      if (!preuve.ok) return { ok: false, etape: "statut", raison: preuve.raison };
+      status = { outcome: "committed", decision_id: du.decision_id, target_status: du.to_status, status_commit: preuve.commit };
     }
   }
-  const surCeGel = [...tentatives.values()].filter((t) => t.p2 === commit);
-  return surCeGel.some((t) => t.ferme === "returned-to-lane") &&
-    !surCeGel.some((t) => (t.ferme === undefined && !t.remplacee) || t.ferme === "integrated");
+
+  // ---- INTEGRATED final
+  try {
+    appendIntegratedEvent(RUN_DIR, {
+      event: "INTEGRATED", work_unit: f.unit, at: at(), lane: f.laneId, integration_commit: f.integrationCommit, status,
+    }, lease);
+  } catch (err) {
+    return { ok: false, etape: "integrated", raison: message(err) };
+  }
+
+  // ---- relecture : la sortie publique est ce que le registre porte
+  let durable: LaneEvent | undefined;
+  for (const e of readLaneEvents(RUN_DIR, RUN_ID).events) {
+    if (e.event === "INTEGRATED" && "lane" in e && e.lane === f.laneId && e.status !== undefined) durable = e;
+  }
+  if (durable === undefined || durable.event !== "INTEGRATED" || !("lane" in durable) || durable.status === undefined ||
+    durable.integration_commit !== f.integrationCommit) {
+    return { ok: false, etape: "relecture", raison: "l'INTEGRATED écrit ne se relit pas à l'identique" };
+  }
+  const details: DetailsIntegration = {
+    outcome: "integrated",
+    work_unit: f.unit,
+    lane: f.laneId,
+    integration_commit: durable.integration_commit,
+    integrated_event_seq: durable.event_seq,
+    status: durable.status,
+  };
+
+  // ---- clôture, puis nettoyage : après INTEGRATED durable, jamais avant
+  if (f.attemptId !== undefined) {
+    try {
+      // La clôture de la tentative appartient à qui l'a menée : l'atterrissage, ou sa reprise.
+      f.clore?.();
+      removeIntegration(root, f.attemptId);
+    } catch {
+      // Un résidu de tentative se nettoie à la reprise ; l'intégration, elle, est durable.
+    }
+  }
+  removeLane(root, f.laneId);
+  return { ok: true, details };
+}
+
+/*
+ * La section critique de l'intégration (PLAN-LOT9 L9-Q5).
+ *
+ * Une seule transition à la fois, sans jeton durable nouveau : entre sessions, le bail du run
+ * n'admet qu'un propriétaire ; dans la session, la reprise, le merge, la preuve et le
+ * finaliseur s'enchaînent sans aucun point d'attente, donc sans qu'une autre délégation puisse
+ * s'intercaler. Ce verrou le rend vérifiable : une réentrée refuse, elle n'attend pas.
+ */
+let INTEGRATION_EN_COURS: string | undefined;
+function sectionCritique<T>(quoi: string, fn: () => T): T | { ok: false; etape: "section"; raison: string } {
+  if (INTEGRATION_EN_COURS !== undefined) {
+    return {
+      ok: false,
+      etape: "section",
+      raison: `une transition d'intégration est déjà en cours (${INTEGRATION_EN_COURS}) : ${quoi} refusée`,
+    };
+  }
+  INTEGRATION_EN_COURS = quoi;
+  try {
+    return fn();
+  } finally {
+    INTEGRATION_EN_COURS = undefined;
+    // C6.4 concurrent : une observation en attente d'attribution se juge à la sortie.
+    reevaluerAttributions(true);
+  }
+}
+
+/** C5.1 : ce qui salit la racine, DESIGN.md compris. Vide : la racine est propre. */
+function racineSale(): string | undefined {
+  const sale = dirtyRoot(process.cwd());
+  return sale.length === 0
+    ? undefined
+    : `racine sale (${sale.slice(0, 3).join(", ")}${sale.length > 3 ? " …" : ""}) : aucune intégration, la lane est conservée (C5.1)`;
+}
+
+/**
+ * Le merge réel vient d'avoir lieu : le prouver EXACTEMENT, puis finaliser (L9-Q6, B-3).
+ *
+ * Aucun MERGED ne s'écrit sur la seule existence d'un commit : la preuve git — racine propre,
+ * deux parents, le gel en second, et le merge propre recalculé (mode ordinaire, sans aucun
+ * message) ou commit, `p1` et `T_I` connus (mode tentative) — précède l'append. Qu'aucun MERGED
+ * ne consomme déjà ce gel, l'écrivain de MERGED le refuse sous le même bail. Sans preuve, rien
+ * n'est écrit : la fenêtre reste « après merge, avant MERGED », et la reprise la jugera sur la
+ * même preuve.
+ */
+function conclureIntegration(
+  c: { unit: string; laneId: string; attendu: MergeAttendu; attemptId?: string; clore?: () => void },
+  lease: Lease,
+): IssueFinale {
+  return sectionCritique(`intégration de ${c.unit}`, (): IssueFinale => {
+    const preuve = preuveMergeEffectue(process.cwd(), c.attendu);
+    if (!preuve.ok) return { ok: false, etape: "merged", raison: `merge non prouvé : ${preuve.raison} ; aucun MERGED` };
+    return finaliserIntegration(
+      { unit: c.unit, laneId: c.laneId, integrationCommit: preuve.commit, attemptId: c.attemptId, clore: c.clore },
+      lease,
+    );
+  });
+}
+
+/** L'atterrissage de `M` vient d'avoir lieu : sa preuve exacte (commit, p1, p2 = gel, T_I), puis le finaliseur. */
+function conclureAtterrissage(
+  unit: string,
+  attempt: Pick<IntegrationAttempt, "id" | "p1" | "p2">,
+  m: IntegrationCommit,
+  lease: Lease,
+): IssueFinale {
+  const laneId = laneCouranteDe(unit);
+  if (laneId === undefined) return { ok: false, etape: "merged", raison: `aucune lane ouverte pour ${unit} au registre` };
+  return conclureIntegration(
+    {
+      unit, laneId, attendu: { mode: "tentative", gel: attempt.p2, commit: m.commit, p1: m.p1, tree: m.tree }, attemptId: attempt.id,
+      clore: () => noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "integrated" }, lease),
+    },
+    lease,
+  );
+}
+
+/** La lane courante d'une unité, telle que le registre v2 la nomme. */
+function laneCouranteDe(unit: string): string | undefined {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    return lu.version === LANE_LEDGER_V2 ? laneOfUnit(lu.events, LANE_LEDGER_V2, RUN_ID, unit)?.laneId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * La reprise en tête de délégation : seulement s'il existe une fenêtre « après merge » à reprendre.
+ * Aucune n'existe — cas ordinaire — : rien n'est lu au-delà du registre, le bail n'est pas pris.
+ */
+function reprendreEnTete(): void {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    if (!lu.present || lu.version !== LANE_LEDGER_V2) return;
+    const candidates = transitionsEnCours(lu.events, readIntegrationEvents(RUN_DIR, RUN_ID).events)
+      .filter((t) => t.fenetre === "gel-vivant" && fenetreDeReprise(process.cwd(), { gel: t.gel.commit }).fenetre === "apres-merge");
+    if (candidates.length === 0) return;
+    const bail = ensureOwnership();
+    if ("refus" in bail) return;
+    reprendreTransitions(bail.lease);
+  } catch {
+    // Illisible : la porte de reprise et les registres le diront, avec leur propre refus.
+  }
+}
+
+/**
+ * L9-Q5, étape 1 : reprendre ou valider toute transition d'intégration inachevée, avant toute
+ * autre intégration.
+ *
+ * Étape 5 du LOT 9 : seule la fenêtre « après merge, avant MERGED » d'une unité SANS
+ * `design_update` se reprend, sur preuve exacte (L9-Q6). Toute autre transition inachevée —
+ * après MERGED (étape 6), une unité portant un `design_update`, une histoire contradictoire, une
+ * preuve qui ne s'établit pas — ferme les intégrations suivantes, nommée, sans rien inférer ni
+ * défaire. Rend la raison de la fermeture, ou `undefined`.
+ */
+function reprendreTransitions(lease: Lease): string | undefined {
+  const raison = jugerTransitions(lease);
+  // C6.4 concurrent : la tentative de reprise résout les attributions en attente.
+  reevaluerAttributions(true);
+  if (raison === undefined && refusDeGarde()) {
+    return "continuation bloquée (C6.6) : DESIGN.md a été modifié hors de la garde ; aucune intégration";
+  }
+  return raison;
+}
+
+function jugerTransitions(lease: Lease): string | undefined {
+  const root = process.cwd();
+  let transitions: TransitionEnCours[];
+  let integ: IntegrationEvent[];
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    if (!lu.present || lu.version !== LANE_LEDGER_V2) return undefined;
+    integ = readIntegrationEvents(RUN_DIR, RUN_ID).events;
+    transitions = transitionsEnCours(lu.events, integ);
+  } catch (err) {
+    return `transitions d'intégration illisibles : ${err instanceof Error ? err.message : String(err)}`;
+  }
+  for (const t of transitions) {
+    if (t.fenetre === "contradiction") return `transition contradictoire sur ${t.lane} : ${t.raison}`;
+    if (t.fenetre === "merged") {
+      return `${t.work_unit} porte MERGED sans INTEGRATED (${t.merged.integration_commit.slice(0, 12)}) : ` +
+        "reprise après MERGED non encore active ; aucune autre intégration";
+    }
+    const fenetre = fenetreDeReprise(root, { gel: t.gel.commit });
+    if (fenetre.fenetre === "aucune") continue;
+    if (fenetre.fenetre === "contradiction") return `transition de ${t.work_unit} : ${fenetre.raison}`;
+    if (designUpdateDe(t.work_unit) !== undefined) {
+      return `${t.work_unit} est mergée sans MERGED et porte un design_update (ou ne se retrouve pas dans ` +
+        "le plan) : sa reprise n'est pas encore active ; aucune autre intégration";
+    }
+    // La tentative vivante sur ce gel, si le merge est un atterrissage : son commit, p1 et T_I.
+    let tentative: { id: string; p1: string; commit?: string; tree?: string; close: boolean } | undefined;
+    for (const e of integ) {
+      if (e.event === "ATTEMPT_OPENED" && e.work_unit === t.work_unit && e.p2 === t.gel.commit) {
+        tentative = { id: e.id, p1: e.p1, close: false };
+      } else if (tentative && e.id === tentative.id) {
+        if (e.event === "COMMITTED") { tentative.commit = e.commit; tentative.tree = e.tree; }
+        else if (e.event === "CLOSED" || e.event === "SUPERSEDED") tentative.close = true;
+      }
+    }
+    const attendu: MergeAttendu = tentative && !tentative.close && tentative.commit !== undefined && tentative.tree !== undefined
+      ? { mode: "tentative", gel: t.gel.commit, commit: tentative.commit, p1: tentative.p1, tree: tentative.tree }
+      : { mode: "ordinaire", gel: t.gel.commit };
+    const fin = conclureIntegration(
+      {
+        unit: t.work_unit, laneId: t.lane, attendu,
+        attemptId: attendu.mode === "tentative" ? tentative?.id : undefined,
+        clore: () => {
+          if (attendu.mode === "tentative" && tentative) {
+            noteAttempt({ event: "CLOSED", id: tentative.id, outcome: "integrated" }, lease);
+          }
+        },
+      },
+      lease,
+    );
+    if (!fin.ok) return `reprise de ${t.work_unit} après merge refusée (${fin.etape}) : ${fin.raison}`;
+    INTEGRATED.add(t.work_unit);
+    OPEN_UNITS.delete(t.work_unit);
+    ATTEMPTS.delete(t.work_unit);
+  }
+  return undefined;
+}
+
+// ================================================================== C6.4 / C6.6 — la garde de DESIGN.md
+
+/*
+ * L'orchestrateur ne modifie plus le DESIGN.md canonique dès que le plan est gelé (C6.4,
+ * PLAN-LOT9 L9-Q10 et L9-Q17). Deux niveaux :
+ *
+ *   avant l'appel     `tool_call` de `write`, `edit` ou `bash` : toute destination
+ *                     détectable vers DESIGN.md — relative, absolue, lien symbolique ou lien
+ *                     dur — est refusée, SANS blocage durable : refuser n'est pas constater
+ *   après l'appel     `tool_result`, et lui seul : l'état de DESIGN.md, mémorisé par
+ *                     `toolCallId` avant tout appel autorisé, est relu — même si l'outil a
+ *                     échoué. Changé, c'est un contournement : `continuation_block` est posé
+ *                     aussitôt, durable et immuable (C6.6)
+ *
+ * La garde vise DESIGN.md et lui seul (C6.5) ; les protections des enfants restent celles
+ * de `role-guard`. L'écriture légitime du Statut passe par la capacité interne du runtime,
+ * jamais par ces outils.
+ */
+
+/** Le DESIGN.md canonique de la racine. */
+function designCanonique(): string {
+  return join(process.cwd(), "DESIGN.md");
+}
+
+/** La garde s'applique dès qu'un plan gelé est présent. Lecture pure : rien n'est mémorisé. */
+function gardeDesignActive(): boolean {
+  try {
+    return parsePlan(readFileSync(join(process.cwd(), RUNS_DIR, `${RUN_ID}-plan.json`), "utf-8")).status === "usable";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Un chemin tel que `write` et `edit` le résolvent dans pi 0.86 (`resolveToCwd`) : espaces
+ * Unicode normalisés, `@` initial retiré, `~` développé, URL `file://` convertie. Sans cette
+ * lecture, `@DESIGN.md` ou `~/…/DESIGN.md` échapperaient à l'avant-appel.
+ */
+function cheminOutil(chemin: string): string {
+  let c = chemin.replace(/[  -   　]/g, " ");
+  if (c.startsWith("@")) c = c.slice(1);
+  if (/^file:\/\//.test(c)) {
+    try {
+      return fileURLToPath(c);
+    } catch {
+      return c;
+    }
+  }
+  return tilde(c);
+}
+
+/** `~` et `~/…` développés, comme le font le shell et pi. */
+function tilde(chemin: string): string {
+  if (chemin === "~") return homedir();
+  return chemin.startsWith("~/") ? join(homedir(), chemin.slice(2)) : chemin;
+}
+
+/** Ce chemin désigne-t-il le DESIGN.md canonique — directement, par lien symbolique ou dur ? */
+function designeDesign(chemin: string): boolean {
+  const cible = designCanonique();
+  const absolu = resolve(process.cwd(), chemin);
+  if (absolu === cible) return true;
+  try {
+    const reel = realpathSync(absolu);
+    const reelCible = realpathSync(cible);
+    if (reel === reelCible) return true;
+    const a = statSync(reel);
+    const b = statSync(reelCible);
+    if (a.dev === b.dev && a.ino === b.ino) return true;
+  } catch {
+    // L'un des deux n'existe pas : le parent réel décide encore d'une création par un lien.
+  }
+  try {
+    return join(realpathSync(dirname(absolu)), basename(absolu)) === join(realpathSync(dirname(cible)), basename(cible));
+  } catch {
+    return false;
+  }
+}
+
+/** Les commandes dont chaque argument non optionnel est un fichier écrit, modifié ou supprimé. */
+const COMMANDES_MUTANTES = new Set([
+  "tee", "rm", "unlink", "truncate", "touch", "chmod", "chown", "chgrp", "shred", "patch", "ed", "ex",
+]);
+/** Celles qui copient, déplacent ou lient vers une cible : le dernier argument, ou `-t`. */
+const COMMANDES_A_CIBLE = new Set(["cp", "mv", "install", "ln", "rsync"]);
+/** Les préfixes qui exécutent la commande qui les suit. */
+const PREFIXES_SHELL = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice"]);
+/** Les sous-commandes git qui réécrivent ou suppriment les chemins qu'elles nomment. */
+const GIT_MUTANTES = new Set(["checkout", "restore", "mv", "rm"]);
+
+/** La commande sans le corps de ses here-documents : un corps est une donnée, pas une commande. */
+function sansHereDocs(commande: string): string {
+  const lignes = commande.split("\n");
+  const gardees: string[] = [];
+  const attendus: string[] = [];
+  for (const ligne of lignes) {
+    if (attendus.length > 0) {
+      if (ligne.replace(/^\t+/, "") === attendus[0]) attendus.shift();
+      continue;
+    }
+    gardees.push(ligne);
+    for (const m of ligne.matchAll(/<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/g)) attendus.push(m[2]);
+  }
+  return gardees.join("\n");
+}
+
+/**
+ * Les destinations qu'une commande shell désigne de façon détectable : cibles de redirection,
+ * arguments des commandes mutantes, cible d'une copie, d'un déplacement ou d'un lien (et, vers
+ * un répertoire, le fichier qu'elle y crée), fichiers d'un `sed -i` / `perl -i`, `of=` de `dd`,
+ * chemins d'un `git checkout|restore|mv|rm`. Ce qui échappe à cette lecture n'est pas autorisé
+ * pour autant : l'après-appel le constate.
+ */
+function destinationsBash(commande: string): string[] {
+  const mots: Array<{ mot: string; op: boolean }> = [];
+  const motif = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\d*(?:>>|>\||>&|>)|&>>?|<<<|<<-?|<|[|;&()\n]+)|([^\s"'|;&()<>]+)/g;
+  for (const m of sansHereDocs(commande).matchAll(motif)) {
+    if (m[3] !== undefined) mots.push({ mot: m[3], op: true });
+    else mots.push({ mot: m[1] ?? m[2] ?? m[4] ?? "", op: false });
+  }
+  const destinations: string[] = [];
+  let segment: string[] = [];
+  const nonOptions = (args: string[]): string[] => args.filter((a) => a !== "" && !a.startsWith("-"));
+  const clore = (): void => {
+    let ms = segment;
+    segment = [];
+    // Affectations et préfixes d'exécution : la commande est ce qui suit.
+    for (;;) {
+      const [t] = ms;
+      if (t === undefined) return;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ms = ms.slice(1);
+      else if (PREFIXES_SHELL.has(basename(t))) {
+        ms = ms.slice(1);
+        while (ms[0]?.startsWith("-")) ms = ms.slice(1);
+      } else break;
+    }
+    const [tete, ...args] = ms;
+    const nom = basename(tete);
+    if (COMMANDES_MUTANTES.has(nom)) {
+      destinations.push(...nonOptions(args));
+    } else if (nom === "dd") {
+      for (const a of args) if (a.startsWith("of=")) destinations.push(a.slice(3));
+    } else if ((nom === "sed" || nom === "perl") && args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place"))) {
+      destinations.push(...nonOptions(args));
+    } else if (nom === "git") {
+      let i = 0;
+      while (i < args.length && args[i].startsWith("-")) i += args[i] === "-C" || args[i] === "-c" ? 2 : 1;
+      if (GIT_MUTANTES.has(args[i] ?? "")) destinations.push(...nonOptions(args.slice(i + 1)));
+    } else if (COMMANDES_A_CIBLE.has(nom)) {
+      let cible: string | undefined;
+      const sources: string[] = [];
+      for (let i = 0; i < args.length; i += 1) {
+        const a = args[i];
+        if (a === "-t" || a === "--target-directory") cible = args[++i];
+        else if (a.startsWith("--target-directory=")) cible = a.slice("--target-directory=".length);
+        else if (!a.startsWith("-")) sources.push(a);
+      }
+      const versRepertoire = cible !== undefined;
+      cible ??= sources.pop();
+      if (cible === undefined) return;
+      const c = tilde(cible);
+      destinations.push(c);
+      let repertoire = versRepertoire || c.endsWith("/");
+      try {
+        repertoire ||= statSync(resolve(process.cwd(), c)).isDirectory();
+      } catch {
+        // Cible absente : c'est un fichier que la commande crée.
+      }
+      if (repertoire) for (const s of sources) destinations.push(join(c, basename(s)));
+      // `mv` supprime aussi ses sources.
+      if (nom === "mv") destinations.push(...sources);
+    }
+  };
+  for (let i = 0; i < mots.length; i += 1) {
+    const { mot, op } = mots[i];
+    if (op) {
+      const suivant = mots[i + 1];
+      if (/^\d*(>>|>\||>)$|^&>>?$/.test(mot) && suivant !== undefined && !suivant.op) {
+        destinations.push(suivant.mot);
+        i += 1;
+        continue;
+      }
+      // Une entrée (`<`, here-string, here-doc) est une lecture : son mot n'est pas un argument.
+      if (/^(<|<<<|<<-?)$/.test(mot)) {
+        if (suivant !== undefined && !suivant.op) i += 1;
+        continue;
+      }
+      if (/^\d*>&$/.test(mot)) {
+        if (suivant !== undefined && !suivant.op) i += 1;
+        continue;
+      }
+      clore();
+      continue;
+    }
+    segment.push(mot);
+  }
+  clore();
+  return destinations.filter((d) => d !== "" && !d.startsWith("-")).map(tilde);
+}
+
+/**
+ * L'état observable de DESIGN.md : absent, ou sa nature, son mode et l'empreinte de son contenu.
+ * Pour un lien symbolique, le texte du lien ET le contenu de sa cible : une écriture à travers
+ * la cible change le fichier sans toucher au lien.
+ */
+function etatDesign(): string {
+  const chemin = designCanonique();
+  const empreinte = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
+  try {
+    const l = lstatSync(chemin);
+    if (l.isSymbolicLink()) {
+      let contenu = "cible illisible";
+      try {
+        contenu = empreinte(readFileSync(chemin));
+      } catch {
+        // Cible absente ou non lisible : le texte du lien reste observé.
+      }
+      return `${l.mode}:lien:${readlinkSync(chemin)}:${contenu}`;
+    }
+    return `${l.mode}:${empreinte(l.isFile() ? readFileSync(chemin) : Buffer.from(""))}`;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : `illisible:${String(err)}`;
+  }
+}
+
+/**
+ * L'instantané avant chaque appel autorisé, par `toolCallId` : l'état de DESIGN.md, HEAD et
+ * DESIGN.md conforme ou non à HEAD, et la position du registre des lanes — les faits
+ * autoritaires qui expliquent une variation sont ceux apparus depuis.
+ */
+interface ObservationDesign {
+  etat: string;
+  instantane: InstantaneDesign;
+  registre: number;
+}
+const OBSERVATIONS_DESIGN = new Map<string, ObservationDesign>();
+/** Les observations dont l'attribution attend la résolution d'une transition d'intégration. */
+const ATTRIBUTIONS_EN_ATTENTE: ObservationDesign[] = [];
+
+function observerDesign(): ObservationDesign {
+  // Illisible : 0. Seuls comptent de toute façon les commits de la chaîne depuis l'ancien HEAD.
+  let registre = 0;
+  try {
+    registre = readLaneEvents(RUN_DIR, RUN_ID).events.length;
+  } catch {
+    // Voir ci-dessus.
+  }
+  return { etat: etatDesign(), instantane: instantaneDesign(process.cwd()), registre };
+}
+
+/**
+ * C6.4 concurrent (adjudication de B, point 3). Plusieurs outils peuvent s'exécuter en même
+ * temps : « DESIGN.md a changé pendant l'appel » n'implique pas « cet outil l'a modifié ».
+ * La variation n'est attribuée à l'outil observé qu'après soustraction exacte des transitions
+ * du runtime attestées depuis l'instantané — les `MERGED` d'une lane classée `fusionne` (et
+ * les commits de Statut d'un `INTEGRATED`) apparus au registre. Une observation faite pendant
+ * une transition inachevée — un merge réel du gel vivant dont MERGED n'est pas encore écrit —
+ * attend ; elle ne pose pas de blocage irréversible avant la résolution. `task` garde son
+ * exécution parallèle.
+ */
+function jugerObservation(o: ObservationDesign, apresReprise: boolean): "explique" | "en-attente" | "non-explique" {
+  if (etatDesign() === o.etat) return "explique";
+  if (INTEGRATION_EN_COURS !== undefined) return "en-attente";
+  const autorite = new Set<string>();
+  const gelsVivants = new Set<string>();
+  const immobile = baseCommit() === o.instantane.tete;
+  if (!immobile) {
+    try {
+      const events = readLaneEvents(RUN_DIR, RUN_ID).events;
+      const integ = readIntegrationEvents(RUN_DIR, RUN_ID).events;
+      events.forEach((e, i) => {
+        if (i < o.registre || !("lane" in e)) return;
+        if (e.event === "MERGED" && classerGel(events, e.lane, e.work_unit, integ).etat === "fusionne") {
+          autorite.add(e.integration_commit);
+        } else if (e.event === "INTEGRATED" && "status" in e) {
+          const s = e.status as { status_commit?: unknown } | undefined;
+          if (typeof s?.status_commit === "string") autorite.add(s.status_commit);
+        }
+      });
+      for (const t of transitionsEnCours(events, integ)) if (t.fenetre === "gel-vivant") gelsVivants.add(t.gel.commit);
+    } catch {
+      /*
+       * DESIGN.md a varié et les faits autoritaires nécessaires à son attribution
+       * sont illisibles. Cette incertitude ne peut pas rester uniquement en mémoire :
+       * un redémarrage ferait disparaître l'observation. Fail-closed.
+       */
+      return "non-explique";
+    }
+  }
+  return attribuerDesign(process.cwd(), o.instantane, { autorite, gelsVivants }, apresReprise).verdict;
+}
+
+/** Après un appel observé dont DESIGN.md a varié : bloquer, attendre, ou rien. */
+function attribuerApresAppel(o: ObservationDesign): void {
+  const v = jugerObservation(o, false);
+  if (v === "non-explique") bloquerContinuation();
+  else if (v === "en-attente") ATTRIBUTIONS_EN_ATTENTE.push(o);
+}
+
+/**
+ * Rejuger les observations en attente. `apresReprise` : une transition vient d'être résolue
+ * ou tentée — ce qui reste hors du merge encore inachevé se juge désormais.
+ */
+function reevaluerAttributions(apresReprise: boolean): void {
+  for (const o of ATTRIBUTIONS_EN_ATTENTE.splice(0)) {
+    const v = jugerObservation(o, apresReprise);
+    if (v === "non-explique") bloquerContinuation();
+    else if (v === "en-attente") ATTRIBUTIONS_EN_ATTENTE.push(o);
+  }
+}
+/** Le blocage constaté par cette session, même si son écriture durable a échoué. */
+let BLOCAGE_SESSION: { at: string; code: typeof RUN_CONTINUATION_BLOCKED } | undefined;
+
+/**
+ * Poser le blocage durable (C6.6). C'est une mutation du run : la propriété se prend ici si
+ * aucune délégation ne l'a encore prise. Sans elle, ou en échec, la session se bloque quand
+ * même, et le dit.
+ */
+function bloquerContinuation(): void {
+  const at = new Date().toISOString();
+  BLOCAGE_SESSION ??= { at, code: RUN_CONTINUATION_BLOCKED };
+  try {
+    const bail = ensureOwnership();
+    if ("refus" in bail) throw new Error(bail.refus);
+    const m = poserBlocageContinuation(RUN_DIR, at, bail.lease);
+    if (m.continuation_block) BLOCAGE_SESSION = m.continuation_block;
+  } catch (err) {
+    console.error(`subagent: continuation_block non écrit : ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** Le refus public de `task` sous blocage (C6.6), ou `undefined`. Rien n'est muté pour le lire. */
+function refusDeGarde() {
+  let bloc = BLOCAGE_SESSION;
+  try {
+    bloc = readManifest(RUN_DIR)?.continuation_block ?? bloc;
+  } catch {
+    // Un manifeste illisible se juge plus loin, par les chemins qui le lisent déjà.
+  }
+  if (!bloc) return undefined;
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `[run: continuation bloquée] ${bloc.code} posé le ${bloc.at} : DESIGN.md a été modifié ` +
+        "hors de la garde (C6.4). Aucune délégation, aucune séquence, aucun registre : le run " +
+        "reste non terminal, sans reset. Ce qui a été écrit reste visible ; la sortie est " +
+        "l'abandon explicite du run (bin/subagent-recover run abandoned).",
+    }],
+    details: { run_guard: { outcome: "blocked" as const, code: bloc.code } },
+    isError: true,
+  };
 }
 
 /**
  * L'issue du gel : le commit gelé et son tree, ou la raison nommée qui ferme la porte.
- * `commit` absent : lane sans aucun changement, qui garde le chemin d'entrée (PLAN-LOT8 Q7).
+ * Depuis le LOT 9 (L9-Q4), une lane sans changement a elle aussi son gel : un vrai commit vide.
  */
 type IssueDuGel = { ok: true; commit?: string; parent?: string; tree?: string } | { ok: false; raison: string };
 
@@ -926,8 +1676,10 @@ type IssueDuGel = { ok: true; commit?: string; parent?: string; tree?: string } 
  *
  *   gel vivant exact          réutilisé : ni commit, ni second FROZEN
  *   gel vivant non exact      refus : un gel vivant ne se remplace pas
- *   gel consommé              la branche revient sur OPENED.base (reset --mixed), puis
+ *   gel consommé rendu        la branche revient sur OPENED.base (reset --mixed), puis
  *                             nouveau gel fondé sur l'approbation plus récente
+ *   gel consommé par MERGED   refus : ni réutilisation, ni reset, ni regel (L9-Q3)
+ *   lane sans changement      un vrai commit de gel vide, parent = base, tree = T_L (L9-Q4)
  *   commit de gel             parent et tree relus par git ; non conformes → reset
  *                             --mixed previousHead tant que l'appel possède le run, puis
  *                             classement sur l'arbre de travail : transformé → nouvelle
@@ -978,7 +1730,21 @@ function gelerLane(lane: LaneContext, lease: Lease): IssueDuGel {
     if (!integ.usable) {
       return { ok: false, raison: `état des intégrations inexploitable avant le gel (${integ.state}) : ${integ.reason} ; aucun gel` };
     }
-    consomme = gelConsomme(integ.snapshot.read.events, lane.workUnitId, precedent.commit);
+    /*
+     * L9-Q3 : deux consommations seulement. Rendu `returned-to-lane`, le gel cède la place ;
+     * consommé par son MERGED, il est terminal — ni réutilisation, ni reset, ni regel. Même
+     * classement que les écrivains (`classerGel`).
+     */
+    const etatGel = classerGel(events, lane.laneId, lane.workUnitId, integ.snapshot.read.events);
+    if (etatGel.etat === "fusionne" || etatGel.etat === "integree-historique" || etatGel.etat === "contradictoire") {
+      return {
+        ok: false,
+        raison: `le gel de ${lane.laneId} est ${etatGel.etat === "fusionne" ? "consommé par son MERGED"
+          : etatGel.etat === "contradictoire" ? `contradictoire (${etatGel.raison})` : "clos par une intégration"} : ` +
+          "ni réutilisation, ni reset, ni regel",
+      };
+    }
+    consomme = etatGel.etat === "rendu";
   }
   const tete = laneTip(root, lane.laneId);
 
@@ -1008,10 +1774,13 @@ function gelerLane(lane: LaneContext, lease: Lease): IssueDuGel {
     }
   }
 
-  const gel = commitLane(root, lane.laneId, freezeMessage(lane.laneId));
+  let gel = commitLane(root, lane.laneId, freezeMessage(lane.laneId));
   if (gel.status === "failed") return { ok: false, raison: `gel impossible : ${gel.reason}` };
-  // Lane sans aucun changement : pas de FROZEN synthétique au LOT 8 (Q7) ; chemin d'entrée.
-  if (gel.status === "clean") return { ok: true };
+  // Lane sans aucun changement (L9-Q4) : un vrai gel vide, relu comme tout autre gel.
+  if (gel.status === "clean") {
+    gel = commitGelVide(root, lane.laneId, freezeMessage(lane.laneId));
+    if (gel.status !== "committed") return { ok: false, raison: `gel vide impossible : ${gel.reason}` };
+  }
   const commit = gel.commit;
   const avant = gel.previousHead;
   if (commit === undefined || avant === undefined) {
@@ -2624,10 +3393,33 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event) => {
-    const path =
-      isToolCallEventType("write", event) || isToolCallEventType("edit", event)
-        ? (event.input as { path?: string })?.path
-        : undefined;
+    /*
+     * C6.4 d'abord : une destination détectable vers DESIGN.md est refusée avant l'appel ;
+     * tout autre appel qui écrit est observé, pour que l'après-appel constate un
+     * contournement.
+     */
+    const ecrit = isToolCallEventType("write", event) || isToolCallEventType("edit", event);
+    const shell = isToolCallEventType("bash", event);
+    const entree = event.input as { path?: unknown; command?: unknown } | undefined;
+    if ((ecrit || shell) && gardeDesignActive()) {
+      const cibles = ecrit
+        ? typeof entree?.path === "string" ? [cheminOutil(entree.path)] : []
+        : typeof entree?.command === "string" ? destinationsBash(entree.command) : [];
+      const visee = cibles.find((c) => designeDesign(c));
+      if (visee !== undefined) {
+        return {
+          block: true,
+          reason:
+            `DESIGN.md est hors d'atteinte de l'orchestrateur depuis le gel du plan (C6.4) : ` +
+            `« ${visee} » le désigne. Une transition de Statut se déclare comme design_update ` +
+            "dans le plan gelé ; le runtime l'applique après l'intégration réelle.",
+        };
+      }
+      const id = (event as { toolCallId?: unknown }).toolCallId;
+      if (typeof id === "string") OBSERVATIONS_DESIGN.set(id, observerDesign());
+    }
+
+    const path = ecrit && typeof entree?.path === "string" ? entree.path : undefined;
     if (!path) return undefined;
 
     /*
@@ -2659,6 +3451,22 @@ export default function (pi: ExtensionAPI) {
     } else {
       HISTORY.push({ agent: "orchestrator", batch: randomBytes(4).toString("hex"), produced: true, readOnly: false, changedFiles: [path] });
     }
+    return undefined;
+  });
+
+  /*
+   * C6.4, second niveau, sur `tool_result` et lui seul (L9-Q17) : l'état mémorisé avant
+   * l'appel est comparé à celui d'après, que l'outil ait réussi ou non. Un DESIGN.md changé
+   * par un appel que l'avant-appel n'a pas su lire pose le blocage durable (C6.6).
+   */
+  pi.on("tool_result", async (event) => {
+    const id = (event as { toolCallId?: unknown }).toolCallId;
+    if (typeof id !== "string") return undefined;
+    const obs = OBSERVATIONS_DESIGN.get(id);
+    if (obs === undefined) return undefined;
+    OBSERVATIONS_DESIGN.delete(id);
+    const avant = obs.etat;
+    if (etatDesign() !== avant) attribuerApresAppel(obs);
     return undefined;
   });
 
@@ -2826,6 +3634,13 @@ export default function (pi: ExtensionAPI) {
       parameters,
 
       async execute(_id, params: Static<typeof parameters>, options: { signal?: AbortSignal } = {}) {
+        /*
+         * C6.6 : un run bloqué refuse toute délégation, quel que soit le rôle, avant la
+         * file, la reconstruction, la séquence et tout registre.
+         */
+        reevaluerAttributions(false);
+        const garde = refusDeGarde();
+        if (garde) return garde;
         /*
          * Deux délégations sur la même unité se suivent ; elles ne se croisent pas.
          *
@@ -3048,6 +3863,16 @@ export default function (pi: ExtensionAPI) {
          * délégations qui durent des secondes ou des minutes. Un recalcul
          * périodique aurait rouvert une fenêtre temporelle pour rien.
          */
+        /*
+         * L9-Q5, étape 1 — avant la porte de reprise, parce qu'elle la ferme : un merge sans
+         * MERGED y paraît comme « intégration non enregistrée ». Une fenêtre qui se reprend sur
+         * preuve exacte se reprend ici, et seulement alors le bail est pris. Ce qui ne se reprend
+         * pas reste pour la porte, qui le nomme, et pour l'intégration, qui le refuse.
+         */
+        reprendreEnTete();
+        // Une attribution résolue par la reprise a pu poser le blocage (C6.6).
+        const gardeApres = refusDeGarde();
+        if (gardeApres) return gardeApres;
         reconstruire();
 
         if (RECOVERY_LEDGER_VERSION !== LANE_LEDGER_VERSION && RECOVERY_LEDGER_VERSION !== LANE_LEDGER_V2) {
@@ -3188,6 +4013,7 @@ export default function (pi: ExtensionAPI) {
             const reprise = retryLanding(unit, enAttente, lease);
             return {
               content: [{ type: "text" as const, text: reprise.text.trim() }],
+              ...("done" in reprise ? { details: { integration: reprise.details } } : {}),
               isError: !("done" in reprise),
             };
           }
@@ -4088,6 +4914,8 @@ export default function (pi: ExtensionAPI) {
          */
         let integration = "";
         let porteIntegration: { outcome: "blocked"; policy_blockers: string[] } | undefined;
+        /** C5.7 : la sortie structurée d'une intégration aboutie, relue au registre. */
+        let detailsIntegration: DetailsIntegration | undefined;
 
         /*
          * Le cycle d'une tentative d'intégration, décidé par le runtime.
@@ -4237,24 +5065,22 @@ export default function (pi: ExtensionAPI) {
                     commit: m.integration.commit,
                     tree: m.integration.tree,
                   }, lease);
-                  const atterri = landIntegration(process.cwd(), m.integration, (commit) =>
-                    appendLaneEvent(
-                      RUN_DIR,
-                      {
-                        event: "INTEGRATED",
-                        work_unit: unit,
-                        at: new Date().toISOString(),
-                        integration_commit: commit,
-                      },
-                      lease,
-                    ),
-                  );
-                  if (atterri.ok) {
-                    noteAttempt({ event: "CLOSED", id: attempt.id, outcome: "integrated" }, lease);
+                  // L9-Q5, étape 1 : les transitions inachevées d'abord.
+                  const fermeReprise = reprendreTransitions(lease);
+                  const atterri: ReturnType<typeof landIntegration> = fermeReprise
+                    ? { ok: false, stale: false, reason: fermeReprise }
+                    : landIntegration(process.cwd(), m.integration, () => undefined);
+                  const fin = atterri.ok ? conclureAtterrissage(unit, attempt, m.integration, lease) : undefined;
+                  if (atterri.ok && fin?.ok) {
                     ATTEMPTS.delete(unit);
                     INTEGRATED.add(unit);
                     OPEN_UNITS.delete(unit);
+                    detailsIntegration = fin.details;
                     integration = `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`;
+                  } else if (atterri.ok) {
+                    integration =
+                      `  INTÉGRATION INACHEVÉE  ${unit} : ${fin && !fin.ok ? fin.raison : "finaliseur non atteint"}\n` +
+                      "    l'atterrissage a eu lieu ; ce qui est durable reste, rien n'est défait.";
                   } else if (atterri.stale) {
                     /*
                      * La base a bougé pendant la review : on rouvre sur le même
@@ -4387,7 +5213,17 @@ export default function (pi: ExtensionAPI) {
           const statutFerme = causesC3.length === 0 && !fermeC2 && !fermeInconnu
             ? refusDesignUpdate(lane.workUnitId)
             : undefined;
-          const fermeAvantGel = fermeInconnu ?? (causesC3.length === 0 ? fermeC2 ?? statutFerme : undefined);
+          /*
+           * L9-Q5, étapes 1 et 2, avant tout gel : reprendre ou valider les transitions
+           * inachevées, puis exiger une racine propre (C5.1, DESIGN.md compris). L'un ou
+           * l'autre refuse sans merge, et la lane est conservée.
+           */
+          const fermeReprise = causesC3.length === 0 && !fermeC2 && !fermeInconnu && !statutFerme
+            ? reprendreTransitions(lease)
+            : undefined;
+          const fermeRacine = racineSale();
+          const fermeAvantGel = fermeInconnu ??
+            (causesC3.length === 0 ? fermeC2 ?? statutFerme ?? fermeReprise ?? fermeRacine : undefined);
           /*
            * Le gel (C2.4, PLAN-LOT8 Q3) : seulement quand plus rien d'autre ne ferme la porte.
            * Commit, relecture par git du parent et du tree, `FROZEN` durable — et seulement
@@ -4396,33 +5232,37 @@ export default function (pi: ExtensionAPI) {
            */
           const gel = fermeAvantGel || causesC3.length > 0 ? undefined : gelerLane(lane, lease);
           const ferme = fermeAvantGel ?? (gel !== undefined && !gel.ok ? gel.raison : undefined);
-          const merged: ReturnType<typeof integrateLane> = ferme || causesC3.length > 0
+          // R2 : un FROZEN durable fait de son commit le seul candidat au merge.
+          const gele = gel?.ok && gel.commit !== undefined && gel.parent !== undefined && gel.tree !== undefined
+            ? { commit: gel.commit, parent: gel.parent, tree: gel.tree }
+            : undefined;
+          const merged: ReturnType<typeof mergeLane> = ferme || causesC3.length > 0
             ? { ok: false, conflicts: [], reason: ferme ?? causesC3.join(", ") }
-            : integrateLane(
-            process.cwd(),
-            lane.laneId,
-            [],
-            mergeMessage(lane.workUnitId),
-            (commit) =>
-              appendLaneEvent(
-                RUN_DIR,
-                {
-                  event: "INTEGRATED",
-                  work_unit: lane.workUnitId,
-                  at: new Date().toISOString(),
-                  integration_commit: commit,
-                },
-                lease,
-              ),
-            // R2 : un FROZEN durable fait de son commit le seul candidat au merge.
-            gel?.ok && gel.commit !== undefined && gel.parent !== undefined && gel.tree !== undefined
-              ? { commit: gel.commit, parent: gel.parent, tree: gel.tree }
-              : undefined,
-          );
-          if (merged.ok) {
+            : gele === undefined
+            ? { ok: false, conflicts: [], reason: "aucun gel durable : aucun merge" }
+            : mergeLane(process.cwd(), lane.laneId, [], mergeMessage(lane.workUnitId), gele);
+          /*
+           * Le merge réel a eu lieu : la preuve exacte, puis le finaliseur commun (L9-Q13) —
+           * MERGED, not-applicable, INTEGRATED, `details.integration` relu, nettoyage. C'est
+           * ici, et seulement ici, qu'une unité devient une dépendance satisfaite.
+           */
+          // Preuve structurelle du merge ordinaire (B-3) : le message n'y entre jamais.
+          const fin = merged.ok && gele !== undefined
+            ? conclureIntegration(
+              { unit: lane.workUnitId, laneId: lane.laneId, attendu: { mode: "ordinaire", gel: gele.commit } },
+              lease,
+            )
+            : undefined;
+          if (fin?.ok) {
             INTEGRATED.add(lane.workUnitId);
             OPEN_UNITS.delete(lane.workUnitId);
-            integration = `  intégrée : ${lane.workUnitId}`;
+            detailsIntegration = fin.details;
+            integration = `  intégrée : ${lane.workUnitId} par ${fin.details.integration_commit.slice(0, 12)}`;
+          } else if (fin && !fin.ok) {
+            integration =
+              `  INTÉGRATION INACHEVÉE  ${lane.workUnitId} : ${fin.raison}\n` +
+              "    le merge a eu lieu ; ce qui est durable reste, rien n'est défait. La prochaine " +
+              "intégration reprendra cette transition sur preuve exacte, ou la refusera.";
           } else if (ferme) {
             integration = `  NON INTÉGRABLE  ${lane.workUnitId} : ${ferme}`;
           } else if (causesC3.length > 0) {
@@ -4606,7 +5446,11 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{ type: "text" as const, text: body }],
           // C3.7 : les causes de politique, structurées, seulement quand la porte les a établies.
-          details: porteIntegration ? { ...details, integration_gate: porteIntegration } : details,
+          details: {
+            ...details,
+            ...(porteIntegration ? { integration_gate: porteIntegration } : {}),
+            ...(detailsIntegration ? { integration: detailsIntegration } : {}),
+          },
           isError: details.status === "failed",
         };
         }

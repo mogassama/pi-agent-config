@@ -87,7 +87,10 @@ The four root files (`INSTRUCTIONS.md`, `ARCHITECTURE.md`, `DESIGN.md`, `CONVENT
 
 **Owned by pi, in-session and ephemeral:** decomposing one backlog item into worker-executable steps, which files to create or modify, execution order and dependencies, per-step test strategy.
 
-**The only bundle field pi may write:** the `Statut` line of a `DESIGN.md` decision, when moving to `Implemented`.
+**DESIGN.md status updates:** the orchestrator never edits a decision's `Statut`
+inline. It may declare a `design_update` in the frozen plan; after a real
+integration, the runtime alone may apply that frozen transition to the canonical
+`DESIGN.md`.
 
 The bundle is a *direction*, not a specification. It is silent on almost everything by construction. Silence is the normal state and is never a defect.
 
@@ -220,7 +223,8 @@ Un seul ordre, du plus stable au plus variable. Ne jamais faire précéder un é
 3. Skills — chargées à la demande
 4. `CONVENTIONS.md` — jamais modifié en cours de session
 5. `ARCHITECTURE.md` — stable après scaffolding
-6. `DESIGN.md` — stable sauf mise à jour d'un `Statut`
+6. `DESIGN.md` — stable for the orchestrator; after a real integration, only the
+   runtime may apply the `Statut` transition declared by the frozen `design_update`
 7. `INSTRUCTIONS.md` — backlog vivant
 8. `.pi/BRIEF.md` — prose seule, aucune valeur variable ; peut donc rester en cache
 
@@ -361,12 +365,15 @@ it returned `needs_rework`, and the fix was never judged by anyone. The run was
 the cheapest of six and the only one whose last verdict stayed open.
 
 **What decides is what the line belongs to, not how long it is.** A single-line
-edit that is not part of an implementation deliverable stays inline — a status field, a
-typo in a comment, a local fix to your own scratch file. A single-line edit that
-*is* the deliverable, or part of it, goes through a worker and a reviewer like
-any other: a constant that changes a partitioning key is one line and is the
-whole change. A module does not become inline because the bundle made it obvious
-what to write, and a constant does not become inline because it is short.
+edit that is not part of an implementation deliverable stays inline — a typo in
+a comment, a local fix to your own scratch file. `DESIGN.md` is the exception:
+a `Statut` transition is never an inline orchestrator edit; it is declared as a
+`design_update` in the frozen plan and applied by the runtime after integration.
+A single-line edit that *is* the deliverable, or part of it, goes through a
+worker and a reviewer like any other: a constant that changes a partitioning key
+is one line and is the whole change. A module does not become inline because the
+bundle made it obvious what to write, and a constant does not become inline
+because it is short.
 
 **Never delegate regardless of agent:** secret rotation, prod credentials, IAM
 grants on production, `terraform apply` on prod, production data without explicit

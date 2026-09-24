@@ -28,17 +28,26 @@ ici en une ligne, puis on passe à autre chose.
 
 ---
 
-## [Titre de la décision]
+## Décisions
+
+### D-001 — [Titre de la décision]
 
 **Problème :** [le besoin réel, pas la solution déguisée en problème]
 **Décision :** [ce qui a été retenu, formulé de façon actionnable]
 **Alternatives rejetées :** [option + raison du rejet, une ligne chacune]
-**Statut :** `To implement` | `Implemented` | `Roadmap`
+Statut : proposé
+
+### Règles de décision
+
+Le vocabulaire de `Statut` est `proposé`, `en cours`, `terminé`.
+Les seules transitions sont `proposé → en cours` et `en cours → terminé`.
+L'orchestrateur ne modifie jamais cette ligne inline : il déclare un
+`design_update` dans le plan gelé et le runtime applique la transition après
+l'intégration.
 
 > Une section par décision structurante issue du débat. Une décision présentée sans
 > alternative rejetée signale que le débat n'a pas eu lieu — la rouvrir en session, pas
-> à l'exécution. Le statut est mis à jour par pi au fil de l'implémentation — c'est le
-> seul champ du bundle qu'il peut modifier.
+> à l'exécution.
 >
 > **Chaque décision est auto-portante.** Aucun sous-agent ne lit ce fichier :
 > l'orchestrateur cite un extrait verbatim dans un texte de tâche, et l'enfant n'a rien

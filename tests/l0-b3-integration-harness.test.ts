@@ -9,7 +9,8 @@
  * Montage : `l0-b2-harness.ts` et `l0-b3-fixtures.ts`.
  */
 import { test, type TestContext } from "node:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { PILOTE } from "./stubs/dispatch.ts";
@@ -19,8 +20,11 @@ import {
 } from "./l0-b2-harness.ts";
 import {
   designMd, etatCanonique, integration, mergesDe, nettoyerHooks, planAvecDesign, racinePropre,
-  statutDe, teteDe,
+  statutDe, teteDe, treeDe,
 } from "./l0-b3-fixtures.ts";
+import { releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
+import { admettre } from "../subagent-only/scheduler.ts";
+import { parsePlan, scopesCollide } from "../subagent-only/work-units.ts";
 
 /** La lane d'une unité, même une fois son worktree retiré : le registre la nomme. */
 const laneActive2 = (h: Awaited<ReturnType<typeof monter>>, unite: string): string =>
@@ -30,6 +34,12 @@ const laneActive2 = (h: Awaited<ReturnType<typeof monter>>, unite: string): stri
 type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
+}
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
+function couverture(id: string, titre: string, fn: Preuve): void {
+  test(`L0 COUV ${id} — ${titre}`, fn);
 }
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
@@ -52,7 +62,7 @@ async function integrer(h: Awaited<ReturnType<typeof monter>>, unite: string, va
 
 // ================================================================== la chaîne complète
 
-regression("B3-chaine", "une intégration réussie écrit les trois états, et le dit en clair", async () => {
+regressionCorrigee("B3-chaine", "une intégration réussie écrit les trois états, et le dit en clair", async () => {
   const h = await monter();
   try {
     PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
@@ -112,6 +122,117 @@ regression("B3-chaine", "une intégration réussie écrit les trois états, et l
         `registre (C5.7) et une relecture stricte après rechargement ; forme ` +
         `${JSON.stringify(ecrit)}, sortie ${JSON.stringify(sortie)}, relecture identique ` +
         `${identique}`,
+    );
+  } finally { h.fin(); }
+});
+
+// ================================================================== L9-Q4 — la lane sans changement
+
+couverture("B3-merge-sans-changement", "une lane approuvée sans changement suit la chaîne entière", async () => {
+  /*
+   * Le worker ne change rien : T_L = tree(base). Le LOT 8 n'écrivait alors aucun FROZEN et
+   * mergeait un commit absent ; le LOT 9 exige un vrai gel vide, un vrai merge à deux
+   * parents, puis la chaîne FROZEN → MERGED → INTEGRATED not-applicable.
+   */
+  const h = await monter();
+  try {
+    PILOTE.pendant = ecrire("src/a.py", "a = 1\n");
+    await h.outil.execute("1", tache("W03"));
+    PILOTE.pendant = undefined;
+    const lane = laneActive(h, "W03");
+    const base = teteDe(join(h.root, ".git", "pi-lanes", lane));
+    const treeBase = treeDe(h.root, base);
+    precondition(treeDe(h.root) === treeBase, "la racine doit porter le tree de la base de la lane");
+    const racineAvant = teteDe(h.root);
+    const resultat = await issue(() => h.outil.execute("2", revue("W03")));
+    PILOTE.resultat = undefined;
+
+    const evts = h.evenements();
+    const gel = evts.find((e) => e.event === "FROZEN" && e.work_unit === "W03");
+    const merge = evts.find((e) => e.event === "MERGED" && e.work_unit === "W03");
+    const fin = evts.find((e) => e.event === "INTEGRATED" && e.work_unit === "W03");
+    const commitGel = typeof gel?.commit === "string" ? (gel.commit as string) : "";
+    const parentsGel = commitGel ? git(h.root, "rev-list", "--parents", "-n", "1", commitGel).trim().split(/\s+/).slice(1) : [];
+    const integ = typeof merge?.integration_commit === "string" ? (merge.integration_commit as string) : "";
+    const parentsInteg = integ ? git(h.root, "rev-list", "--parents", "-n", "1", integ).trim().split(/\s+/).slice(1) : [];
+    const sortie = integration(resultat.value);
+    const manques = [
+      ...(commitGel && parentsGel.length === 1 && parentsGel[0] === base && treeDe(h.root, commitGel) === treeBase &&
+        gel?.parent === base && gel?.tree === treeBase ? [] : [`gel ${JSON.stringify(gel)} parents ${JSON.stringify(parentsGel)}`]),
+      ...(merge !== undefined && merge.frozen_event_seq === gel?.event_seq ? [] : [`MERGED ${JSON.stringify(merge)}`]),
+      ...(parentsInteg.length === 2 && parentsInteg[0] === racineAvant && parentsInteg[1] === commitGel
+        ? [] : [`merge à deux parents ${JSON.stringify(parentsInteg)}`]),
+      ...(treeDe(h.root, integ || "HEAD") === treeBase ? [] : ["tree de l'intégration ≠ tree(base)"]),
+      ...(fin !== undefined && fin.integration_commit === integ &&
+        JSON.stringify(fin.status) === JSON.stringify({ outcome: "not-applicable" }) ? [] : [`INTEGRATED ${JSON.stringify(fin)}`]),
+      ...(sortie !== null && sortie.integrated_event_seq === fin?.event_seq && sortie.integration_commit === integ
+        ? [] : [`details.integration ${JSON.stringify(sortie)}`]),
+      ...(teteDe(h.root) === integ && racinePropre(h.root) ? [] : ["HEAD ≠ intégration ou racine sale"]),
+    ];
+    propriete(
+      manques.length === 0,
+      `lane sans changement : gel vide réel, FROZEN, merge à deux parents, MERGED, INTEGRATED ` +
+        `not-applicable, details.integration, racine propre ; manques ${JSON.stringify(manques)} ; ${montrer(resultat)}`,
+    );
+  } finally { h.fin(); }
+});
+
+// ================================================================== L9-Q15 — l'admission seule
+
+preservation("B3-dependances-admission-seule", "une lane valablement ouverte ne se réadmet pas à l'intégration", async () => {
+  /*
+   * W03 dépend de W09, jamais intégrée. Sa lane est pourtant valablement ouverte : un worktree
+   * orphelin adopté par l'opérateur (`subagent-recover W03 adopt`) porte un OPENED sans passer
+   * par l'admission. Le témoin établit que réadmettre W03 maintenant la refuserait ; la
+   * propriété, que son intégration aboutit malgré tout — les dépendances se jugent à
+   * l'admission, et seulement là (L9-Q15).
+   */
+  const plan = {
+    version: 1,
+    work_units: [
+      { id: "W03", goal: "faire W03", depends_on: ["W09"], expected_write_scope: ["src/a.py"] },
+      { id: "W09", goal: "faire W09", depends_on: [], expected_write_scope: ["src/b.py"] },
+    ],
+  };
+  const h = await monter({ plan });
+  try {
+    const lane = `${h.runId}-W03-g1`;
+    git(h.root, "worktree", "add", "-q", "-b", `pi-lane/${lane}`, join(h.root, ".git", "pi-lanes", lane));
+    const owner = join(h.runDir, `${h.runId}.lease`, "owner.json");
+    if (existsSync(owner)) releaseRunOwnership(h.runDir, JSON.parse(readFileSync(owner, "utf-8")) as Lease);
+    const majeur = Number(process.versions.node.split(".")[0]);
+    const adoption = spawnSync(process.execPath, [
+      ...(majeur < 23 ? ["--experimental-strip-types"] : []),
+      join(import.meta.dirname, "..", "bin", "subagent-recover"), "W03", "adopt",
+    ], { cwd: h.root, encoding: "utf-8" });
+    precondition(
+      adoption.status === 0 && h.evenements().some((e) => e.event === "OPENED" && e.lane === lane),
+      `la lane de W03 doit être ouverte par adoption ; ${adoption.stdout}${adoption.stderr}`,
+    );
+
+    // Le témoin : l'admission, appelée sur l'état construit, refuserait W03.
+    const temoin = admettre(
+      { workUnitId: "W03", task: "réadmission" },
+      { units: parsePlan(JSON.stringify(plan)).units, integrated: new Set<string>(), collide: scopesCollide },
+      [],
+    );
+    precondition(
+      temoin.issue === "refusee" && /W09/.test(temoin.reason),
+      `le témoin doit refuser W03 sur sa dépendance ; ${JSON.stringify(temoin)}`,
+    );
+
+    const neuve = await h.recharger();
+    PILOTE.pendant = ecrire("src/a.py", "a = 2\n");
+    await neuve.outil.execute("1", tache("W03"));
+    PILOTE.pendant = undefined;
+    const r = await issue(() => neuve.outil.execute("2", revue("W03")));
+    PILOTE.resultat = undefined;
+    const fin = neuve.evenements().find((e) => e.event === "INTEGRATED" && e.work_unit === "W03");
+    propriete(
+      integree(neuve.root, "src/a.py", "a = 2") && fin !== undefined && integration(r.value) !== null &&
+        !neuve.evenements().some((e) => e.event === "INTEGRATED" && e.work_unit === "W09"),
+      `W03, valablement ouverte, s'intègre sans réadmission alors que sa dépendance W09 ne l'est pas ` +
+        `(témoin : ${temoin.issue === "refusee" ? temoin.reason : temoin.issue}) ; ${montrer(r)}`,
     );
   } finally { h.fin(); }
 });

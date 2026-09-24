@@ -141,3 +141,86 @@ export function validerDesignUpdates(doc: unknown, contexte: ContexteDesign): Ve
   }
   return { ok: true };
 }
+
+// ================================================================== C6.2 — l'application
+
+/** Un `design_update` tel que C6.1 l'a validé au gel du plan. */
+export interface DesignUpdate {
+  decision_id: string;
+  from_status: string;
+  to_status: string;
+}
+
+/**
+ * Ce que la phase Statut doit faire d'un `DESIGN.md` donné (C6.2, PLAN-LOT9 L9-Q7 et L9-Q9).
+ *
+ *   appliquer   statut courant = from_status : `contenu` est le fichier exact attendu, où
+ *               seule la ligne `Statut : <from>` du bloc devient `Statut : <to>`
+ *   inchange    statut courant = to_status : aucun commit
+ *   refus       décision absente ou dupliquée, zéro ou plusieurs lignes de statut, statut
+ *               courant ni from ni to
+ *
+ * Module pur : l'autorité est le `design_update` du plan gelé, jamais une seconde lecture de
+ * la prose du plan. La grammaire de découpage est celle de `decisionsDe`.
+ */
+export type IssueStatut =
+  | { issue: "appliquer"; contenu: string }
+  | { issue: "inchange" }
+  | { issue: "refus"; raison: string };
+
+export function planifierStatut(design: string, du: DesignUpdate): IssueStatut {
+  // Les séparateurs sont conservés tels quels : seule la ligne de statut change, octet pour
+  // octet le reste du fichier, fins de ligne comprises.
+  const morceaux = design.split(/(\r?\n)/);
+  const blocs: Array<{ id: string; lignes: number[] }> = [];
+  let courant: { id: string; lignes: number[] } | undefined;
+  for (let i = 0; i < morceaux.length; i += 2) {
+    const ligne = morceaux[i];
+    if (ligne.startsWith("### ")) {
+      const reste = ligne.slice(4);
+      const j = reste.indexOf(SEPARATEUR);
+      const id = j > 0 ? reste.slice(0, j) : "";
+      courant = id !== "" && id === id.trim() ? { id, lignes: [] } : undefined;
+      if (courant) blocs.push(courant);
+      continue;
+    }
+    if (courant && /^Statut : (.*)$/.test(ligne)) courant.lignes.push(i);
+  }
+  const trouves = blocs.filter((b) => b.id === du.decision_id);
+  if (trouves.length === 0) return { issue: "refus", raison: `la décision ${du.decision_id} est absente de DESIGN.md` };
+  if (trouves.length > 1) {
+    return { issue: "refus", raison: `la décision ${du.decision_id} est dupliquée dans DESIGN.md (${trouves.length} blocs)` };
+  }
+  const [bloc] = trouves;
+  if (bloc.lignes.length !== 1) {
+    return {
+      issue: "refus",
+      raison: `la décision ${du.decision_id} porte ${bloc.lignes.length} ligne(s) « Statut : », il en faut exactement une`,
+    };
+  }
+  const index = bloc.lignes[0];
+  const actuel = morceaux[index].slice("Statut : ".length);
+  if (actuel === du.to_status) return { issue: "inchange" };
+  if (actuel !== du.from_status) {
+    return {
+      issue: "refus",
+      raison: `le statut courant « ${actuel} » de ${du.decision_id} n'est ni ${du.from_status} ni ${du.to_status}`,
+    };
+  }
+  const apres = [...morceaux];
+  apres[index] = `Statut : ${du.to_status}`;
+  return { issue: "appliquer", contenu: apres.join("") };
+}
+
+/**
+ * `apres` est-il EXACTEMENT la transformation de `avant` que C6.2 attend ?
+ *
+ * Sert à reconnaître un effet partiel du runtime (L9-Q7) et un commit de Statut à adopter
+ * (L9-Q8) : vrai seulement si `avant` porte encore `from_status` et que `apres` en est la
+ * transformation au octet près. Tout autre écart — un autre changement, une autre valeur —
+ * rend faux.
+ */
+export function transformationExacte(avant: string, apres: string, du: DesignUpdate): boolean {
+  const plan = planifierStatut(avant, du);
+  return plan.issue === "appliquer" && plan.contenu === apres;
+}

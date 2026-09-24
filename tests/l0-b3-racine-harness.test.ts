@@ -26,6 +26,9 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
 }
@@ -62,7 +65,7 @@ async function integrer(h: Awaited<ReturnType<typeof monter>>, unite: string, va
 
 // ================================================================== C5.1
 
-regression("B3-racine-sale", "une racine sale fait refuser toute intégration", async () => {
+regressionCorrigee("B3-racine-sale", "une racine sale fait refuser toute intégration", async () => {
   const manques: string[] = [];
   /*
    * Le produit des deux dimensions : le chemin par lequel l'intégration arrive, et ce

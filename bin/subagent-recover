@@ -13,6 +13,7 @@
  *     bin/subagent-recover <unité> integrated   le merge a eu lieu, l'enregistrer
  *     bin/subagent-recover <unité> abandoned    ce travail est abandonné
  *     bin/subagent-recover <unité> discard      retirer le worktree, puis abandonner
+ *     bin/subagent-recover <unité> adopt-frozen un commit de gel resté sans FROZEN, l'adopter
  *
  *     bin/subagent-recover cleanup             ce qui est rangeable, et ce qui reste
  *     bin/subagent-recover cleanup --apply     le ranger
@@ -38,9 +39,11 @@ import { execFileSync } from "node:child_process";
 
 import {
   acquireRunOwnership,
+  appendFrozenEvent,
   appendIntegrationEvent,
   appendLaneEvent,
   decideUnderLease,
+  FrozenNotRecordedError,
   LANE_LEDGER_VERSION,
   LANE_LEDGER_V2,
   migrateLaneLedger,
@@ -64,8 +67,8 @@ import {
 import { buildRunReport, formatRunReport } from "../subagent-only/run-report.ts";
 import { validatePlan } from "../subagent-only/work-units.ts";
 import {
-  abandonLane, confirmIntegrations, isMerged, laneChanges, laneHasDiverged, laneTip, laneUnmergedCommitCount,
-  openLanes, removeLane, removeLaneBranch, runBranches,
+  abandonLane, commitFacts, confirmIntegrations, isMerged, laneChanges, laneHasDiverged, laneIsClean, laneTip,
+  laneUnmergedCommitCount, openLanes, removeLane, removeLaneBranch, runBranches,
 } from "../subagent-only/worktree.ts";
 
 const RUNS = ".pi-subagent-runs";
@@ -833,11 +836,197 @@ if (args[0] === "attempt") {
   process.exit(0);
 }
 
-const ACTIONS = new Set(["adopt", "integrated", "abandoned", "discard"]);
+const ACTIONS = new Set(["adopt", "integrated", "abandoned", "discard", "adopt-frozen"]);
 if (!action || !ACTIONS.has(action)) {
   console.error(`action attendue : ${[...ACTIONS].join(" | ")}`);
   process.exit(1);
 }
+
+/**
+ * `adopt-frozen` — le commit de gel resté sans FROZEN (C0 v2.0 C2.5, PLAN-LOT9 L9-Q1).
+ *
+ * Un crash entre le commit de gel et son FROZEN laisse une lane dont la tête a quitté sa
+ * base sans provenance enregistrée. Le runtime la refuse, sans reset : ce qu'il ne sait pas
+ * situer, il ne le détruit pas. Ce verbe, et lui seul, adopte ce commit — `adopt` reste
+ * l'adoption d'un worktree orphelin, `integrated` son comportement historique v1.
+ *
+ * Il ne reçoit aucun SHA : le candidat est la tête de la lane ouverte de l'unité. Le FROZEN
+ * canonique n'est écrit que si git et le registre, relus sous le bail, établissent ensemble :
+ *
+ *   - la génération et la lane ouvertes de l'unité, sans ambiguïté ;
+ *   - un worktree de lane propre ;
+ *   - une tête à exactement un parent, ce parent étant la base de la génération ;
+ *   - le tree de la tête égal au T_L de la dernière revue de la lane, qui approuve, et cette
+ *     approbation intégrable au sens de C2.3 — chaîne partie de la base, aucun maillon qui
+ *     change le tree sans preuve ;
+ *   - le reviewed_event_seq de cette approbation ;
+ *   - aucun FROZEN vivant contradictoire — jugé par l'écrivain, sous R, sur le registre des
+ *     intégrations relu (PLAN-LOT8 Q5).
+ *
+ * Un FROZEN exact déjà présent rend le verbe idempotent : rien n'est ajouté. Toute autre
+ * contradiction refuse, sans reset et sans mutation de registre ; `abandoned` reste la
+ * sortie. Cette fenêtre ne produit aucune contradiction de réconciliation — c'est la porte
+ * de provenance du runtime qui la ferme — : le verbe n'en exige donc pas.
+ */
+function adopterGel() {
+  const vu0 = etat();
+  refuserSiAutreVersion(vu0.laneRead.version);
+  refuserSiAmpute(vu0.laneRead.malformedLines);
+  if (laneGrammar(vu0.laneRead) !== LANE_LEDGER_V2) {
+    console.error("  refus : adopt-frozen n'existe que sous le registre v2 ; rien n'a été écrit.");
+    process.exit(1);
+  }
+  exigerLanes(vu0.vu);
+
+  const bail = prendreBail();
+  // Le jugement de C2.5, tout entier relu sous le bail. Rend le code de sortie.
+  const juger = () => {
+    const refus = (ligne = "") => {
+      console.error(`  refus : ${ligne}`);
+      console.error("  aucun reset, rien n'a été écrit ; « abandoned » reste la sortie.");
+      return 1;
+    };
+    const { laneRead: lu, vu } = etat();
+    if (lu.version !== LANE_LEDGER_V2) return refus(`registre en version ${String(lu.version)} : adopt-frozen n'existe qu'en v2`);
+    if (lu.malformedLines.length > 0) return refus(`registre illisible ligne(s) ${lu.malformedLines.join(", ")}`);
+    if (!vu.usable) return refus(vu.reason);
+    const events = vu.snapshot.read.events;
+
+    // La génération courante de l'unité : son dernier OPENED.
+    const courante = laneOfUnit(events, LANE_LEDGER_V2, runId, unite);
+    if (!courante) return refus(`aucune lane de ${unite} n'est ouverte au registre`);
+    const laneId = courante.laneId;
+    let base;
+    let close;
+    for (const e of events) {
+      if (!("lane" in e) || e.lane !== laneId) continue;
+      if (e.event === "OPENED") base = e.base;
+      else if (e.event === "ABANDONED" || e.event === "MERGED" || e.event === "INTEGRATED") close = e.event;
+    }
+    if (base === undefined) return refus(`${laneId} n'a pas de base enregistrée`);
+    if (close !== undefined) return refus(`${laneId} porte ${close} : aucun gel ne s'y adopte`);
+    // Un artefact de l'unité que le registre n'a jamais ouvert rend la génération ambiguë :
+    // la tête à adopter ne se désigne plus sans choisir entre deux lanes.
+    const ouvertes = new Set();
+    for (const e of events) if (e.event === "OPENED" && "lane" in e) ouvertes.add(e.lane);
+    const autres = [...new Set([...openLanes(root), ...runBranches(root, runId).map((b) => `${runId}-${b}`)])]
+      .filter((id) => id !== laneId && !ouvertes.has(id) && unitOfLane(id, events, LANE_LEDGER_V2, runId) === unite);
+    if (autres.length > 0) {
+      return refus(`génération ambiguë : ${autres.join(", ")} désigne aussi ${unite} sans ouverture enregistrée`);
+    }
+
+    // L'approbation intégrable autoritaire : la dernière revue de la lane, qui approuve.
+    const revues = vu.snapshot.projections.reviews.get(laneId) ?? [];
+    const derniere = revues.at(-1);
+    if (derniere === undefined || derniere.verdict !== "approved") {
+      return refus(`la dernière revue de ${laneId} n'approuve pas : aucun T_L à geler`);
+    }
+    // Intégrable comme la porte la juge (C2.3, `refusDeCouverture` du runtime) : la chaîne des
+    // revues part de la base, et aucun maillon qui change le tree n'est resté sans preuve.
+    // Sans quoi le runtime n'aurait jamais gelé cette lane, et le verbe ne le fait pas à sa place.
+    const faitsBase = commitFacts(root, base);
+    if (!faitsBase.ok) return refus(`base ${base.slice(0, 12)} inobservable : ${faitsBase.reason}`);
+    if (revues[0].from_tree !== faitsBase.tree) {
+      return refus(
+        `la chaîne des revues de ${laneId} part de ${revues[0].from_tree.slice(0, 12)}, pas de la base ` +
+          `${faitsBase.tree.slice(0, 12)} : aucune approbation intégrable`,
+      );
+    }
+    const nue = revues.find((r) => r.from_tree !== r.tree && r.proof.mode === "none");
+    if (nue) {
+      return refus(
+        `la revue ${nue.event_seq} n'a reçu aucune preuve du changement ${nue.from_tree.slice(0, 12)} → ` +
+          `${nue.tree.slice(0, 12)} : aucune approbation intégrable (C2.3)`,
+      );
+    }
+
+    const tete = laneTip(root, laneId);
+    if (tete === undefined) return refus(`la branche de ${laneId} est introuvable`);
+    const propre = laneIsClean(root, laneId);
+    if (propre !== true) {
+      return refus(propre === undefined
+        ? `le worktree de ${laneId} est absent ou inobservable : sa propreté n'est pas établie`
+        : `le worktree de ${laneId} porte des changements non commités`);
+    }
+    const faits = commitFacts(root, tete);
+    if (!faits.ok) return refus(`tête ${tete.slice(0, 12)} inobservable : ${faits.reason}`);
+    const conforme = faits.parents.length === 1 && faits.parents[0] === base && faits.tree === derniere.tree;
+    if (!conforme) {
+      return refus(
+        `tête ${tete.slice(0, 12)} : parent(s) ${faits.parents.map((p) => p.slice(0, 12)).join(",") || "aucun"} ` +
+          `pour la base ${base.slice(0, 12)}, tree ${faits.tree.slice(0, 12)} pour l'approuvé ${derniere.tree.slice(0, 12)}`,
+      );
+    }
+
+    // Le FROZEN exact existe déjà : idempotent. Un FROZEN de ce commit qui n'est pas exact
+    // contredit le candidat ; tout autre gel antérieur est jugé vivant ou consommé par l'écrivain.
+    const gels = events.filter((e) => e.event === "FROZEN" && e.lane === laneId);
+    const dernierGel = gels.at(-1);
+    if (dernierGel !== undefined && dernierGel.event === "FROZEN" && dernierGel.commit === tete &&
+      dernierGel.parent === base && dernierGel.tree === derniere.tree && dernierGel.reviewed_event_seq === derniere.event_seq) {
+      console.log(`  déjà adopté : FROZEN ${tete.slice(0, 12)} exact (event_seq ${dernierGel.event_seq}) ; rien n'est ajouté`);
+      return 0;
+    }
+    if (gels.some((g) => g.event === "FROZEN" && g.commit === tete)) {
+      return refus(`un FROZEN de ${tete.slice(0, 12)} existe et ne correspond pas au candidat exact`);
+    }
+
+    try {
+      appendFrozenEvent(dir, {
+        event: "FROZEN",
+        work_unit: unite,
+        at: new Date().toISOString(),
+        lane: laneId,
+        commit: tete,
+        parent: base,
+        tree: derniere.tree,
+        reviewed_event_seq: derniere.event_seq,
+      }, bail);
+    } catch (e) {
+      const quoi = e instanceof Error ? e.message : String(e);
+      if (e instanceof FrozenNotRecordedError) {
+        console.error(`  ${quoi}`);
+        console.error("  aucun reset ; réconcilier le registre avant toute reprise.");
+        return 1;
+      }
+      return refus(quoi);
+    }
+    console.log(
+      `  adopté : FROZEN ${tete.slice(0, 12)} · parent ${base.slice(0, 12)} · tree ${derniere.tree.slice(0, 12)} · ` +
+        `revue ${derniere.event_seq}`,
+    );
+    return 0;
+  };
+  let code = 1;
+  try {
+    code = juger();
+  } catch (e) {
+    console.error(`  échec : ${e instanceof Error ? e.message : String(e)}`);
+    console.error("  aucun reset ; « abandoned » reste la sortie.");
+  } finally {
+    try {
+      releaseRunOwnership(dir, bail);
+    } catch (e) {
+      console.error(`  bail non rendu : ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  process.exit(code);
+}
+
+/** Le bail du run, pris ou repris s'il est périmé ; sinon la sortie. */
+function prendreBail() {
+  const session = `recover-${process.pid}`;
+  const obtenu = acquireRunOwnership(dir, runId, session);
+  if (obtenu.ok) return obtenu.lease;
+  if (obtenu.kind === "recovery-required") {
+    console.log("  bail périmé : reprise explicite");
+    return takeOverRun(dir, runId, session);
+  }
+  console.error("  le run est tenu par une autre session ; réessayer plus tard.");
+  return process.exit(1);
+}
+
+if (action === "adopt-frozen") adopterGel();
 
 
 /**
@@ -979,6 +1168,22 @@ if (action === "integrated" && !(base && isMerged(root, laneUnite, base))) {
   console.error("  « integrated » enregistre un merge, il ne le fabrique pas.");
   releaseRunOwnership(dir, lease);
   process.exit(1);
+}
+/*
+ * B-2 (adjudication de la livraison A) : une lane qui porte MERGED sans INTEGRATED est une
+ * transition d'intégration inachevée. Ni `abandoned` ni `discard` ne la tranchent : le refus
+ * précède toute suppression de worktree ou de branche, et tout append. Les contrats propres de
+ * `residu-sale` (après INTEGRATED), `residu-d-abandon` et `branche-sans-provenance` restent, et
+ * ne contournent pas ce cas.
+ */
+if ((action === "abandoned" || action === "discard") && laneGrammar(luAction) === LANE_LEDGER_V2) {
+  const surLane = (nom = "") => luAction.events.some((e) => e.event === nom && "lane" in e && e.lane === laneUnite);
+  if (surLane("MERGED") && !surLane("INTEGRATED")) {
+    console.error(`  refus : ${laneUnite} porte un MERGED sans INTEGRATED ; une transition d'intégration`);
+    console.error("  inachevée ne s'abandonne ni ne se retire. Rien n'a été écrit ni supprimé.");
+    releaseRunOwnership(dir, lease);
+    process.exit(1);
+  }
 }
 if (action === "abandoned" && base && isMerged(root, laneUnite, base)) {
   console.error("  refus : git montre cette unité comme intégrée.");

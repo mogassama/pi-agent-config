@@ -354,6 +354,41 @@ export function commitLane(root: string, laneId: string, message: string): Commi
 }
 
 /**
+ * Le gel d'une lane approuvée SANS changement (PLAN-LOT9 L9-Q4) : un vrai commit vide.
+ *
+ * Quand `T_L = tree(base)`, la lane n'a rien à commiter — et `commitLane` le dit, `clean`,
+ * contrat que ce lot ne change pas. Mais l'intégration reste une vraie transition : un gel
+ * réel, parent = base et tree = `T_L`, puis un `FROZEN`, puis un merge `--no-ff` à deux
+ * parents. Ce commit-là n'a pas d'autre auteur que le chemin de gel, d'où une primitive
+ * distincte.
+ *
+ * La lane doit être propre : un gel vide sur une lane qui porte des changements laisserait
+ * ces changements hors du gel, et le merge intégrerait autre chose que ce qui a été revu.
+ * Le parent et le tree du commit créé restent à relire par l'appelant (C2.4) : un hook peut
+ * toujours intervenir.
+ */
+export function commitGelVide(root: string, laneId: string, message: string): CommitResult {
+  const cwd = join(lanesDir(root), laneId);
+  if (!existsSync(cwd)) return { status: "failed", reason: "aucun worktree" };
+  const etat = tryGit(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+  if (!etat.ok) return { status: "failed", reason: `git status: ${etat.out.trim()}` };
+  if (etat.out.trim() !== "") {
+    return { status: "failed", reason: "la lane porte des changements : un gel vide ne les gèlerait pas" };
+  }
+  const avant = tryGit(cwd, ["rev-parse", "HEAD"]);
+  if (!avant.ok) return { status: "failed", reason: `git rev-parse: ${avant.out.trim()}` };
+  const fait = tryGit(cwd, ["commit", "-q", "--allow-empty", "-m", message]);
+  if (!fait.ok) return { status: "failed", reason: `git commit: ${fait.out.trim()}` };
+  const apres = tryGit(cwd, ["rev-parse", "HEAD"]);
+  return {
+    status: "committed",
+    reason: "",
+    previousHead: avant.out.trim(),
+    commit: apres.ok ? apres.out.trim() : undefined,
+  };
+}
+
+/**
  * Les parents et le tree d'un commit, tels que git les donne (C2.4).
  *
  * Après le commit de gel, ce sont eux — et non ce que le runtime a voulu commiter — qui

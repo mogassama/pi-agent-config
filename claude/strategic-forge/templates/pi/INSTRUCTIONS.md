@@ -77,8 +77,9 @@ Aucun quatrième cas. Les `Hard limits` globales de pi restent la seule autre li
 d'arrêt ; elle est complète. Un blanc dans le bundle, une fixture absente, une étape non
 testable, un nommage ambigu : rien de tout cela n'arrête l'exécution.
 
-Le seul champ de ce bundle que pi peut écrire est la ligne `Statut` d'une décision de
-`DESIGN.md`.
+L'orchestrateur n'écrit jamais `DESIGN.md` directement. Une transition de
+`Statut` est déclarée comme `design_update` dans le plan gelé et appliquée par
+le runtime après l'intégration réelle.
 
 ## Commande de lancement
 ```

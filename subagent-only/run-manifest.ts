@@ -33,8 +33,8 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import {
-  laneLedgerIncoherences, parseLaneEventV2, projectRisks, riskKey, type LaneEvent, type LaneEventV1,
-  type ProofMode, type RiskFact, type RiskTransition, type ViolationKind,
+  laneLedgerIncoherences, parseLaneEventV2, projectRisks, riskKey, type IntegrationStatus, type LaneEvent,
+  type LaneEventV1, type ProofMode, type RiskFact, type RiskTransition, type ViolationKind,
 } from "./lane-ledger.ts";
 import { verifierCompleted } from "./run-end.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
@@ -950,6 +950,32 @@ export function setStatus(dir: string, status: RunStatus, lease: Lease): RunMani
 }
 
 /**
+ * Pose le blocage durable de continuation (C6.6) : `{ at, code: RUN_CONTINUATION_BLOCKED }`.
+ *
+ * Écrit une fois, jamais remplacé : un blocage déjà posé est rendu tel quel, son `at`
+ * compris. Il ne touche pas `status` — un run bloqué reste actif, et seule la fin
+ * `completed` le refuse (`terminerRun`). Un manifeste v1 ne porte aucun champ v2 (C4.7),
+ * et un manifeste terminal n'accepte plus aucune mutation (C4.6) : les deux refusent.
+ */
+export function poserBlocageContinuation(dir: string, at: string, lease: Lease): RunManifest {
+  return withRunGuard(dir, lease.runId, () => {
+    const courant = mutable(dir, lease, "poser le blocage de continuation");
+    if (courant.continuation_block) return courant;
+    if (courant.version !== 2) {
+      throw new RecoveryError(
+        `poser le blocage de continuation : un manifeste v${String(courant.version)} ne porte pas continuation_block`,
+      );
+    }
+    if (courant.status === "completed" || courant.status === "abandoned") {
+      throw new RecoveryError(`poser le blocage de continuation : ${courant.runId} est terminal (${courant.status})`);
+    }
+    const next: RunManifest = { ...courant, continuation_block: { at, code: RUN_CONTINUATION_BLOCKED } };
+    writeManifest(dir, next);
+    return next;
+  });
+}
+
+/**
  * Décider sous la propriété, sur un état relu sous elle.
  *
  * Acquérir un bail sérialise les écritures **futures** ; cela ne rend pas
@@ -1189,7 +1215,21 @@ export const LANE_LEDGER_V2 = 2;
  */
 export type LaneWrite =
   | { event: "OPENED"; work_unit: string; at: string; base: string; lane?: string; generation?: number }
-  | { event: "INTEGRATED"; work_unit: string; at: string; integration_commit?: string }
+  /*
+   * Deux formes, que `status` départage. Sans `status` : la forme historique de C0 v1.8,
+   * écrite par les trois appelants historiques jusqu'à la bascule du LOT 9 (PLAN-LOT9
+   * E-L9-3). Avec `status` : l'INTEGRATED final de C0 § F, qui ne s'écrit que par
+   * `appendIntegratedEvent` — `lane` y est un contrôle, comme pour FROZEN.
+   */
+  | {
+      event: "INTEGRATED";
+      work_unit: string;
+      at: string;
+      integration_commit?: string;
+      lane?: string;
+      status?: IntegrationStatus;
+    }
+  | MergedWrite
   | { event: "ABANDONED"; work_unit: string; at: string; reason?: string; by?: string }
   /*
    * La revue d'une lane (C2.2, § F). `lane` n'est pas une seconde vérité : c'est un
@@ -1251,6 +1291,25 @@ export type FrozenWrite = {
   parent: string;
   tree: string;
   reviewed_event_seq: number;
+};
+
+/**
+ * La lane mergée (C0 § F, PLAN-LOT9 L9-Q3) : le commit d'intégration réellement présent dans
+ * la racine, et le gel qu'il consomme.
+ *
+ * Même discipline que FROZEN : la lane est un contrôle, l'enveloppe se déduit sous R. Le fait
+ * git — ce commit est bien l'intégration de ce gel — est établi par le runtime avant l'appel ;
+ * l'écrivain vérifie sous R ce que les registres savent : le gel désigné est le gel vivant de
+ * la lane, aucune tentative ne l'a rendu `returned-to-lane`, et rien ne l'a déjà consommé.
+ */
+export type MergedWrite = {
+  event: "MERGED";
+  event_seq?: never;
+  work_unit: string;
+  at: string;
+  lane: string;
+  integration_commit: string;
+  frozen_event_seq: number;
 };
 
 /**
@@ -1474,6 +1533,7 @@ function evenementV2(
     let derniere: { event_seq: number; verdict: string; tree: string } | undefined;
     const gels: Array<{ event_seq: number; commit: string; reviewed_event_seq: number }> = [];
     let integree = false;
+    let fusionnee = false;
     for (const e of lu.events) {
       if (!("lane" in e) || e.lane !== ouverte.lane) continue;
       if (e.event === "OPENED") base = e.base;
@@ -1481,6 +1541,12 @@ function evenementV2(
       else if (e.event === "FROZEN") {
         gels.push({ event_seq: e.event_seq, commit: e.commit, reviewed_event_seq: e.reviewed_event_seq });
       } else if (e.event === "INTEGRATED") integree = true;
+      else if (e.event === "MERGED") fusionnee = true;
+    }
+    // L9-Q3 : un MERGED consomme son gel pour toujours. Après lui, aucun FROZEN de cette lane,
+    // quelles que soient les tentatives `returned-to-lane`.
+    if (fusionnee) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} porte un MERGED ; son gel est consommé, aucun nouveau gel`);
     }
     // Le gel se fonde sur la DERNIÈRE revue de la lane, et elle doit approuver : un gel
     // appuyé sur une approbation qu'une revue plus récente a remplacée gèlerait un arbre
@@ -1559,18 +1625,133 @@ function evenementV2(
     if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
     return doc;
   }
+  if (event.event === "MERGED") {
+    if (event.lane !== ouverte.lane) {
+      throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
+    }
+    if (lu.events.some((e) => e.event === "ABANDONED" && "lane" in e && e.lane === ouverte.lane)) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} est abandonnée, aucun merge ne s'y enregistre`);
+    }
+    if (integrations === undefined) {
+      throw new RecoveryError(
+        `${quoi} : la consommation d'un gel ne se juge que sur le registre des intégrations relu sous R`,
+      );
+    }
+    let gel: { event_seq: number; commit: string } | undefined;
+    let fusionnee = false;
+    let integree = false;
+    for (const e of lu.events) {
+      if (!("lane" in e) || e.lane !== ouverte.lane) continue;
+      if (e.event === "FROZEN") gel = { event_seq: e.event_seq, commit: e.commit };
+      else if (e.event === "MERGED") fusionnee = true;
+      else if (e.event === "INTEGRATED") integree = true;
+    }
+    if (integree) throw new RecoveryError(`${quoi} : ${ouverte.lane} est déjà intégrée`);
+    // Un gel se consomme une fois, et après MERGED ni regel ni second MERGED (L9-Q3).
+    if (fusionnee) throw new RecoveryError(`${quoi} : ${ouverte.lane} porte déjà un MERGED ; un gel ne se consomme qu'une fois`);
+    // Le gel VIVANT est le dernier de la lane : un gel antérieur n'a cédé la place qu'en
+    // étant consommé `returned-to-lane` (L8-A1), et ne se merge donc plus.
+    if (gel === undefined || gel.event_seq !== event.frozen_event_seq) {
+      throw new RecoveryError(
+        `${quoi} : frozen_event_seq ${event.frozen_event_seq} ne désigne pas le gel vivant de ` +
+          `${ouverte.lane} (${gel === undefined ? "aucun gel" : `dernier gel ${gel.event_seq}`})`,
+      );
+    }
+    /*
+     * Consommé sans intégration : la règle du LOT 8, inchangée (L9-Q3) et identique à celle de
+     * l'écrivain FROZEN — une tentative de l'unité sur ce gel exact close `returned-to-lane`,
+     * et aucune autre sur le même gel encore vivante ni intégrée.
+     */
+    const tentatives = new Map<string, { ferme?: string; remplacee: boolean }>();
+    for (const i of integrations) {
+      if (i.event === "ATTEMPT_OPENED") {
+        if (i.work_unit === event.work_unit && i.p2 === gel.commit) tentatives.set(i.id, { remplacee: false });
+      } else if (i.event === "CLOSED") {
+        const t = tentatives.get(i.id);
+        if (t) t.ferme = i.outcome;
+      } else if (i.event === "SUPERSEDED") {
+        const t = tentatives.get(i.id);
+        if (t) t.remplacee = true;
+      }
+    }
+    const surCeGel = [...tentatives.values()];
+    const rendu = surCeGel.some((t) => t.ferme === "returned-to-lane") &&
+      !surCeGel.some((t) => (t.ferme === undefined && !t.remplacee) || t.ferme === "integrated");
+    if (rendu) {
+      throw new RecoveryError(
+        `${quoi} : le gel ${gel.commit.slice(0, 12)} a été consommé returned-to-lane ; il ne se merge plus`,
+      );
+    }
+    const doc = {
+      ...enveloppe,
+      event: "MERGED",
+      integration_commit: event.integration_commit,
+      frozen_event_seq: event.frozen_event_seq,
+    };
+    if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
+    return doc;
+  }
+  if (event.event === "INTEGRATED" && event.status !== undefined) {
+    /*
+     * L'INTEGRATED final (C0 § F) : le MERGED exact de la lane le précède, le commit est le
+     * même, et le `status` est l'une des trois issues à clés exactes — jugée par le lecteur.
+     */
+    if (event.lane !== ouverte.lane) {
+      throw new RecoveryError(`${quoi} : ${String(event.lane)} n'est pas la lane courante ${ouverte.lane}`);
+    }
+    if (lu.events.some((e) => e.event === "ABANDONED" && "lane" in e && e.lane === ouverte.lane)) {
+      throw new RecoveryError(`${quoi} : ${ouverte.lane} est abandonnée, aucune intégration ne s'y enregistre`);
+    }
+    if (integrations === undefined) {
+      throw new RecoveryError(`${quoi} : un INTEGRATED final ne s'écrit que sur des registres jugés sous R`);
+    }
+    let merge: string | undefined;
+    let integree = false;
+    for (const e of lu.events) {
+      if (!("lane" in e) || e.lane !== ouverte.lane) continue;
+      if (e.event === "MERGED") merge = e.integration_commit;
+      else if (e.event === "INTEGRATED") integree = true;
+    }
+    if (integree) throw new RecoveryError(`${quoi} : ${ouverte.lane} est déjà intégrée`);
+    if (merge === undefined) {
+      throw new RecoveryError(`${quoi} : aucun MERGED sur ${ouverte.lane} ; un INTEGRATED final le suit toujours`);
+    }
+    if (event.integration_commit !== merge) {
+      throw new RecoveryError(
+        `${quoi} : integration_commit ${String(event.integration_commit)} diverge du MERGED ${merge}`,
+      );
+    }
+    const doc = { ...enveloppe, event: "INTEGRATED", integration_commit: event.integration_commit, status: event.status };
+    if (parseLaneEventV2(doc) === null) throw new RecoveryError(`${quoi} : forme refusée par § F`);
+    return doc;
+  }
   if (event.event === "INTEGRATED") {
     /*
-     * La forme historique de C0 v1.8, et elle seule : le commit exact, aucun `status`.
-     * L'appelant a déjà refusé avant le merge toute unité portant un `design_update` ;
-     * l'écrivain ne voit pas le plan et n'invente pas d'issue de Statut.
+     * La forme historique de C0 v1.8 — le commit seul, aucun `status` — reste lisible pour
+     * toujours, mais ne s'écrit plus (C0 v2.0, E-L9-3) : un INTEGRATED v2 passe par son
+     * écrivain, après son MERGED exact, avec l'issue du Statut. Le refus « sans commit »
+     * garde son motif, et vient d'abord.
      */
     if (!event.integration_commit) {
       throw new RecoveryError(`${quoi} : sous v2, une intégration porte son commit exact`);
     }
-    return { ...enveloppe, event: "INTEGRATED", integration_commit: event.integration_commit };
+    throw new RecoveryError(
+      `${quoi} : la forme transitoire d'INTEGRATED, sans status, n'est plus écrite ; un INTEGRATED v2 ` +
+        "s'écrit par appendIntegratedEvent, après son MERGED exact",
+    );
   }
   if (!event.reason) throw new RecoveryError(`${quoi} : un abandon v2 porte sa raison`);
+  /*
+   * B-2 (adjudication de la livraison A) : une lane MERGED sans INTEGRATED porte une transition
+   * d'intégration inachevée. L'abandonner la masquerait ; elle ne s'abandonne pas.
+   */
+  if (lu.events.some((e) => e.event === "MERGED" && "lane" in e && e.lane === ouverte.lane) &&
+    !lu.events.some((e) => e.event === "INTEGRATED" && "lane" in e && e.lane === ouverte.lane)) {
+    throw new RecoveryError(
+      `${quoi} : ${ouverte.lane} porte un MERGED sans INTEGRATED ; une transition d'intégration inachevée ` +
+        "ne s'abandonne pas",
+    );
+  }
   return {
     ...enveloppe,
     event: "ABANDONED",
@@ -1826,6 +2007,261 @@ export function appendFrozenEvent(dir: string, event: FrozenWrite, lease: Lease)
   });
 }
 
+/** Un MERGED refusé avant tout octet, sous R et bail vérifié (PLAN-LOT9 § 2). */
+export class MergedRefusedError extends RecoveryError {}
+/** Un MERGED dont l'append a été tenté et dont l'issue est incertaine : vestige R, rien de repris. */
+export class MergedNotRecordedError extends RecoveryError {}
+/** Un INTEGRATED final refusé avant tout octet, sous R et bail vérifié (PLAN-LOT9 § 2). */
+export class IntegratedRefusedError extends RecoveryError {}
+/** Un INTEGRATED final dont l'append a été tenté et dont l'issue est incertaine : vestige R. */
+export class IntegratedNotRecordedError extends RecoveryError {}
+
+/**
+ * Enregistre le MERGED d'une lane (C0 § F, PLAN-LOT9 L9-Q3 et L9-Q18).
+ *
+ * Les issues d'échec sont celles de FROZEN, et l'appelant ne les confond pas :
+ *   - `NotOwnerError` : l'appel ne possède plus le run ; rien n'est écrit ;
+ *   - `MergedRefusedError` : bail vérifié sous R, rien n'est écrit ;
+ *   - `MergedNotRecordedError` : l'append a été tenté — vestige, aucune reprise.
+ *
+ * Un merge réel précède toujours cet appel : aucun refus ici ne défait ce merge.
+ */
+export function appendMergedEvent(dir: string, event: MergedWrite, lease: Lease): void {
+  ecrireTransitionDIntegration(dir, event, lease, MergedRefusedError, MergedNotRecordedError);
+}
+
+/**
+ * Enregistre l'INTEGRATED final d'une lane (C0 § F, PLAN-LOT9 § 2 et L9-Q18) : après son
+ * MERGED exact, avec l'issue du Statut. Mêmes trois issues d'échec que `appendMergedEvent`.
+ */
+export function appendIntegratedEvent(
+  dir: string,
+  event: Extract<LaneWrite, { event: "INTEGRATED" }> & { lane: string; integration_commit: string; status: IntegrationStatus },
+  lease: Lease,
+): void {
+  // Le type l'exige déjà ; un appelant non typé n'écrit pas par ici la forme historique.
+  if (event.status === undefined) {
+    throw new IntegratedRefusedError(`INTEGRATED refusé avant tout octet : ${event.work_unit} sans status`);
+  }
+  ecrireTransitionDIntegration(dir, event, lease, IntegratedRefusedError, IntegratedNotRecordedError);
+}
+
+/**
+ * Le corps commun des écrivains de la transition d'intégration (L9-Q18).
+ *
+ * Même ordre que FROZEN : les deux registres lus, les témoins relus une fois, puis les deux
+ * états — lanes d'abord, KNOWN v2 exigé ; intégrations ensuite, KNOWN ou EMPTY. LOST,
+ * UNKNOWN, MIGRATION_REQUIRED et RUN_WITHOUT_WITNESS refusent avant tout octet. EMPTY est
+ * un constat d'absence de tentative, jamais le substitut d'un registre attendu et illisible :
+ * le chemin tentative, qui a besoin de sa tentative, l'exige de son côté.
+ */
+function ecrireTransitionDIntegration(
+  dir: string,
+  event: LaneWrite & { lane?: string },
+  lease: Lease,
+  Refus: new (message: string) => RecoveryError,
+  NonConfirme: new (message: string) => RecoveryError,
+): void {
+  withRunGuard(dir, lease.runId, () => {
+    assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.work_unit}`);
+    const path = laneLedgerPath(dir, lease.runId);
+    let ligne: string;
+    try {
+      if (!existsSync(path)) {
+        throw new RecoveryError(`registre ${lease.runId} absent : aucune lane à intégrer`);
+      }
+      const lu = readLaneEvents(dir, lease.runId);
+      if (lu.malformedLines.length > 0) {
+        throw new RecoveryError(`registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`);
+      }
+      if (lu.version !== LANE_LEDGER_V2) {
+        throw new RecoveryError(
+          `registre ${lease.runId} en version ${String(lu.version)} : ${event.event} n'existe qu'en v2`,
+        );
+      }
+      const integ = readIntegrationEvents(dir, lease.runId);
+      const temoins = readWitnesses(dir, lease.runId);
+      const etatLanes = laneState(temoins, { ...lu, version: lu.version }, lease.runId);
+      if (etatLanes !== "KNOWN") {
+        throw new RecoveryError(
+          `registre ${lease.runId} ${etatLanes} : un registre v2 qui n'est pas KNOWN ne reçoit aucun ` +
+            `${event.event} ; rien n'est écrit`,
+        );
+      }
+      const etatIntegrations = integrationLedgerState(temoins, integ, etatLanes);
+      if (etatIntegrations !== "KNOWN" && etatIntegrations !== "EMPTY") {
+        throw new RecoveryError(
+          `registre des intégrations ${lease.runId} ${etatIntegrations} : ${event.event} ne s'y ` +
+            "fonde pas ; rien n'est écrit",
+        );
+      }
+      ligne = JSON.stringify(evenementV2(lu, event, lease.runId, etatIntegrations === "KNOWN" ? integ.events : []));
+    } catch (err) {
+      throw new Refus(`${event.event} refusé avant tout octet : ${messageOf(err)}`);
+    }
+    try {
+      appendFileSync(path, `${ligne}\n`);
+    } catch (err) {
+      throw new NonConfirme(
+        `${event.event} de ${String(event.lane)} tenté et non confirmé : ${messageOf(err)}. Le verrou ` +
+          `${guardPath(dir, lease.runId)} est conservé comme vestige ; réconcilier le registre ` +
+          "et la racine avant de le lever.",
+      );
+    }
+  });
+}
+
+// ================================================================== LOT 9 — le gel et sa consommation
+
+/** Un FROZEN tel que le registre le porte. */
+export interface GelEnregistre {
+  event_seq: number;
+  commit: string;
+  parent: string;
+  tree: string;
+  reviewed_event_seq: number;
+}
+
+/** Un MERGED tel que le registre le porte. */
+export interface FusionEnregistree {
+  event_seq: number;
+  integration_commit: string;
+  frozen_event_seq: number;
+}
+
+/**
+ * Où en est le dernier gel d'une lane (PLAN-LOT9 L9-Q3).
+ *
+ *   aucun                  la lane n'a jamais été gelée
+ *   vivant                 le dernier FROZEN n'est consommé ni par une tentative close
+ *                          `returned-to-lane`, ni par un MERGED : il se réutilise tel quel
+ *   rendu                  consommé sans intégration (LOT 8, inchangé) : un regel est possible
+ *   fusionne               consommé par le MERGED exact qui le désigne ; `integre` dit si
+ *                          l'INTEGRATED de la lane suit. Ni réutilisation ni regel.
+ *   integree-historique    la lane porte un INTEGRATED sans MERGED : la forme transitoire des
+ *                          LOTS 3 à 8, fermée, sans MERGED rétroactif (L9-Q12)
+ *   contradictoire         deux MERGED, ou un MERGED qui ne désigne pas le dernier gel
+ *
+ * Pure : les deux registres sont ceux qu'un lecteur autoritaire a déjà jugés exploitables.
+ * La règle `returned-to-lane` est celle de l'écrivain FROZEN et de `gelConsomme`.
+ */
+export type EtatDuGel =
+  | { etat: "aucun" }
+  | { etat: "vivant"; gel: GelEnregistre }
+  | { etat: "rendu"; gel: GelEnregistre }
+  | { etat: "fusionne"; gel: GelEnregistre; merged: FusionEnregistree; integre: boolean }
+  | { etat: "integree-historique"; gel?: GelEnregistre }
+  | { etat: "contradictoire"; raison: string };
+
+export function classerGel(
+  events: readonly LaneEvent[],
+  laneId: string,
+  workUnit: string,
+  integrations: readonly IntegrationEvent[],
+): EtatDuGel {
+  const gels: GelEnregistre[] = [];
+  const fusions: FusionEnregistree[] = [];
+  let integre = false;
+  for (const e of events) {
+    if (!("lane" in e) || e.lane !== laneId) continue;
+    if (e.event === "FROZEN") {
+      gels.push({
+        event_seq: e.event_seq, commit: e.commit, parent: e.parent, tree: e.tree, reviewed_event_seq: e.reviewed_event_seq,
+      });
+    } else if (e.event === "MERGED") {
+      fusions.push({ event_seq: e.event_seq, integration_commit: e.integration_commit, frozen_event_seq: e.frozen_event_seq });
+    } else if (e.event === "INTEGRATED") {
+      integre = true;
+    }
+  }
+  const gel = gels.at(-1);
+  if (fusions.length > 1) return { etat: "contradictoire", raison: `${laneId} porte ${fusions.length} MERGED` };
+  if (fusions.length === 1) {
+    const [merged] = fusions;
+    if (gel === undefined || merged.frozen_event_seq !== gel.event_seq) {
+      return {
+        etat: "contradictoire",
+        raison: `le MERGED ${merged.event_seq} de ${laneId} ne désigne pas son dernier gel ` +
+          `(${gel === undefined ? "aucun" : gel.event_seq})`,
+      };
+    }
+    return { etat: "fusionne", gel, merged, integre };
+  }
+  if (integre) return gel === undefined ? { etat: "integree-historique" } : { etat: "integree-historique", gel };
+  if (gel === undefined) return { etat: "aucun" };
+  const tentatives = new Map<string, { p2: string; ferme?: string; remplacee: boolean }>();
+  for (const i of integrations) {
+    if (i.event === "ATTEMPT_OPENED") {
+      if (i.work_unit === workUnit) tentatives.set(i.id, { p2: i.p2, remplacee: false });
+    } else if (i.event === "CLOSED") {
+      const t = tentatives.get(i.id);
+      if (t) t.ferme = i.outcome;
+    } else if (i.event === "SUPERSEDED") {
+      const t = tentatives.get(i.id);
+      if (t) t.remplacee = true;
+    }
+  }
+  const surCeGel = [...tentatives.values()].filter((t) => t.p2 === gel.commit);
+  const rendu = surCeGel.some((t) => t.ferme === "returned-to-lane") &&
+    !surCeGel.some((t) => (t.ferme === undefined && !t.remplacee) || t.ferme === "integrated");
+  return rendu ? { etat: "rendu", gel } : { etat: "vivant", gel };
+}
+
+/**
+ * Une transition d'intégration que le registre montre inachevée (L9-Q5, étape 1 ; L9-Q6-Q8).
+ *
+ *   gel-vivant      candidate seulement : un gel vivant n'est une fenêtre « après merge » que
+ *                   si git montre ce gel intégré — c'est `fenetreDeReprise` qui le dit
+ *   merged          MERGED sans INTEGRATED : fenêtre « après MERGED » ou « après commit de
+ *                   Statut », selon git
+ *   contradiction   l'histoire de la lane ne se classe pas : les intégrations suivantes se
+ *                   bloquent, rien ne s'infère
+ *
+ * Sur la génération courante de chaque unité, hors lane abandonnée. Pure.
+ */
+export type TransitionEnCours =
+  | { fenetre: "gel-vivant"; work_unit: string; lane: string; gel: GelEnregistre }
+  | { fenetre: "merged"; work_unit: string; lane: string; gel: GelEnregistre; merged: FusionEnregistree }
+  | { fenetre: "contradiction"; work_unit: string; lane: string; raison: string };
+
+export function transitionsEnCours(
+  events: readonly LaneEvent[],
+  integrations: readonly IntegrationEvent[],
+): TransitionEnCours[] {
+  // Toutes les lanes ouvertes au registre, pas seulement la génération courante : une
+  // transition inachevée d'une génération antérieure ne doit pas disparaître derrière la suivante.
+  const lanes = new Map<string, string>();
+  const abandonnees = new Set<string>();
+  for (const e of events) {
+    if (!("lane" in e)) continue;
+    if (e.event === "OPENED") lanes.set(e.lane, e.work_unit);
+    else if (e.event === "ABANDONED") abandonnees.add(e.lane);
+  }
+  const trouvees: TransitionEnCours[] = [];
+  for (const [lane, unite] of lanes) {
+    if (abandonnees.has(lane)) {
+      // B-2 : MERGED puis ABANDONED ne se produit pas ; rencontré, ce n'est jamais « ignoré ».
+      const merge = events.some((e) => e.event === "MERGED" && "lane" in e && e.lane === lane);
+      const fin = events.some((e) => e.event === "INTEGRATED" && "lane" in e && e.lane === lane);
+      if (merge && !fin) {
+        trouvees.push({
+          fenetre: "contradiction", work_unit: unite, lane,
+          raison: `${lane} porte MERGED sans INTEGRATED, puis ABANDONED`,
+        });
+      }
+      continue;
+    }
+    const etat = classerGel(events, lane, unite, integrations);
+    if (etat.etat === "vivant") trouvees.push({ fenetre: "gel-vivant", work_unit: unite, lane, gel: etat.gel });
+    else if (etat.etat === "fusionne" && !etat.integre) {
+      trouvees.push({ fenetre: "merged", work_unit: unite, lane, gel: etat.gel, merged: etat.merged });
+    } else if (etat.etat === "contradictoire") {
+      trouvees.push({ fenetre: "contradiction", work_unit: unite, lane, raison: etat.raison });
+    }
+  }
+  return trouvees;
+}
+
 /**
  * Une lane dont l'artefact existe et dont l'ouverture n'a pas pu être enregistrée.
  *
@@ -1936,10 +2372,12 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
       `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
     );
   }
-  if (event.event === "REVIEWED" || event.event === "VIOLATION" || event.event === "RISK" || event.event === "FROZEN") {
+  if (event.event === "REVIEWED" || event.event === "VIOLATION" || event.event === "RISK" || event.event === "FROZEN" ||
+    event.event === "MERGED" || (event.event === "INTEGRATED" && event.status !== undefined)) {
     throw new RecoveryError(
       `registre ${lease.runId} en version ${LANE_LEDGER_VERSION} : sa grammaire ne porte ni ` +
-        `revue, ni violation, ni risque, ni gel durable ; ${event.event} n'existe qu'en v2`,
+        `revue, ni violation, ni risque, ni gel durable, ni merge, ni Statut ; ${event.event} ` +
+        "sous cette forme n'existe qu'en v2",
     );
   }
   if (event.event === "OPENED") {
@@ -2473,7 +2911,8 @@ function sousGuardAcquis<T>(path: string, label: string, fn: () => T): T {
   let sortieNormale = false;
   // Les seuls échecs qui gardent le verrou : une violation constatée et non écrite (LOT 6
   // Q7), une séquence de risques commencée et non achevée (LOT 7 Q6), un gel dont l'append
-  // a été tenté (LOT 8 Q6).
+  // a été tenté (LOT 8 Q6), un MERGED ou un INTEGRATED final dont l'append a été tenté
+  // (LOT 9 § 2).
   let vestige = false;
   try {
     const resultat = fn();
@@ -2481,7 +2920,8 @@ function sousGuardAcquis<T>(path: string, label: string, fn: () => T): T {
     return resultat;
   } catch (err) {
     vestige = err instanceof ViolationNotRecordedError || err instanceof RiskNotRecordedError ||
-      err instanceof FrozenNotRecordedError;
+      err instanceof FrozenNotRecordedError || err instanceof MergedNotRecordedError ||
+      err instanceof IntegratedNotRecordedError;
     throw err;
   } finally {
     if (!vestige) try {

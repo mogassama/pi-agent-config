@@ -53,9 +53,10 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { planifierStatut, transformationExacte, type DesignUpdate } from "./design-update.ts";
 import { recordGitInvocation } from "./git-probe-counter.ts";
 
 
@@ -574,4 +575,440 @@ export function openIntegrations(root: string): string[] {
     .map((l) => l.slice("worktree ".length).trim())
     .filter((p) => p.startsWith(`${base}/`))
     .map((p) => p.slice(base.length + 1));
+}
+
+// ================================================================== LOT 9 — preuves de la chaîne
+//
+// Les preuves git de la transition FROZEN → MERGED → Statut → INTEGRATED (C0 v2.0 § F, C6.2,
+// C6.3 ; PLAN-LOT9 L9-Q6 à L9-Q9). Primitives seulement : ce module ne connaît ni le registre, ni
+// le bail, ni le plan. Chacune rend « établi » ou la raison nommée, et aucune ne fait de reset :
+// seule la phase Statut défait un effet, sur DESIGN.md seul, et seulement celui qu'elle a
+// elle-même produit. Ce qu'elles ne savent pas établir, elles le refusent.
+
+/** Le DESIGN.md canonique, relatif à la racine : le seul fichier que la phase Statut écrit. */
+export const DESIGN_MD = "DESIGN.md";
+
+/** Le message du commit de Statut, fabriqué par le runtime. */
+export function statusMessage(du: DesignUpdate): string {
+  return `chore(subagent): status ${du.decision_id} ${du.from_status} -> ${du.to_status}`;
+}
+
+/** Le contenu d'un fichier dans un commit, ou `undefined` s'il n'y est pas. */
+function contenuDans(root: string, commit: string, chemin: string): string | undefined {
+  const r = tryGit(root, ["show", `${commit}:${chemin}`]);
+  return r.ok ? r.out : undefined;
+}
+
+/** Les parents d'un commit, tels que git les donne ; `undefined` s'il est illisible. */
+function parentsDe(root: string, commit: string): string[] | undefined {
+  const r = tryGit(root, ["rev-list", "--parents", "-n", "1", commit]);
+  if (!r.ok) return undefined;
+  const [soi, ...parents] = r.out.trim().split(/\s+/);
+  return soi ? parents : undefined;
+}
+
+function teteDeRacine(root: string): string | undefined {
+  const r = tryGit(root, ["rev-parse", "--verify", "HEAD"]);
+  return r.ok ? r.out.trim() : undefined;
+}
+
+/**
+ * Ce qu'on attend du merge déjà effectué (PLAN-LOT9 L9-Q6 ; adjudication de B, B-3).
+ *
+ *   ordinaire   preuve STRUCTURELLE, à partir du FROZEN et du HEAD courant : ni commit ni
+ *               message attendus. Le message d'un commit n'est pas une autorité d'identité.
+ *   tentative   preuve à partir du commit d'intégration attendu (`COMMITTED`), de son premier
+ *               parent attendu (`p1`), du FROZEN et du `T_I` approuvé.
+ *
+ * Un appel sans mode explicite est refusé.
+ */
+export type MergeAttendu =
+  | {
+    mode: "ordinaire";
+    /** Le commit du FROZEN consommé : second parent exact du commit d'intégration. */
+    gel: string;
+  }
+  | {
+    mode: "tentative";
+    gel: string;
+    /** Le commit d'intégration connu d'avance : `COMMITTED` du chemin tentative. */
+    commit: string;
+    /** La base d'intégration connue d'avance : `p1` de la tentative. */
+    p1: string;
+    /** `T_I` approuvé. */
+    tree: string;
+  };
+
+export type PreuveMerge =
+  | { ok: true; commit: string; p1: string; tree: string }
+  | { ok: false; raison: string };
+
+/**
+ * Le HEAD de la racine est-il EXACTEMENT le merge du gel (L9-Q6, B-3) ?
+ *
+ * La fenêtre « après merge, avant MERGED » ne s'adopte que sur cette preuve. Ensemble :
+ * racine propre ; HEAD est le candidat (en mode tentative, le commit attendu) ; exactement deux
+ * parents ; le second est exactement le commit du FROZEN ; en mode tentative, le premier est
+ * `p1` et le tree est `T_I` ; en mode ordinaire, le tree est le merge propre recalculé depuis
+ * les deux parents que le candidat porte effectivement. Aucun message n'intervient : une
+ * différence de message, à parents et tree identiques, n'est pas une contradiction. Jamais par
+ * l'ascendance — un gel ancêtre de HEAD dit que son travail est quelque part dans l'histoire,
+ * pas que HEAD est son intégration. Qu'aucun MERGED ne consomme déjà ce FROZEN, l'appelant
+ * l'établit sur le registre (`classerGel`, écrivain de MERGED).
+ */
+export function preuveMergeEffectue(root: string, attendu: MergeAttendu): PreuveMerge {
+  const mode = (attendu as { mode?: unknown } | undefined)?.mode;
+  if (mode !== "ordinaire" && mode !== "tentative") {
+    return { ok: false, raison: "preuve de merge sans mode explicite (ordinaire ou tentative) : aucun merge ne s'identifie" };
+  }
+  const sale = dirtyRoot(root);
+  if (sale.length > 0) return { ok: false, raison: `racine sale : ${sale.slice(0, 3).join(", ")}` };
+  const tete = teteDeRacine(root);
+  if (tete === undefined) return { ok: false, raison: "HEAD de la racine illisible" };
+  if (attendu.mode === "tentative" && tete !== attendu.commit) {
+    return {
+      ok: false,
+      raison: `HEAD ${tete.slice(0, 12)} n'est pas le commit d'intégration attendu ${attendu.commit.slice(0, 12)}`,
+    };
+  }
+  const parents = parentsDe(root, tete);
+  if (parents === undefined) return { ok: false, raison: `${tete.slice(0, 12)} illisible` };
+  if (parents.length !== 2 || parents[1] !== attendu.gel) {
+    return {
+      ok: false,
+      raison: `${tete.slice(0, 12)} n'est pas un merge à deux parents dont le second est le gel ` +
+        `${attendu.gel.slice(0, 12)} (parents ${parents.map((p) => p.slice(0, 12)).join(",") || "aucun"})`,
+    };
+  }
+  if (attendu.mode === "tentative" && parents[0] !== attendu.p1) {
+    return { ok: false, raison: `premier parent ${parents[0].slice(0, 12)} au lieu de p1 ${attendu.p1.slice(0, 12)}` };
+  }
+  const tree = tryGit(root, ["rev-parse", `${tete}^{tree}`]);
+  if (!tree.ok) return { ok: false, raison: `tree de ${tete.slice(0, 12)} illisible` };
+  let attenduTree: string;
+  if (attendu.mode === "tentative") {
+    attenduTree = attendu.tree;
+  } else {
+    // Le merge propre des deux parents, recalculé : un merge qui porterait autre chose que la
+    // rencontre de la base et du gel — un fichier ajouté, une résolution — n'est pas celui-là.
+    const recalcule = tryGit(root, ["merge-tree", "--write-tree", parents[0], parents[1]]);
+    if (!recalcule.ok) {
+      return { ok: false, raison: `le merge des parents de ${tete.slice(0, 12)} ne se recalcule pas proprement` };
+    }
+    attenduTree = recalcule.out.split("\n")[0].trim();
+  }
+  if (tree.out.trim() !== attenduTree) {
+    return {
+      ok: false,
+      raison: `tree ${tree.out.trim().slice(0, 12)} de ${tete.slice(0, 12)} au lieu de ${attenduTree.slice(0, 12)}`,
+    };
+  }
+  return { ok: true, commit: tete, p1: parents[0], tree: tree.out.trim() };
+}
+
+/**
+ * DESIGN.md sur disque et dans l'index est-il EXACTEMENT celui de `commit` ? Octets (sans
+ * filtre), mode, fichier ordinaire, entrée d'index normale — un drapeau `skip-worktree` ou
+ * `assume-unchanged` rendrait `git status` aveugle, un lien symbolique n'est jamais conforme.
+ */
+export function designConforme(root: string, commit: string): boolean {
+  const arbre = tryGit(root, ["ls-tree", commit, "--", DESIGN_MD]);
+  const index = tryGit(root, ["ls-files", "-s", "-v", "--", DESIGN_MD]);
+  if (!arbre.ok || !index.ok) return false;
+  let fichier: ReturnType<typeof lstatSync> | undefined;
+  try {
+    fichier = lstatSync(join(root, DESIGN_MD));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return false;
+  }
+  const ligne = arbre.out.trim();
+  if (ligne === "") return index.out.trim() === "" && fichier === undefined;
+  const m = /^(100644|100755) blob ([0-9a-f]+)\t/.exec(ligne);
+  const i = /^H (\d{6}) ([0-9a-f]+) 0\t[^\n]*$/.exec(index.out.trim());
+  if (m === null || i === null || i[1] !== m[1] || i[2] !== m[2]) return false;
+  if (fichier === undefined || !fichier.isFile()) return false;
+  if (((Number(fichier.mode) & 0o111) !== 0) !== (m[1] === "100755")) return false;
+  const h = tryGit(root, ["hash-object", "--no-filters", "--", DESIGN_MD]);
+  return h.ok && h.out.trim() === m[2];
+}
+
+/** L'entrée DESIGN.md (mode et blob) d'un tree ou d'un commit ; "" si absente, `undefined` si illisible. */
+function entreeDesign(root: string, arbre: string): string | undefined {
+  const r = tryGit(root, ["ls-tree", arbre, "--", DESIGN_MD]);
+  return r.ok ? r.out.trim() : undefined;
+}
+
+/**
+ * Le DESIGN.md d'un commit à deux parents est-il celui que la rencontre de ses parents donne ?
+ * Merge propre : l'entrée du merge recalculé. Merge en conflit (atterrissage) : celle de l'un
+ * des deux parents — une résolution n'invente pas de DESIGN.md.
+ */
+function designDeMerge(root: string, commit: string, parents: string[]): boolean {
+  const propre = entreeDesign(root, commit);
+  if (propre === undefined) return false;
+  const recalcule = tryGit(root, ["merge-tree", "--write-tree", parents[0], parents[1]]);
+  if (recalcule.ok) return entreeDesign(root, recalcule.out.split("\n")[0].trim()) === propre;
+  return entreeDesign(root, parents[0]) === propre || entreeDesign(root, parents[1]) === propre;
+}
+
+/**
+ * C6.4 concurrent (adjudication de B, point 3) : l'instantané de la racine avant un appel
+ * observé — HEAD, et DESIGN.md (fichier et index) conforme ou non à HEAD.
+ */
+export interface InstantaneDesign {
+  tete?: string;
+  propre: boolean;
+}
+
+export function instantaneDesign(root: string): InstantaneDesign {
+  const tete = teteDeRacine(root);
+  return { tete, propre: tete !== undefined && designConforme(root, tete) };
+}
+
+/** Les faits autoritaires du registre que l'attribution consulte. */
+export interface FaitsDesign {
+  /** Commits produits par une transition du runtime, attestés depuis l'instantané. */
+  autorite: ReadonlySet<string>;
+  /** Le gel VIVANT de chaque lane (le dernier, classé vivant) : second parent d'un merge sans MERGED. */
+  gelsVivants: ReadonlySet<string>;
+}
+
+export type AttributionDesign =
+  | { verdict: "explique" }
+  | { verdict: "en-attente" }
+  | { verdict: "non-explique"; raison: string };
+
+/**
+ * Une variation de DESIGN.md entre `tool_call` et `tool_result` est-elle entièrement due au
+ * runtime ? (C6.4, point 3 de l'adjudication de B.) Appelée seulement quand DESIGN.md a varié.
+ *
+ * HEAD immobile : rien ne l'explique. HEAD avancé : elle l'est si, depuis un instantané
+ * conforme, chaque commit de la chaîne des premiers parents jusqu'à l'ancien HEAD est attesté
+ * par le registre (et, s'il est un merge, porte le DESIGN.md de la rencontre de ses parents),
+ * ou ne touche pas DESIGN.md ; et si DESIGN.md sur disque et dans l'index est exactement celui
+ * de HEAD. Une transition réelle ne couvre jamais un delta en plus.
+ *
+ * Un merge du gel vivant dont MERGED n'est pas encore écrit, et dont DESIGN.md est celui du
+ * merge recalculé, n'est ni une écriture certaine ni un changement expliqué : l'attribution est
+ * EN ATTENTE. Seule l'ambiguïté pure attend : dès qu'une partie du delta est déjà prouvée non
+ * expliquée, le blocage est immédiat — une attente tenue en mémoire ne survit pas à un
+ * redémarrage (adjudication de B, correction 1).
+ */
+export function attribuerDesign(
+  root: string,
+  avant: InstantaneDesign,
+  faits: FaitsDesign,
+  apresReprise: boolean,
+): AttributionDesign {
+  if (!avant.propre || avant.tete === undefined) {
+    return { verdict: "non-explique", raison: "DESIGN.md différait déjà de HEAD avant l'appel" };
+  }
+  const tete = teteDeRacine(root);
+  if (tete === undefined) return { verdict: "non-explique", raison: "HEAD de la racine illisible" };
+  if (tete === avant.tete) {
+    return { verdict: "non-explique", raison: "DESIGN.md a varié sans aucune transition : HEAD n'a pas bougé" };
+  }
+  if (!tryGit(root, ["merge-base", "--is-ancestor", avant.tete, tete]).ok) {
+    return { verdict: "non-explique", raison: `HEAD ${tete.slice(0, 12)} ne descend pas de ${avant.tete.slice(0, 12)}` };
+  }
+  const liste = tryGit(root, ["rev-list", "--first-parent", "--parents", `${avant.tete}..${tete}`]);
+  const lignes = liste.ok ? liste.out.split("\n").filter(Boolean).map((l) => l.trim().split(/\s+/)) : [];
+  if (lignes.length === 0 || lignes[lignes.length - 1][1] !== avant.tete) {
+    return { verdict: "non-explique", raison: `la chaîne des premiers parents de ${tete.slice(0, 12)} n'atteint pas ${avant.tete.slice(0, 12)}` };
+  }
+  let fenetre = false;
+  let raison: string | undefined;
+  for (const [commit, ...parents] of lignes) {
+    const merge = parents.length === 2;
+    if (faits.autorite.has(commit) && (!merge || designDeMerge(root, commit, parents))) continue;
+    if (merge && faits.gelsVivants.has(parents[1]) && designDeMerge(root, commit, parents)) {
+      fenetre = true;
+      continue;
+    }
+    if (!tryGit(root, ["diff", "--quiet", parents[0], commit, "--", DESIGN_MD]).ok) {
+      raison ??= `${commit.slice(0, 12)} modifie DESIGN.md sans transition du runtime`;
+    }
+  }
+  if (!designConforme(root, tete)) raison ??= "DESIGN.md diffère de HEAD (fichier, mode ou index)";
+  if (fenetre && !apresReprise && raison === undefined) {
+    return { verdict: "en-attente" };
+  }
+  if (raison !== undefined) return { verdict: "non-explique", raison };
+  return fenetre ? { verdict: "en-attente" } : { verdict: "explique" };
+}
+
+export type PreuveStatut = { ok: true; commit: string } | { ok: false; raison: string };
+
+/**
+ * Le HEAD de la racine est-il EXACTEMENT le commit de Statut attendu (C6.3, L9-Q8) ?
+ *
+ * Racine propre ; HEAD à un seul parent, `integration_commit` ; un seul chemin modifié,
+ * `DESIGN.md`, modifié et non créé, renommé ou changé de mode ; et son contenu est la
+ * transformation exacte `from_status → to_status` de celui d'`integration_commit`.
+ */
+export function preuveCommitStatut(root: string, integrationCommit: string, du: DesignUpdate): PreuveStatut {
+  const sale = dirtyRoot(root);
+  if (sale.length > 0) return { ok: false, raison: `racine sale : ${sale.slice(0, 3).join(", ")}` };
+  const tete = teteDeRacine(root);
+  if (tete === undefined) return { ok: false, raison: "HEAD de la racine illisible" };
+  const parents = parentsDe(root, tete);
+  if (parents === undefined || parents.length !== 1 || parents[0] !== integrationCommit) {
+    return {
+      ok: false,
+      raison: `${tete.slice(0, 12)} n'a pas pour seul parent le commit d'intégration ${integrationCommit.slice(0, 12)}`,
+    };
+  }
+  const diff = tryGit(root, ["diff", "--no-renames", "--raw", "--no-abbrev", integrationCommit, tete]);
+  if (!diff.ok) return { ok: false, raison: "diff du commit de Statut illisible" };
+  const lignes = diff.out.split("\n").filter(Boolean);
+  const seule = lignes.length === 1 ? /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ M\t(.*)$/.exec(lignes[0]) : null;
+  if (seule === null || seule[3] !== DESIGN_MD || seule[1] !== seule[2]) {
+    return { ok: false, raison: `le commit de Statut ne modifie pas ${DESIGN_MD} seul : ${lignes.join(" · ") || "rien"}` };
+  }
+  const avant = contenuDans(root, integrationCommit, DESIGN_MD);
+  const apres = contenuDans(root, tete, DESIGN_MD);
+  if (avant === undefined || apres === undefined || !transformationExacte(avant, apres, du)) {
+    return {
+      ok: false,
+      raison: `${DESIGN_MD} n'est pas exactement la transition ${du.decision_id} ${du.from_status} → ${du.to_status}`,
+    };
+  }
+  return { ok: true, commit: tete };
+}
+
+export type IssueStatutGit =
+  | { ok: true; outcome: "unchanged" }
+  | { ok: true; outcome: "committed"; commit: string }
+  | {
+      ok: false;
+      raison: string;
+      /**
+       * La racine est-elle revenue propre sur `integration_commit` ? Faux quand un commit a
+       * été créé et ne se prouve pas, ou quand la restauration n'a pas pu s'établir.
+       */
+      restauree: boolean;
+    };
+
+/**
+ * La phase Statut sur la racine (C6.2, L9-Q7, L9-Q9), par la capacité interne du runtime.
+ *
+ * Précondition : HEAD = `integration_commit`. Le statut courant se lit dans le DESIGN.md de ce
+ * commit ; `planifierStatut` décide :
+ *
+ *   inchangé        racine propre exigée, rien n'est écrit              → unchanged
+ *   refus           rien n'est écrit
+ *   appliquer       la racine doit être propre, ou ne porter que l'effet partiel EXACT de
+ *                   cette phase sur DESIGN.md (fichier et index, chacun avant ou après la
+ *                   transition) : il est alors restauré sur `integration_commit`. Toute autre
+ *                   saleté refuse, sans reset. Puis écriture, `git add`, `git commit` — les
+ *                   hooks du dépôt restent souverains — et le commit créé doit se prouver.
+ *
+ * Un commit refusé : seul l'effet produit est défait (DESIGN.md, fichier et index, restauré
+ * sur `integration_commit`). Un commit créé qui ne se prouve pas n'est pas corrigé : il reste,
+ * et l'issue le dit.
+ */
+export function commitStatut(root: string, integrationCommit: string, du: DesignUpdate): IssueStatutGit {
+  const tete = teteDeRacine(root);
+  if (tete !== integrationCommit) {
+    return {
+      ok: false,
+      restauree: false,
+      raison: `HEAD ${String(tete).slice(0, 12)} n'est pas le commit d'intégration ${integrationCommit.slice(0, 12)}`,
+    };
+  }
+  const avant = contenuDans(root, integrationCommit, DESIGN_MD);
+  if (avant === undefined) {
+    return { ok: false, restauree: dirtyRoot(root).length === 0, raison: `${DESIGN_MD} absent de ${integrationCommit.slice(0, 12)}` };
+  }
+  const plan = planifierStatut(avant, du);
+  if (plan.issue === "refus") return { ok: false, restauree: dirtyRoot(root).length === 0, raison: plan.raison };
+
+  const sale = dirtyRoot(root);
+  if (plan.issue === "inchange") {
+    if (sale.length > 0) return { ok: false, restauree: false, raison: `racine sale : ${sale.slice(0, 3).join(", ")}` };
+    return { ok: true, outcome: "unchanged" };
+  }
+  const restaurer = (): boolean =>
+    tryGit(root, ["checkout", integrationCommit, "--", DESIGN_MD]).ok && dirtyRoot(root).length === 0;
+  if (sale.length > 0) {
+    // Seul l'effet partiel exact de cette phase se reprend ; il se défait, puis se refait.
+    let fichier: string | undefined;
+    try {
+      fichier = readFileSync(join(root, DESIGN_MD), "utf-8");
+    } catch {
+      fichier = undefined;
+    }
+    const index = tryGit(root, ["show", `:${DESIGN_MD}`]);
+    const connus = [avant, plan.contenu];
+    const partiel = sale.every((l) => l.slice(2).trim() === DESIGN_MD) &&
+      fichier !== undefined && connus.includes(fichier) && index.ok && connus.includes(index.out);
+    if (!partiel) {
+      return { ok: false, restauree: false, raison: `racine sale hors de l'effet de la phase Statut : ${sale.slice(0, 3).join(", ")}` };
+    }
+    if (!restaurer()) return { ok: false, restauree: false, raison: `l'effet partiel sur ${DESIGN_MD} n'a pas pu être restauré` };
+  }
+
+  writeFileSync(join(root, DESIGN_MD), plan.contenu);
+  const indexe = tryGit(root, ["add", "--", DESIGN_MD]);
+  const cree = indexe.ok ? tryGit(root, ["commit", "-q", "-m", statusMessage(du)]) : indexe;
+  if (!cree.ok) {
+    return {
+      ok: false,
+      restauree: teteDeRacine(root) === integrationCommit && restaurer(),
+      raison: `commit de Statut refusé : ${cree.out.trim()}`,
+    };
+  }
+  const preuve = preuveCommitStatut(root, integrationCommit, du);
+  if (!preuve.ok) return { ok: false, restauree: false, raison: `commit de Statut créé et non conforme : ${preuve.raison}` };
+  return { ok: true, outcome: "committed", commit: preuve.commit };
+}
+
+/**
+ * La fenêtre de crash qu'une transition inachevée occupe, selon git (L9-Q6 à L9-Q8).
+ *
+ *   gel vivant (sans MERGED)
+ *     le gel n'est pas dans l'histoire de HEAD      aucune : aucun merge n'a eu lieu
+ *     il y est                                      après merge : la preuve EXACTE décide
+ *   MERGED sans INTEGRATED
+ *     HEAD = integration_commit                     après MERGED : le Statut reste à faire
+ *     HEAD à un seul parent, integration_commit     après commit de Statut : à prouver
+ *     toute autre tête                              contradiction : rien ne s'adopte
+ *
+ * Classer n'est pas adopter : chaque fenêtre garde sa preuve exacte (`preuveMergeEffectue`,
+ * `commitStatut`, `preuveCommitStatut`). L'ascendance ne sert qu'à savoir qu'un merge a eu
+ * lieu, jamais à dire lequel.
+ */
+export type FenetreDeReprise =
+  | { fenetre: "aucune" }
+  | { fenetre: "apres-merge" }
+  | { fenetre: "apres-merged" }
+  | { fenetre: "apres-statut" }
+  | { fenetre: "contradiction"; raison: string };
+
+export function fenetreDeReprise(
+  root: string,
+  transition: { gel: string; integrationCommit?: string },
+): FenetreDeReprise {
+  const tete = teteDeRacine(root);
+  if (tete === undefined) return { fenetre: "contradiction", raison: "HEAD de la racine illisible" };
+  if (transition.integrationCommit === undefined) {
+    // Un gel que git ne sait pas lire n'est pas un gel « non mergé » : ne pas savoir n'est pas
+    // savoir qu'aucun merge n'a eu lieu.
+    if (!tryGit(root, ["rev-parse", "--verify", "--quiet", `${transition.gel}^{commit}`]).ok) {
+      return { fenetre: "contradiction", raison: `le gel ${transition.gel.slice(0, 12)} est illisible` };
+    }
+    return tryGit(root, ["merge-base", "--is-ancestor", transition.gel, tete]).ok
+      ? { fenetre: "apres-merge" }
+      : { fenetre: "aucune" };
+  }
+  if (tete === transition.integrationCommit) return { fenetre: "apres-merged" };
+  const parents = parentsDe(root, tete);
+  if (parents !== undefined && parents.length === 1 && parents[0] === transition.integrationCommit) {
+    return { fenetre: "apres-statut" };
+  }
+  return {
+    fenetre: "contradiction",
+    raison: `HEAD ${tete.slice(0, 12)} n'est ni le commit d'intégration ${transition.integrationCommit.slice(0, 12)} ` +
+      "ni un commit posé directement sur lui",
+  };
 }

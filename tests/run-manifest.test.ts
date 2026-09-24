@@ -24,8 +24,11 @@ import {
   NotOwnerError,
   RecoveryError,
   RunBusyError,
+  appendFrozenEvent,
+  appendIntegratedEvent,
   appendIntegrationEvent,
   appendLaneEvent,
+  appendMergedEvent,
   decideUnderLease,
   integrationLedgerPath,
   readIntegrationEvents,
@@ -1409,6 +1412,31 @@ test("un bail périmé n'écrit pas au registre", () => {
   }
 });
 
+/**
+ * Une intégration v2 complète, par ses écrivains (PLAN-LOT9 § 7.1) : la revue qui approuve,
+ * le FROZEN, le MERGED, puis l'INTEGRATED final not-applicable. Aucun objet git n'est lu :
+ * les écrivains jugent le registre, pas le dépôt.
+ */
+function chaineV2(dir: string, bail: Lease, unite: string, lane: string, commit: string): void {
+  const seq = (): number => readLaneEvents(dir, bail.runId).events.reduce(
+    (m, e) => ("event_seq" in e ? Math.max(m, e.event_seq) : m), 0);
+  appendLaneEvent(dir, {
+    event: "REVIEWED", work_unit: unite, at: "r", lane, from_tree: "t0", tree: "t1", verdict: "approved",
+    reviewer: { delegation_seq: 1, agent: "reviewer", role: "reviewer" }, proof: { mode: "diff" },
+  }, bail);
+  const ouverture = readLaneEvents(dir, bail.runId).events.find((e) => e.event === "OPENED" && "lane" in e && e.lane === lane);
+  const base = ouverture?.event === "OPENED" ? String(ouverture.base) : "";
+  appendFrozenEvent(dir, {
+    event: "FROZEN", work_unit: unite, at: "f", lane, commit: `g-${commit}`, parent: base, tree: "t1", reviewed_event_seq: seq(),
+  }, bail);
+  appendMergedEvent(dir, {
+    event: "MERGED", work_unit: unite, at: "m", lane, integration_commit: commit, frozen_event_seq: seq(),
+  }, bail);
+  appendIntegratedEvent(dir, {
+    event: "INTEGRATED", work_unit: unite, at: "i", lane, integration_commit: commit, status: { outcome: "not-applicable" },
+  }, bail);
+}
+
 test("le registre garde l'ordre des faits", () => {
   const { dir, done } = dossier();
   try {
@@ -1416,10 +1444,11 @@ test("le registre garde l'ordre des faits", () => {
     const bail = own(dir, m.runId);
     appendLaneEvent(dir, { event: "OPENED", work_unit: "W01", at: "1", base: "b1", lane: `${m.runId}-W01-g1`, generation: 1 }, bail);
     appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "2", base: "b3", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
-    appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W01", at: "3", integration_commit: "c1" }, bail);
+    // PLAN-LOT9 § 7.1 : l'intégration de W01 est une chaîne v2 valide ; l'ordre éprouvé est le même.
+    chaineV2(dir, bail, "W01", `${m.runId}-W01-g1`, "c1");
     assert.deepEqual(
       readLaneEvents(dir, m.runId).events.map((e) => `${e.event}:${e.work_unit}`),
-      ["OPENED:W01", "OPENED:W03", "INTEGRATED:W01"],
+      ["OPENED:W01", "OPENED:W03", "REVIEWED:W01", "FROZEN:W01", "MERGED:W01", "INTEGRATED:W01"],
     );
   } finally {
     done();
@@ -1633,21 +1662,21 @@ test("appendLaneEvent refuse un registre legacy tant qu'il n'est pas migré", ()
  * `integration_commit: ""` indistinguable de l'absence, et la lane retomberait
  * sur la preuve par branche en croyant en avoir une durable.
  */
-test("un commit d'intégration traverse l'écriture et la relecture", () => {
+test("un commit d'intégration traverse l'écriture et la relecture, par la chaîne v2", () => {
   const { dir, done } = dossier();
   try {
     const m = openRun(dir).manifest;
     const bail = own(dir, m.runId);
     appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "x", base: "abc", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
-    appendLaneEvent(
-      dir,
-      { event: "INTEGRATED", work_unit: "W03", at: "x", integration_commit: "deadbeef" },
-      bail,
-    );
+    // PLAN-LOT9 § 7.2 : FROZEN → MERGED → INTEGRATED { integration_commit, status: not-applicable }.
+    chaineV2(dir, bail, "W03", `${m.runId}-W03-g1`, "deadbeef");
     const lu = readLaneEvents(dir, m.runId);
     assert.equal(lu.malformed, 0);
-    const e = lu.events[1];
+    const merge = lu.events.find((x) => x.event === "MERGED");
+    const e = lu.events.at(-1)!;
+    assert.equal(merge?.event === "MERGED" ? merge.integration_commit : undefined, "deadbeef");
     assert.equal(e.event === "INTEGRATED" ? e.integration_commit : undefined, "deadbeef");
+    assert.deepEqual(e.event === "INTEGRATED" && "status" in e ? e.status : undefined, { outcome: "not-applicable" });
   } finally {
     done();
   }
@@ -1672,18 +1701,19 @@ test("écrivain v2 : l'enveloppe est déduite du registre, jamais fournie", () =
     appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "1", base: "b", lane: `${m.runId}-W03-g1`, generation: 1 }, bail);
     appendLaneEvent(dir, { event: "ABANDONED", work_unit: "W03", at: "2", reason: "essai" }, bail);
     appendLaneEvent(dir, { event: "OPENED", work_unit: "W03", at: "3", base: "b", lane: `${m.runId}-W03-g2`, generation: 2 }, bail);
-    appendLaneEvent(dir, { event: "INTEGRATED", work_unit: "W03", at: "4", integration_commit: "c0ffee" }, bail);
+    // PLAN-LOT9 § 7.1 : l'intégration de g2 est une chaîne v2 valide.
+    chaineV2(dir, bail, "W03", `${m.runId}-W03-g2`, "c0ffee");
     const [entete, ...corps] = lignesRegistre(dir, m.runId);
     assert.deepEqual(entete, { ledger: 2 });
-    assert.deepEqual(corps.map((e) => e.event_seq), [1, 2, 3, 4]);
+    assert.deepEqual(corps.map((e) => e.event_seq), [1, 2, 3, 4, 5, 6, 7]);
     assert.deepEqual(corps[1], {
       event_seq: 2, work_unit: "W03", lane: `${m.runId}-W03-g1`, at: "2",
       event: "ABANDONED", by: "operator", reason: "essai", generation: 1,
     });
-    // La forme historique de C0 v1.8 : le commit exact, aucun status.
-    assert.deepEqual(corps[3], {
-      event_seq: 4, work_unit: "W03", lane: `${m.runId}-W03-g2`, at: "4",
-      event: "INTEGRATED", integration_commit: "c0ffee",
+    // La forme finale v2 (PLAN-LOT9 § 7.1) : le commit exact et l'issue du Statut.
+    assert.deepEqual(corps[6], {
+      event_seq: 7, work_unit: "W03", lane: `${m.runId}-W03-g2`, at: "i",
+      event: "INTEGRATED", integration_commit: "c0ffee", status: { outcome: "not-applicable" },
     });
     const lu = readLaneEvents(dir, m.runId);
     assert.deepEqual(lu.malformedLines, []);
@@ -1711,6 +1741,15 @@ test("écrivain v2 : ce qui ne tient pas dans la grammaire est refusé avant éc
       ["intégration sans commit", { event: "INTEGRATED", work_unit: "W03", at: "x" }],
       ["abandon sans raison", { event: "ABANDONED", work_unit: "W03", at: "x" }],
       ["unité jamais ouverte", { event: "ABANDONED", work_unit: "W09", at: "x", reason: "r" }],
+      // PLAN-LOT9 § 2 : MERGED et l'INTEGRATED final ne s'écrivent que par leurs écrivains, qui
+      // jugent les deux registres sous R ; jamais par l'append ordinaire.
+      ["MERGED hors de son écrivain", {
+        event: "MERGED", work_unit: "W03", at: "x", lane: g1.lane, integration_commit: "c", frozen_event_seq: 1,
+      }],
+      ["INTEGRATED final hors de son écrivain", {
+        event: "INTEGRATED", work_unit: "W03", at: "x", lane: g1.lane, integration_commit: "c",
+        status: { outcome: "not-applicable" },
+      }],
     ];
     for (const [quoi, evt] of refus) {
       assert.throws(() => appendLaneEvent(dir, evt, bail), RecoveryError, quoi);

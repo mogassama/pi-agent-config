@@ -388,8 +388,8 @@
       },
       {
         "file": "extensions/subagent/index.ts",
-        "find": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : gelerLane(lane, lease);",
-        "replace": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : undefined; void gelerLane; // mutant B3 : sans le gel, la seconde barrière contre un remerge tombe aussi"
+        "find": "    if (etatGel.etat === \"fusionne\" || etatGel.etat === \"integree-historique\" || etatGel.etat === \"contradictoire\") {",
+        "replace": "    if (etatGel.etat === \"fusionne\") { const c = commitLane(root, lane.laneId, freezeMessage(lane.laneId)); const f = c.commit ? commitFacts(root, c.commit) : undefined; if (c.commit && f?.ok) return { ok: true, commit: c.commit, parent: f.parents[0], tree: f.tree }; } // mutant B3-jamais-deux-merges : un gel consommé par MERGED ne barre plus un remerge\n    if (etatGel.etat === \"integree-historique\" || etatGel.etat === \"contradictoire\") {"
       }
     ],
     "runs": 20
@@ -565,8 +565,8 @@
       },
       {
         "file": "extensions/subagent/index.ts",
-        "find": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : gelerLane(lane, lease);",
-        "replace": "          const gel = fermeAvantGel || causesC3.length > 0 ? undefined : undefined; void gelerLane; // mutant B2-reviewed-reload : le gel ne relit plus l'approbation durable"
+        "find": "  if (derniere === undefined || derniere.verdict !== \"approved\") {\n    return { ok: false, raison: \"aucune approbation durable à geler\" };\n  }",
+        "replace": "  if (derniere === undefined) { const c = commitLane(root, lane.laneId, freezeMessage(lane.laneId)); const f = c.commit ? commitFacts(root, c.commit) : undefined; if (c.commit && f?.ok) return { ok: true, commit: c.commit, parent: f.parents[0], tree: f.tree }; } // mutant B2-reviewed-reload : le gel ne relit plus l'approbation durable\n  if (derniere === undefined || derniere.verdict !== \"approved\") {\n    return { ok: false, raison: \"aucune approbation durable à geler\" };\n  }"
       }
     ]
   },
@@ -703,8 +703,8 @@
       },
       {
         "file": "extensions/subagent/index.ts",
-        "find": "            (commit) =>\n              appendLaneEvent(\n                RUN_DIR,\n                {\n                  event: \"INTEGRATED\",\n                  work_unit: lane.workUnitId,\n                  at: new Date().toISOString(),\n                  integration_commit: commit,\n                },\n                lease,\n              ),",
-        "replace": "            (commit) => {\n              appendLaneEvent(\n                RUN_DIR,\n                {\n                  event: \"INTEGRATED\",\n                  work_unit: lane.workUnitId,\n                  at: new Date().toISOString(),\n                  integration_commit: commit,\n                },\n                lease,\n              );\n              for (const differe of GEL_DIFFERE.splice(0)) differe();\n            },"
+        "find": "            : undefined;\n          if (fin?.ok) {",
+        "replace": "            : undefined;\n          for (const differe of GEL_DIFFERE.splice(0)) differe();\n          if (fin?.ok) {"
       }
     ]
   },
@@ -737,5 +737,56 @@
     "file": "subagent-only/design-update.ts",
     "find": "    if (!TRANSITIONS_DESIGN.some(([a, b]) => a === de && b === vers)) {",
     "replace": "    if (false) { // mutant B3-plan-design-update-refus : le couple n'est plus vérifié contre les transitions C0"
+  },
+  {
+    "test": "L0 COUV B3-adoption-frozen — un commit de gel sans FROZEN ne s'adopte que s'il est exactement le gel approuvé",
+    "file": "bin/subagent-recover",
+    "find": "  const conforme = faits.parents.length === 1 && faits.parents[0] === base && faits.tree === derniere.tree;",
+    "replace": "  const conforme = faits.parents.length === 1; // mutant B3-adoption-frozen : adopt-frozen n'exige plus parent = base ni tree = T_L"
+  },
+  {
+    "test": "L0 REG B3-statut-inline — un contournement de la garde bloque durablement le run",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (etatDesign() !== avant) attribuerApresAppel(obs);",
+    "replace": "    void avant; // mutant B3-statut-inline : abonnement tool_result conservé, DESIGN.md n'est plus comparé"
+  },
+  {
+    "test": "L0 COUV B3-merge-sans-changement — une lane approuvée sans changement suit la chaîne entière",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (gel.status === \"clean\") {\n    gel = commitGelVide(root, lane.laneId, freezeMessage(lane.laneId));\n    if (gel.status !== \"committed\") return { ok: false, raison: `gel vide impossible : ${gel.reason}` };\n  }",
+    "replace": "  if (gel.status === \"clean\") return { ok: true }; // mutant B3-merge-sans-changement : plus de gel vide, donc ni FROZEN ni merge --no-ff"
+  },
+  {
+    "test": "L0 REG B3-chaine — une intégration réussie écrit les trois états, et le dit en clair",
+    "file": "extensions/subagent/index.ts",
+    "find": "      appendMergedEvent(RUN_DIR, {",
+    "replace": "      if (false) appendMergedEvent(RUN_DIR, { // mutant B3-chaine m1 : MERGED non écrit"
+  },
+  {
+    "test": "L0 REG B3-chaine — une intégration réussie écrit les trois états, et le dit en clair",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  // ---- INTEGRATED final\n",
+        "replace": "  // ---- INTEGRATED final\n  // mutant B3-chaine m2 : la sortie publique se prépare avant l'append, sans relire l'événement durable\n  const seqAvant = readLaneEvents(RUN_DIR, RUN_ID).events.reduce((m, e) => (\"event_seq\" in e ? Math.max(m, e.event_seq) : m), 0);\n"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    integrated_event_seq: durable.event_seq,",
+        "replace": "    integrated_event_seq: seqAvant,"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG B3-racine-sale — une racine sale fait refuser toute intégration",
+    "file": "extensions/subagent/index.ts",
+    "find": "          const fermeRacine = racineSale();",
+    "replace": "          const fermeRacine = undefined as string | undefined; void racineSale; // mutant B3-racine-sale : racine propre non contrôlée avant le merge"
+  },
+  {
+    "test": "L0 REG B3-statut-na — une unité sans design_update rend not-applicable",
+    "file": "extensions/subagent/index.ts",
+    "find": "    status = { outcome: \"not-applicable\" };",
+    "replace": "    status = { outcome: \"unchanged\", decision_id: \"D-001\", target_status: \"en cours\" }; // mutant B3-statut-na : issue de Statut inventée"
   }
 ]

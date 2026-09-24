@@ -260,7 +260,7 @@ regression("B3-statut-unchanged", "une décision déjà au statut cible ne produ
   } finally { h.fin(); }
 });
 
-regression("B3-statut-na", "une unité sans design_update rend not-applicable", async () => {
+regressionCorrigee("B3-statut-na", "une unité sans design_update rend not-applicable", async () => {
   const h = await monter({ bundle: true, design: DESIGN, plan: planStatut(undefined) });
   try {
     const r = await integrer(h, "W03", "a = 2", "1");
@@ -351,7 +351,7 @@ regression("B3-statut-commit-echec", "un commit de Statut qui échoue laisse l'i
 
 // ================================================================== C6.4 et C6.6
 
-regression("B3-statut-inline", "un contournement de la garde bloque durablement le run", async () => {
+regressionCorrigee("B3-statut-inline", "un contournement de la garde bloque durablement le run", async () => {
   const h = await monter({
     bundle: true, design: DESIGN,
     plan: planStatut({ decision_id: "D-001", from_status: "proposé", to_status: "en cours" }),
@@ -409,7 +409,7 @@ regression("B3-statut-inline", "un contournement de la garde bloque durablement 
     const contournementPasse = (preAppel as { block?: boolean } | undefined)?.block !== true;
     const contourne = `${DESIGN}\n<!-- écrit en contournant la garde -->\n`;
     writeFileSync(join(h.root, "DESIGN.md"), contourne);
-    const apresAppel = h.abonnements().find((x) => x === "tool_result" || x === "tool_end");
+    const apresAppel = h.abonnements().find((x) => x === "tool_result");
     if (apresAppel) await h.emettre(apresAppel, { toolName: "bash", toolCallId: "c1" });
     const blocPose = bloc();
     const avantRoles = photo();
@@ -460,7 +460,7 @@ regression("B3-statut-inline", "un contournement de la garde bloque durablement 
         toolName: "bash", toolCallId: "t1", input: { command: contournement },
       });
       writeFileSync(join(terminable.root, "DESIGN.md"), `${DESIGN}\n<!-- contourné -->\n`);
-      const apres2 = terminable.abonnements().find((x) => x === "tool_result" || x === "tool_end");
+      const apres2 = terminable.abonnements().find((x) => x === "tool_result");
       if (apres2) await terminable.emettre(apres2, { toolName: "bash", toolCallId: "t1" });
       blocTerminal = bloc(terminable);
 
