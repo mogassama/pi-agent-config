@@ -29,6 +29,9 @@ type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
   test(`L0 REG ${id} — ${titre}`, { todo: `rouge attendu sur l'objet jusqu'au lot qui corrige ${id}` }, fn);
 }
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
+}
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
 }
@@ -108,7 +111,7 @@ const designDe = (h: { root: string }): string => lireOuAbsent(join(h.root, "DES
 
 // ================================================================== C6.1 — au gel du plan
 
-regression("B3-plan-design-update-refus", "un design_update invalide fait refuser avant toute lane", async () => {
+regressionCorrigee("B3-plan-design-update-refus", "un design_update invalide fait refuser avant toute lane", async () => {
   const cas: Array<[string, Record<string, string> | undefined, unknown]> = [
     ["decision_id absent", { decision_id: "D-404", from_status: "proposé", to_status: "en cours" }, undefined],
     ["from_status inconnu", { decision_id: "D-001", from_status: "brouillon", to_status: "en cours" }, undefined],

@@ -67,6 +67,7 @@ import {
   type Lease,
 } from "../../subagent-only/run-manifest.js";
 import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
+import { validerDesignUpdates } from "../../subagent-only/design-update.js";
 import {
   SchedulerInputError,
   admettre,
@@ -1849,6 +1850,27 @@ function plan(): PlanResult {
   }
   PLAN = parsePlan(text);
   PLAN_TEXT = text;
+  /*
+   * C6.1 au gel du plan (PLAN-LOT8 Q11) : chaque `design_update` se juge ici, avant tout
+   * `attachPlan` et avant tout spawn lié à une unité, contre la grammaire de C0 v1.9.
+   * Invalide, le plan entier l'est : il se corrige tant que rien n'a commencé, comme tout
+   * plan invalide, et rien n'est écrit — ni événement, ni lane, ni commit, ni DESIGN.md.
+   */
+  if (PLAN.status === "usable" && text !== undefined) {
+    const racineBundle = bundleRoot(process.cwd());
+    let design: string | undefined;
+    if (racineBundle !== null) {
+      try {
+        design = readFileSync(join(racineBundle, "DESIGN.md"), "utf-8");
+      } catch {
+        design = undefined;
+      }
+    }
+    const verdict = validerDesignUpdates(JSON.parse(text), { bundle: racineBundle !== null, design });
+    if (!verdict.ok) {
+      PLAN = { ...PLAN, status: "invalid", reason: `design_update : ${verdict.reason}`, units: [] };
+    }
+  }
   // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
   // au registre de risques : le relevé lit le même plan avec les mêmes règles et
   // le rend visible lui-même. Le journaliser ici l'aurait rangé dans un fichier

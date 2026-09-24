@@ -731,5 +731,11 @@
     "file": "extensions/subagent/index.ts",
     "find": "  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;",
     "replace": "  if (integrated && isMerged(root, laneId, base)) return undefined; void frozenExact; // mutant B3-frozen-crash : un FROZEN exact n'excuse plus la tête"
+  },
+  {
+    "test": "L0 REG B3-plan-design-update-refus — un design_update invalide fait refuser avant toute lane",
+    "file": "subagent-only/design-update.ts",
+    "find": "    if (!TRANSITIONS_DESIGN.some(([a, b]) => a === de && b === vers)) {",
+    "replace": "    if (false) { // mutant B3-plan-design-update-refus : le couple n'est plus vérifié contre les transitions C0"
   }
 ]

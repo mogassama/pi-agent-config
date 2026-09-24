@@ -1944,6 +1944,23 @@ async function redemarrer(h: Awaited<ReturnType<typeof monter>>) {
  * contre-exemple construit donc d'abord la tentative, puis remplace le plan et
  * son empreinte autoritaire avant le redémarrage. Le reste du plan est identique.
  */
+/**
+ * Le régime bundle et une décision C6.1 valide pour `PLAN_AVEC_DECISION` (C0 v1.9).
+ *
+ * Depuis PLAN-LOT8 Q11, un `design_update` se juge au gel du plan : hors bundle, ou contre
+ * une décision absente, il rend le plan invalide avant toute délégation. Ces scénarios
+ * éprouvent la fermeture de C0 v1.8 qui suit un gel VALIDE ; ils posent donc le bundle et
+ * la décision D-001 avant d'ouvrir quoi que ce soit.
+ */
+function poserBundleAvecDecision(root: string): void {
+  for (const f of ["INSTRUCTIONS.md", "ARCHITECTURE.md", "CONVENTIONS.md"]) {
+    writeFileSync(join(root, f), `# ${f}\n`);
+  }
+  writeFileSync(join(root, "DESIGN.md"), "# DESIGN\n\n## Décisions\n\n### D-001 — orchestration\n\nStatut : proposé\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-qm", "bundle");
+}
+
 async function redemarrerAvecDecision(h: Awaited<ReturnType<typeof monter>>) {
   const root = h.root;
   await h.evenement("session_shutdown")?.();
@@ -1960,6 +1977,7 @@ async function redemarrerAvecDecision(h: Awaited<ReturnType<typeof monter>>) {
 
 test("une tentative antérieure avec design_update refuse avant de construire son commit", async () => {
   const h = await monter();
+  poserBundleAvecDecision(h.root);
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
   try {
     // État que le runtime antérieur à C0 v1.8 pouvait produire : tentative en résolution.
@@ -2007,6 +2025,7 @@ test("une tentative antérieure avec design_update refuse avant de construire so
 
 test("un atterrissage antérieur avec design_update refuse encore avant le merge", async () => {
   const h = await monter();
+  poserBundleAvecDecision(h.root);
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
   try {
     await conflit(h);
@@ -3114,6 +3133,7 @@ async function travaillerPuisApprouver(h: Awaited<ReturnType<typeof monter>>) {
  */
 test("un design_update ferme l'intégration avant le merge", async () => {
   const h = await monter();
+  poserBundleAvecDecision(h.root);
   try {
     writeFileSync(join(h.runDir, `${h.runId}-plan.json`), JSON.stringify({
       version: 1,
