@@ -771,6 +771,46 @@ export interface FaitsDesign {
   autorite: ReadonlySet<string>;
   /** Le gel VIVANT de chaque lane (le dernier, classé vivant) : second parent d'un merge sans MERGED. */
   gelsVivants: ReadonlySet<string>;
+  /**
+   * Les phases Statut en cours : MERGED durable sans INTEGRATED, et le `design_update` du plan
+   * gelé. Leur commit de Statut exact, ou leur effet partiel exact sur DESIGN.md, peut encore
+   * être entièrement la transition du runtime.
+   */
+  statutsEnCours: ReadonlyArray<{ integrationCommit: string; du: DesignUpdate }>;
+}
+
+/**
+ * DESIGN.md (fichier ordinaire et entrée d'index normale) ne porte-t-il que l'effet partiel
+ * EXACT de la phase Statut sur `commit` : chacun est soit le contenu de `commit`, soit la
+ * transition `from → to` appliquée, au mode de `commit` ? Toute autre différence est un delta
+ * en plus. Partagé par l'attribution C6.4 et par la reprise de la phase Statut.
+ */
+export function effetPartielExact(root: string, commit: string, du: DesignUpdate): boolean {
+  const avant = contenuDans(root, commit, DESIGN_MD);
+  if (avant === undefined) return false;
+  const plan = planifierStatut(avant, du);
+  if (plan.issue !== "appliquer") return false;
+  const connus = [avant, plan.contenu];
+  let fichier: ReturnType<typeof lstatSync>;
+  try {
+    fichier = lstatSync(join(root, DESIGN_MD));
+  } catch {
+    return false;
+  }
+  if (!fichier.isFile()) return false;
+  const index = tryGit(root, ["ls-files", "-s", "-v", "--", DESIGN_MD]);
+  const entree = index.ok ? /^H (\d{6}) ([0-9a-f]+) 0\t[^\n]*$/.exec(index.out.trim()) : null;
+  const arbre = entreeDesign(root, commit);
+  if (entree === null || arbre === undefined || !arbre.startsWith(`${entree[1]} blob `)) return false;
+  if (((Number(fichier.mode) & 0o111) !== 0) !== (entree[1] === "100755")) return false;
+  const contenuIndex = tryGit(root, ["cat-file", "blob", entree[2]]);
+  let octets: Buffer;
+  try {
+    octets = readFileSync(join(root, DESIGN_MD));
+  } catch {
+    return false;
+  }
+  return contenuIndex.ok && connus.includes(contenuIndex.out) && connus.some((c) => octets.equals(Buffer.from(c, "utf-8")));
 }
 
 export type AttributionDesign =
@@ -788,9 +828,11 @@ export type AttributionDesign =
  * ou ne touche pas DESIGN.md ; et si DESIGN.md sur disque et dans l'index est exactement celui
  * de HEAD. Une transition réelle ne couvre jamais un delta en plus.
  *
- * Un merge du gel vivant dont MERGED n'est pas encore écrit, et dont DESIGN.md est celui du
- * merge recalculé, n'est ni une écriture certaine ni un changement expliqué : l'attribution est
- * EN ATTENTE. Seule l'ambiguïté pure attend : dès qu'une partie du delta est déjà prouvée non
+ * Trois états du runtime ne sont ni une écriture certaine ni un changement expliqué, et mettent
+ * l'attribution EN ATTENTE : un merge du gel vivant dont MERGED n'est pas encore écrit, et dont
+ * DESIGN.md est celui du merge recalculé ; sur HEAD = integration_commit d'un MERGED sans
+ * INTEGRATED, l'effet partiel EXACT de sa phase Statut ; un commit de Statut exact (C6.2) posé
+ * sur ce commit, dont l'INTEGRATED n'est pas encore écrit. Seule l'ambiguïté pure attend : dès qu'une partie du delta est déjà prouvée non
  * expliquée, le blocage est immédiat — une attente tenue en mémoire ne survit pas à un
  * redémarrage (adjudication de B, correction 1).
  */
@@ -825,11 +867,23 @@ export function attribuerDesign(
       fenetre = true;
       continue;
     }
+    // Un commit de Statut exact dont l'INTEGRATED n'est pas encore écrit (L9-Q8) : en attente.
+    const statut = !merge ? faits.statutsEnCours.find((s) => s.integrationCommit === parents[0]) : undefined;
+    if (statut !== undefined && ecartDeStatut(root, commit, statut.integrationCommit, statut.du) === undefined) {
+      fenetre = true;
+      continue;
+    }
     if (!tryGit(root, ["diff", "--quiet", parents[0], commit, "--", DESIGN_MD]).ok) {
       raison ??= `${commit.slice(0, 12)} modifie DESIGN.md sans transition du runtime`;
     }
   }
-  if (!designConforme(root, tete)) raison ??= "DESIGN.md diffère de HEAD (fichier, mode ou index)";
+  if (!designConforme(root, tete)) {
+    // La phase Statut en cours sur HEAD = integration_commit : seul son effet partiel EXACT
+    // (fichier et index, chacun avant ou après la transition) peut encore être le runtime.
+    const statut = faits.statutsEnCours.find((s) => s.integrationCommit === tete);
+    if (statut !== undefined && effetPartielExact(root, tete, statut.du)) fenetre = true;
+    else raison ??= "DESIGN.md diffère de HEAD (fichier, mode ou index)";
+  }
   if (fenetre && !apresReprise && raison === undefined) {
     return { verdict: "en-attente" };
   }
@@ -851,29 +905,34 @@ export function preuveCommitStatut(root: string, integrationCommit: string, du: 
   if (sale.length > 0) return { ok: false, raison: `racine sale : ${sale.slice(0, 3).join(", ")}` };
   const tete = teteDeRacine(root);
   if (tete === undefined) return { ok: false, raison: "HEAD de la racine illisible" };
-  const parents = parentsDe(root, tete);
+  const ecart = ecartDeStatut(root, tete, integrationCommit, du);
+  return ecart === undefined ? { ok: true, commit: tete } : { ok: false, raison: ecart };
+}
+
+/**
+ * `commit` est-il EXACTEMENT le commit de Statut de `integrationCommit` (C6.2, L9-Q8) ? Un
+ * seul parent, `integrationCommit` ; un seul chemin modifié, `DESIGN.md`, modifié et non créé,
+ * renommé ou changé de mode ; et son contenu est la transformation exacte `from → to`. Rend
+ * l'écart, ou `undefined`.
+ */
+function ecartDeStatut(root: string, commit: string, integrationCommit: string, du: DesignUpdate): string | undefined {
+  const parents = parentsDe(root, commit);
   if (parents === undefined || parents.length !== 1 || parents[0] !== integrationCommit) {
-    return {
-      ok: false,
-      raison: `${tete.slice(0, 12)} n'a pas pour seul parent le commit d'intégration ${integrationCommit.slice(0, 12)}`,
-    };
+    return `${commit.slice(0, 12)} n'a pas pour seul parent le commit d'intégration ${integrationCommit.slice(0, 12)}`;
   }
-  const diff = tryGit(root, ["diff", "--no-renames", "--raw", "--no-abbrev", integrationCommit, tete]);
-  if (!diff.ok) return { ok: false, raison: "diff du commit de Statut illisible" };
+  const diff = tryGit(root, ["diff", "--no-renames", "--raw", "--no-abbrev", integrationCommit, commit]);
+  if (!diff.ok) return "diff du commit de Statut illisible";
   const lignes = diff.out.split("\n").filter(Boolean);
   const seule = lignes.length === 1 ? /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ M\t(.*)$/.exec(lignes[0]) : null;
   if (seule === null || seule[3] !== DESIGN_MD || seule[1] !== seule[2]) {
-    return { ok: false, raison: `le commit de Statut ne modifie pas ${DESIGN_MD} seul : ${lignes.join(" · ") || "rien"}` };
+    return `le commit de Statut ne modifie pas ${DESIGN_MD} seul : ${lignes.join(" · ") || "rien"}`;
   }
   const avant = contenuDans(root, integrationCommit, DESIGN_MD);
-  const apres = contenuDans(root, tete, DESIGN_MD);
+  const apres = contenuDans(root, commit, DESIGN_MD);
   if (avant === undefined || apres === undefined || !transformationExacte(avant, apres, du)) {
-    return {
-      ok: false,
-      raison: `${DESIGN_MD} n'est pas exactement la transition ${du.decision_id} ${du.from_status} → ${du.to_status}`,
-    };
+    return `${DESIGN_MD} n'est pas exactement la transition ${du.decision_id} ${du.from_status} → ${du.to_status}`;
   }
-  return { ok: true, commit: tete };
+  return undefined;
 }
 
 export type IssueStatutGit =
@@ -932,16 +991,7 @@ export function commitStatut(root: string, integrationCommit: string, du: Design
     tryGit(root, ["checkout", integrationCommit, "--", DESIGN_MD]).ok && dirtyRoot(root).length === 0;
   if (sale.length > 0) {
     // Seul l'effet partiel exact de cette phase se reprend ; il se défait, puis se refait.
-    let fichier: string | undefined;
-    try {
-      fichier = readFileSync(join(root, DESIGN_MD), "utf-8");
-    } catch {
-      fichier = undefined;
-    }
-    const index = tryGit(root, ["show", `:${DESIGN_MD}`]);
-    const connus = [avant, plan.contenu];
-    const partiel = sale.every((l) => l.slice(2).trim() === DESIGN_MD) &&
-      fichier !== undefined && connus.includes(fichier) && index.ok && connus.includes(index.out);
+    const partiel = sale.every((l) => l.slice(2).trim() === DESIGN_MD) && effetPartielExact(root, integrationCommit, du);
     if (!partiel) {
       return { ok: false, restauree: false, raison: `racine sale hors de l'effet de la phase Statut : ${sale.slice(0, 3).join(", ")}` };
     }

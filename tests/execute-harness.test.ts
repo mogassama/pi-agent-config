@@ -2009,7 +2009,7 @@ async function redemarrerAvecDecision(h: Awaited<ReturnType<typeof monter>>) {
   return await monter({ reprendre: root, avecPlan: false });
 }
 
-test("une tentative antérieure avec design_update refuse avant de construire son commit", async () => {
+test("une tentative antérieure en résolution avec design_update aboutit, puis Statut committed", async () => {
   const h = await monter();
   poserBundleAvecDecision(h.root);
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
@@ -2030,26 +2030,24 @@ test("une tentative antérieure avec design_update refuse avant de construire so
     assert.match(texte(iw), /RÉSOLUTION PRÊTE/);
 
     const tentatives = join(h.runDir, `${h.runId}-integrations.jsonl`);
-    const avantTentatives = readFileSync(tentatives, "utf-8");
-    const lanesAvant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
-    const avantHead = git(h.root, "rev-parse", "HEAD").trim();
     const r = await h2.outil.execute("4", revueDe("approved"));
     PILOTE.resultat = undefined;
 
-    assert.match(texte(r), /NON INTÉGRABLE\s+W03 : W03 porte un design_update/);
-    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), avantHead, "aucun merge");
-    assert.equal(readFileSync(tentatives, "utf-8"), avantTentatives, "aucun COMMITTED ni CLOSED");
-    assert.equal(
-      readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"),
-      lanesAvant,
-      "aucun INTEGRATED",
-    );
-    assert.equal(
-      execFileSync("ls", [join(h.root, ".git", "pi-integrations")], { encoding: "utf-8" })
-        .split("\n").filter(Boolean).length,
-      1,
-      "la tentative reste ouverte pour le LOT 9",
-    );
+    assert.match(texte(r), /intégrée : W03/, texte(r));
+    const merge = evenementsDe(h).filter((e) => e.event === "MERGED" && e.work_unit === "W03");
+    const fin = evenementsDe(h).filter((e) => e.event === "INTEGRATED" && e.work_unit === "W03");
+    assert.equal(merge.length, 1);
+    assert.equal(fin.length, 1);
+    const statut = fin[0].status as Record<string, unknown>;
+    assert.equal(statut.outcome, "committed");
+    assert.equal(statut.decision_id, "D-001");
+    assert.equal(statut.target_status, "en cours");
+    assert.equal(fin[0].integration_commit, merge[0].integration_commit);
+    assert.equal(git(h.root, "rev-parse", `${String(statut.status_commit)}^`).trim(), merge[0].integration_commit);
+    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), statut.status_commit);
+    assert.match(readFileSync(join(h.root, "DESIGN.md"), "utf-8"), /### D-001 — orchestration\n\nStatut : en cours\n/);
+    assert.match(readFileSync(tentatives, "utf-8"), /"event":"CLOSED"[^\n]*"outcome":"integrated"/, "la tentative est close intégrée");
+    assert.equal(git(h.root, "status", "--porcelain", "--untracked-files=all"), "", "racine propre");
   } finally {
     PILOTE.pendant = undefined;
     PILOTE.resultat = undefined;
@@ -2057,7 +2055,7 @@ test("une tentative antérieure avec design_update refuse avant de construire so
   }
 });
 
-test("un atterrissage antérieur avec design_update refuse encore avant le merge", async () => {
+test("un atterrissage antérieur avec design_update aboutit, puis Statut committed", async () => {
   const h = await monter();
   poserBundleAvecDecision(h.root);
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
@@ -2082,22 +2080,24 @@ test("un atterrissage antérieur avec design_update refuse encore avant le merge
     h2 = await redemarrerAvecDecision(h);
     rmSync(join(h.root, "brouillon.txt"));
     const tentatives = join(h.runDir, `${h.runId}-integrations.jsonl`);
-    const avantTentatives = readFileSync(tentatives, "utf-8");
-    const lanesAvant = readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8");
-    const avantHead = git(h.root, "rev-parse", "HEAD").trim();
     const avantAppels = APPELS.length;
     const r = await h2.outil.execute("5", tache("W03"));
 
-    assert.ok(enErreur(r), texte(r));
-    assert.match(texte(r), /NON INTÉGRABLE\s+W03 : W03 porte un design_update/);
+    assert.match(texte(r), /intégrée : W03/, texte(r));
     assert.equal(APPELS.length, avantAppels, "aucun enfant lancé");
-    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), avantHead, "aucun merge");
-    assert.equal(readFileSync(tentatives, "utf-8"), avantTentatives, "tentative prête conservée");
-    assert.equal(
-      readFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "utf-8"),
-      lanesAvant,
-      "aucun INTEGRATED",
-    );
+    const merge = evenementsDe(h).filter((e) => e.event === "MERGED" && e.work_unit === "W03");
+    const fin = evenementsDe(h).filter((e) => e.event === "INTEGRATED" && e.work_unit === "W03");
+    assert.equal(merge.length, 1);
+    assert.equal(fin.length, 1);
+    const statut = fin[0].status as Record<string, unknown>;
+    assert.equal(statut.outcome, "committed");
+    assert.equal(statut.decision_id, "D-001");
+    assert.equal(statut.target_status, "en cours");
+    assert.equal(fin[0].integration_commit, merge[0].integration_commit);
+    assert.equal(git(h.root, "rev-parse", `${String(statut.status_commit)}^`).trim(), merge[0].integration_commit);
+    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), statut.status_commit);
+    assert.match(readFileSync(join(h.root, "DESIGN.md"), "utf-8"), /### D-001 — orchestration\n\nStatut : en cours\n/);
+    assert.match(readFileSync(tentatives, "utf-8"), /"event":"CLOSED"[^\n]*"outcome":"integrated"/, "la tentative est close intégrée");
   } finally {
     PILOTE.pendant = undefined;
     PILOTE.resultat = undefined;
@@ -3161,11 +3161,10 @@ async function travaillerPuisApprouver(h: Awaited<ReturnType<typeof monter>>) {
 }
 
 /*
- * C0 v1.8 : sans traitement du Statut, seule l'absence de design_update autorise
- * l'INTEGRATED historique. Présent, il ferme l'intégration AVANT le merge : ni la
- * racine, ni la branche, ni le registre ne bougent.
+ * C6.2 : un design_update valide est appliqué par le runtime après le merge réel, et commité
+ * sur le commit d'intégration ; l'INTEGRATED final porte le status committed.
  */
-test("un design_update ferme l'intégration avant le merge", async () => {
+test("chemin ordinaire : un design_update valide est appliqué après le merge, status committed", async () => {
   const h = await monter();
   poserBundleAvecDecision(h.root);
   try {
@@ -3179,13 +3178,23 @@ test("un design_update ferme l'intégration avant le merge", async () => {
         { id: "W09", goal: "g", depends_on: [], expected_write_scope: ["src/b.py"] },
       ],
     }));
-    const tete = git(h.root, "rev-parse", "HEAD").trim();
     const r = await travaillerPuisApprouver(h);
-    assert.match(texte(r), /NON INTÉGRABLE\s+W03 : W03 porte un design_update/);
-    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), tete, "aucun merge");
-    assert.equal(readFileSync(join(h.root, "src", "a.py"), "utf-8"), "a = 1\n");
-    assert.equal(evenementsDe(h).some((e) => e.event === "INTEGRATED"), false);
-    assert.deepEqual(lanes(h.root), [`${h.runId}-W03-g1`], "la lane garde son travail");
+    assert.match(texte(r), /intégrée : W03/, texte(r));
+    assert.equal(readFileSync(join(h.root, "src", "a.py"), "utf-8"), "a = 2\n");
+    const merge = evenementsDe(h).filter((e) => e.event === "MERGED");
+    const fin = evenementsDe(h).filter((e) => e.event === "INTEGRATED");
+    assert.equal(merge.length, 1);
+    assert.equal(fin.length, 1);
+    const statut = fin[0].status as Record<string, unknown>;
+    assert.deepEqual(Object.keys(statut).sort(), ["decision_id", "outcome", "status_commit", "target_status"]);
+    assert.equal(statut.outcome, "committed");
+    assert.equal(statut.decision_id, "D-001");
+    assert.equal(statut.target_status, "en cours");
+    assert.equal(fin[0].integration_commit, merge[0].integration_commit);
+    assert.equal(git(h.root, "rev-parse", `${String(statut.status_commit)}^`).trim(), merge[0].integration_commit);
+    assert.equal(git(h.root, "rev-parse", "HEAD").trim(), statut.status_commit);
+    assert.match(readFileSync(join(h.root, "DESIGN.md"), "utf-8"), /### D-001 — orchestration\n\nStatut : en cours\n/);
+    assert.deepEqual(lanes(h.root), [], "la lane intégrée est retirée");
   } finally {
     h.done();
   }

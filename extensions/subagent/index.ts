@@ -16,6 +16,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdir
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
 import { actionLines, countsLine, reviewRisks, riskLines } from "../../subagent-only/counts.js";
@@ -565,46 +566,47 @@ type LandingRetry =
  * ni lane ni review qui l'attende.
  */
 function retryLanding(unit: string, etat: AttemptState, lease: Lease): LandingRetry {
-  /*
-   * Une tentative peut avoir été ouverte par le runtime antérieur à C0 v1.8.
-   * Dans ce cas, elle atteint directement cette reprise et contourne le chemin
-   * ordinaire qui vérifie `design_update`. La compatibilité transitoire reste
-   * pourtant la même : le refus précède CHAQUE merge, y compris celui d'un M
-   * déjà construit. La tentative et son commit sont conservés pour le LOT 9.
-   */
-  const statutFerme = refusDesignUpdate(unit);
-  if (statutFerme) {
+  // Étape 6 du LOT 9 : un `design_update` n'est plus une fermeture ; la phase Statut du
+  // finaliseur commun le traite après l'atterrissage (C6.2).
+  // L9-Q5 : la section couvre la transition entière, de la reprise à la conclusion.
+  const fermeSection = ouvrirTransition(`atterrissage de ${unit}`);
+  if (fermeSection) {
     return {
       blocked: true,
-      text:
-        `  NON INTÉGRABLE  ${unit} : ${statutFerme}\n` +
-        `    ${etat.landing!.commit.slice(0, 12)} reste prêt à atterrir ; aucun merge, ` +
-        "aucun INTEGRATED.",
+      text: `  NON INTÉGRABLE  ${unit} : ${fermeSection}\n    ${etat.landing!.commit.slice(0, 12)} reste prêt à atterrir ; aucun merge.`,
     };
   }
-  // L9-Q5, étape 1 : les transitions inachevées d'abord ; la racine propre, landIntegration la revalide.
-  const fermeReprise = reprendreTransitions(lease);
-  if (fermeReprise) {
-    return {
-      blocked: true,
-      text: `  NON INTÉGRABLE  ${unit} : ${fermeReprise}\n    ${etat.landing!.commit.slice(0, 12)} reste prêt à atterrir ; aucun merge.`,
-    };
+  let atterri: ReturnType<typeof landIntegration>;
+  let fin: IssueFinale | undefined;
+  try {
+    // L9-Q5, étape 1 : les transitions inachevées d'abord ; la racine propre, landIntegration la revalide.
+    const fermeReprise = reprendreTransitions(lease);
+    if (fermeReprise) {
+      return {
+        blocked: true,
+        text: `  NON INTÉGRABLE  ${unit} : ${fermeReprise}\n    ${etat.landing!.commit.slice(0, 12)} reste prêt à atterrir ; aucun merge.`,
+      };
+    }
+    atterri = landIntegration(process.cwd(), etat.landing!, () => undefined);
+    fin = atterri.ok ? conclureAtterrissage(unit, etat.attempt, etat.landing!, lease) : undefined;
+  } finally {
+    fermerTransition();
   }
-  const atterri = landIntegration(process.cwd(), etat.landing!, () => undefined);
   if (atterri.ok) {
-    const fin = conclureAtterrissage(unit, etat.attempt, etat.landing!, lease);
-    if (!fin.ok) {
+    // Un atterrissage qui a eu lieu a toujours été conclu, dans la section.
+    const conclusion = fin!;
+    if (!conclusion.ok) {
       return {
         blocked: true,
         text:
-          `  INTÉGRATION INACHEVÉE  ${unit} : ${fin.raison}\n` +
+          `  INTÉGRATION INACHEVÉE  ${unit} : ${conclusion.raison}\n` +
           "    l'atterrissage a eu lieu ; ce qui est durable reste, rien n'est défait.",
       };
     }
     ATTEMPTS.delete(unit);
     INTEGRATED.add(unit);
     OPEN_UNITS.delete(unit);
-    return { done: true, text: `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`, details: fin.details };
+    return { done: true, text: `  intégrée : ${unit} par ${atterri.commit.slice(0, 12)}`, details: conclusion.details };
   }
   if (atterri.stale) {
     return { blocked: true, text: reopenStaleAttempt(unit, etat.attempt, lease, atterri.reason) };
@@ -888,46 +890,17 @@ function refusLegacy(unites: readonly string[]): string[] {
 }
 
 /**
- * Ce qui ferme l'intégration d'une unité avant le merge jusqu'au traitement du Statut
- * (C0 v1.8, compatibilité transitoire).
- *
- * Seule l'ABSENCE de `design_update` autorise l'`INTEGRATED` historique. Présent — quelle
- * que soit sa valeur —, ou impossible à établir parce que l'unité ne se retrouve pas dans
- * le texte du plan : refus. Le plan validé ne garde pas ce champ, d'où la relecture du
- * texte brut ; ne pas savoir n'est pas savoir qu'il est absent.
- */
-function refusDesignUpdate(unit: string): string | undefined {
-  let doc: unknown;
-  try {
-    doc = PLAN_TEXT === undefined ? undefined : JSON.parse(PLAN_TEXT);
-  } catch {
-    doc = undefined;
-  }
-  const unites = (doc as { work_units?: unknown } | undefined)?.work_units;
-  const entree = Array.isArray(unites)
-    ? unites.find((u) =>
-      typeof u === "object" && u !== null && !Array.isArray(u) &&
-      typeof (u as { id?: unknown }).id === "string" && (u as { id: string }).id.trim() === unit)
-    : undefined;
-  if (entree === undefined) {
-    return `design_update de ${unit} impossible à établir dans le plan ; ` +
-      "l'intégration reste fermée tant que le traitement du Statut n'existe pas";
-  }
-  if ("design_update" in (entree as object)) {
-    return `${unit} porte un design_update ; son Statut n'est pas encore traité par ce ` +
-      "runtime, l'intégration est fermée avant le merge";
-  }
-  return undefined;
-}
-
-/**
  * Le `design_update` d'une unité, tel que le plan gelé le porte (C6.1, PLAN-LOT9 L9-Q9).
  *
  * `undefined` : l'unité n'en porte pas. `"inconnu"` : l'unité ne se retrouve pas dans le texte
  * du plan, ou sa désignation n'a pas la forme que C6.1 a validée — ne pas savoir n'est pas
  * savoir qu'il est absent. Seule autorité de la phase Statut : jamais la prose du plan.
+ *
+ * Le plan gelé est relu s'il ne l'a pas encore été : une observation C6.4 peut précéder la
+ * première délégation d'une session rechargée, et y juger la phase Statut d'un MERGED.
  */
 function designUpdateDe(unit: string): DesignUpdate | undefined | "inconnu" {
+  if (PLAN_TEXT === undefined) plan();
   let doc: unknown;
   try {
     doc = PLAN_TEXT === undefined ? undefined : JSON.parse(PLAN_TEXT);
@@ -991,8 +964,8 @@ function registresInexploitables(avecTentative: boolean): string | undefined {
 /**
  * Le finaliseur commun de l'intégration (PLAN-LOT9 L9-Q5 étapes 5 à 9, L9-Q13).
  *
- * Préparé à l'étape 3 du LOT 9, et appelé par personne : les appelants basculent à l'étape 5
- * (chemin ordinaire, atterrissage, `retryLanding`) et la reprise des fenêtres à l'étape 6.
+ * Appelé par les trois chemins (ordinaire, atterrissage, `retryLanding`) après leur merge
+ * prouvé, et par la reprise des fenêtres « après merge » et « après MERGED ».
  *
  * Il part d'un merge DÉJÀ réel dont `integrationCommit` est la preuve, et enchaîne, chaque
  * étape reprenant ce qui est déjà durable au lieu de le refaire :
@@ -1131,27 +1104,65 @@ function finaliserIntegration(
  * La section critique de l'intégration (PLAN-LOT9 L9-Q5).
  *
  * Une seule transition à la fois, sans jeton durable nouveau : entre sessions, le bail du run
- * n'admet qu'un propriétaire ; dans la session, la reprise, le merge, la preuve et le
- * finaliseur s'enchaînent sans aucun point d'attente, donc sans qu'une autre délégation puisse
- * s'intercaler. Ce verrou le rend vérifiable : une réentrée refuse, elle n'attend pas.
+ * n'admet qu'un propriétaire ; dans la session, la transition entière — reprise éventuelle,
+ * racine propre, gel, merge ou atterrissage, preuve, MERGED, Statut, INTEGRATED, nettoyage —
+ * s'enchaîne sans aucun point d'attente, et ce verrou le rend vérifiable. Il appartient à un
+ * contexte d'exécution : les étapes imbriquées de la même transition (la reprise, la conclusion)
+ * y entrent ; toute autre transition, venue d'une autre délégation, est refusée — elle
+ * n'attend pas.
  */
-let INTEGRATION_EN_COURS: string | undefined;
+const CONTEXTE_INTEGRATION = new AsyncLocalStorage<symbol>();
+/**
+ * La transition ouverte. `proprietaire` : la délégation qui l'a ouverte en ligne, et qui la
+ * referme en sortant, quoi qu'il arrive — sans dépendre de la propagation du contexte
+ * asynchrone au-delà d'un `await`, qui varie selon la version de Node.
+ */
+let INTEGRATION_EN_COURS: { quoi: string; jeton: symbol; proprietaire?: symbol } | undefined;
+
+function refusDeSection(quoi: string): string {
+  return `une transition d'intégration est déjà en cours (${INTEGRATION_EN_COURS?.quoi}) : ${quoi} refusée`;
+}
+
+/** La transition en cours appartient-elle au contexte qui appelle ? */
+function dansLaTransition(): boolean {
+  return INTEGRATION_EN_COURS !== undefined && CONTEXTE_INTEGRATION.getStore() === INTEGRATION_EN_COURS.jeton;
+}
+
 function sectionCritique<T>(quoi: string, fn: () => T): T | { ok: false; etape: "section"; raison: string } {
-  if (INTEGRATION_EN_COURS !== undefined) {
-    return {
-      ok: false,
-      etape: "section",
-      raison: `une transition d'intégration est déjà en cours (${INTEGRATION_EN_COURS}) : ${quoi} refusée`,
-    };
-  }
-  INTEGRATION_EN_COURS = quoi;
+  if (dansLaTransition()) return fn();
+  if (INTEGRATION_EN_COURS !== undefined) return { ok: false, etape: "section", raison: refusDeSection(quoi) };
+  const jeton = Symbol(quoi);
+  INTEGRATION_EN_COURS = { quoi, jeton };
   try {
-    return fn();
+    return CONTEXTE_INTEGRATION.run(jeton, fn);
   } finally {
     INTEGRATION_EN_COURS = undefined;
     // C6.4 concurrent : une observation en attente d'attribution se juge à la sortie.
     reevaluerAttributions(true);
   }
+}
+
+/**
+ * Ouvrir la section sur une transition écrite en ligne (chemin ordinaire, atterrissage), de sa
+ * reprise à sa conclusion. Rend la raison d'un refus, ou `undefined`. Chaque ouverture réussie
+ * est suivie de `fermerTransition` ; la délégation `proprietaire` la referme aussi en sortant,
+ * quoi qu'il arrive, exception comprise.
+ */
+function ouvrirTransition(quoi: string, proprietaire?: symbol): string | undefined {
+  if (dansLaTransition()) return undefined;
+  if (INTEGRATION_EN_COURS !== undefined) return refusDeSection(quoi);
+  const jeton = Symbol(quoi);
+  INTEGRATION_EN_COURS = { quoi, jeton, proprietaire };
+  CONTEXTE_INTEGRATION.enterWith(jeton);
+  return undefined;
+}
+
+/** Fermer la transition du contexte qui appelle, ou celle que la délégation `proprietaire` a ouverte. */
+function fermerTransition(proprietaire?: symbol): void {
+  const sienne = proprietaire !== undefined && INTEGRATION_EN_COURS?.proprietaire === proprietaire;
+  if (!dansLaTransition() && !sienne) return;
+  INTEGRATION_EN_COURS = undefined;
+  reevaluerAttributions(true);
 }
 
 /** C5.1 : ce qui salit la racine, DESIGN.md compris. Vide : la racine est propre. */
@@ -1215,7 +1226,8 @@ function laneCouranteDe(unit: string): string | undefined {
 }
 
 /**
- * La reprise en tête de délégation : seulement s'il existe une fenêtre « après merge » à reprendre.
+ * La reprise en tête de délégation : seulement s'il existe une fenêtre à reprendre — après merge,
+ * ou MERGED sans INTEGRATED.
  * Aucune n'existe — cas ordinaire — : rien n'est lu au-delà du registre, le bail n'est pas pris.
  */
 function reprendreEnTete(): void {
@@ -1223,7 +1235,8 @@ function reprendreEnTete(): void {
     const lu = readLaneEvents(RUN_DIR, RUN_ID);
     if (!lu.present || lu.version !== LANE_LEDGER_V2) return;
     const candidates = transitionsEnCours(lu.events, readIntegrationEvents(RUN_DIR, RUN_ID).events)
-      .filter((t) => t.fenetre === "gel-vivant" && fenetreDeReprise(process.cwd(), { gel: t.gel.commit }).fenetre === "apres-merge");
+      .filter((t) => t.fenetre === "merged" ||
+        (t.fenetre === "gel-vivant" && fenetreDeReprise(process.cwd(), { gel: t.gel.commit }).fenetre === "apres-merge"));
     if (candidates.length === 0) return;
     const bail = ensureOwnership();
     if ("refus" in bail) return;
@@ -1237,11 +1250,12 @@ function reprendreEnTete(): void {
  * L9-Q5, étape 1 : reprendre ou valider toute transition d'intégration inachevée, avant toute
  * autre intégration.
  *
- * Étape 5 du LOT 9 : seule la fenêtre « après merge, avant MERGED » d'une unité SANS
- * `design_update` se reprend, sur preuve exacte (L9-Q6). Toute autre transition inachevée —
- * après MERGED (étape 6), une unité portant un `design_update`, une histoire contradictoire, une
- * preuve qui ne s'établit pas — ferme les intégrations suivantes, nommée, sans rien inférer ni
- * défaire. Rend la raison de la fermeture, ou `undefined`.
+ * Les trois fenêtres se reprennent (L9-Q6 à L9-Q8) : après merge, avant MERGED, sur preuve de
+ * merge exacte ; après MERGED, par la phase Statut depuis le MERGED durable ; après le commit de
+ * Statut, par son adoption sur preuve C6.2 exacte. Ce qui ne se reprend pas — une histoire
+ * contradictoire, une preuve qui ne s'établit pas, un Statut refusé ou dont le commit échoue —
+ * ferme les intégrations suivantes, nommé, sans rien inférer ni défaire. Rend la raison de la
+ * fermeture, ou `undefined`.
  */
 function reprendreTransitions(lease: Lease): string | undefined {
   const raison = jugerTransitions(lease);
@@ -1267,17 +1281,6 @@ function jugerTransitions(lease: Lease): string | undefined {
   }
   for (const t of transitions) {
     if (t.fenetre === "contradiction") return `transition contradictoire sur ${t.lane} : ${t.raison}`;
-    if (t.fenetre === "merged") {
-      return `${t.work_unit} porte MERGED sans INTEGRATED (${t.merged.integration_commit.slice(0, 12)}) : ` +
-        "reprise après MERGED non encore active ; aucune autre intégration";
-    }
-    const fenetre = fenetreDeReprise(root, { gel: t.gel.commit });
-    if (fenetre.fenetre === "aucune") continue;
-    if (fenetre.fenetre === "contradiction") return `transition de ${t.work_unit} : ${fenetre.raison}`;
-    if (designUpdateDe(t.work_unit) !== undefined) {
-      return `${t.work_unit} est mergée sans MERGED et porte un design_update (ou ne se retrouve pas dans ` +
-        "le plan) : sa reprise n'est pas encore active ; aucune autre intégration";
-    }
     // La tentative vivante sur ce gel, si le merge est un atterrissage : son commit, p1 et T_I.
     let tentative: { id: string; p1: string; commit?: string; tree?: string; close: boolean } | undefined;
     for (const e of integ) {
@@ -1288,22 +1291,46 @@ function jugerTransitions(lease: Lease): string | undefined {
         else if (e.event === "CLOSED" || e.event === "SUPERSEDED") tentative.close = true;
       }
     }
-    const attendu: MergeAttendu = tentative && !tentative.close && tentative.commit !== undefined && tentative.tree !== undefined
-      ? { mode: "tentative", gel: t.gel.commit, commit: tentative.commit, p1: tentative.p1, tree: tentative.tree }
-      : { mode: "ordinaire", gel: t.gel.commit };
-    const fin = conclureIntegration(
-      {
-        unit: t.work_unit, laneId: t.lane, attendu,
-        attemptId: attendu.mode === "tentative" ? tentative?.id : undefined,
-        clore: () => {
-          if (attendu.mode === "tentative" && tentative) {
-            noteAttempt({ event: "CLOSED", id: tentative.id, outcome: "integrated" }, lease);
-          }
-        },
-      },
-      lease,
-    );
-    if (!fin.ok) return `reprise de ${t.work_unit} après merge refusée (${fin.etape}) : ${fin.raison}`;
+    const clore = (id: string | undefined) => () => {
+      if (id !== undefined) noteAttempt({ event: "CLOSED", id, outcome: "integrated" }, lease);
+    };
+
+    if (t.fenetre === "merged") {
+      /*
+       * L9-Q7, L9-Q8 : MERGED durable, INTEGRATED absent. Git dit laquelle des deux fenêtres :
+       * HEAD = integration_commit (le Statut reste à faire, effet partiel exact compris), ou
+       * HEAD posé directement dessus (le commit de Statut s'adopte sur preuve C6.2 exacte).
+       * Toute autre tête est une contradiction : rien ne s'infère, rien ne se défait. Le
+       * finaliseur reprend depuis ce qui est durable — jamais un second MERGED ni un second merge.
+       */
+      const fenetre = fenetreDeReprise(root, { gel: t.gel.commit, integrationCommit: t.merged.integration_commit });
+      if (fenetre.fenetre === "contradiction") return `transition de ${t.work_unit} après MERGED : ${fenetre.raison}`;
+      const attemptId = tentative && !tentative.close && tentative.commit === t.merged.integration_commit
+        ? tentative.id
+        : undefined;
+      const fin = sectionCritique(
+        `reprise de ${t.work_unit} après MERGED`,
+        () => finaliserIntegration(
+          { unit: t.work_unit, laneId: t.lane, integrationCommit: t.merged.integration_commit, attemptId, clore: clore(attemptId) },
+          lease,
+        ),
+      );
+      if (!fin.ok) return `reprise de ${t.work_unit} après MERGED refusée (${fin.etape}) : ${fin.raison}`;
+    } else {
+      const fenetre = fenetreDeReprise(root, { gel: t.gel.commit });
+      if (fenetre.fenetre === "aucune") continue;
+      if (fenetre.fenetre === "contradiction") return `transition de ${t.work_unit} : ${fenetre.raison}`;
+      // L9-Q6 : après merge, avant MERGED — avec ou sans design_update, sur preuve exacte seulement.
+      const attendu: MergeAttendu = tentative && !tentative.close && tentative.commit !== undefined && tentative.tree !== undefined
+        ? { mode: "tentative", gel: t.gel.commit, commit: tentative.commit, p1: tentative.p1, tree: tentative.tree }
+        : { mode: "ordinaire", gel: t.gel.commit };
+      const attemptId = attendu.mode === "tentative" ? tentative?.id : undefined;
+      const fin = conclureIntegration(
+        { unit: t.work_unit, laneId: t.lane, attendu, attemptId, clore: clore(attemptId) },
+        lease,
+      );
+      if (!fin.ok) return `reprise de ${t.work_unit} après merge refusée (${fin.etape}) : ${fin.raison}`;
+    }
     INTEGRATED.add(t.work_unit);
     OPEN_UNITS.delete(t.work_unit);
     ATTEMPTS.delete(t.work_unit);
@@ -1567,15 +1594,17 @@ function observerDesign(): ObservationDesign {
  * La variation n'est attribuée à l'outil observé qu'après soustraction exacte des transitions
  * du runtime attestées depuis l'instantané — les `MERGED` d'une lane classée `fusionne` (et
  * les commits de Statut d'un `INTEGRATED`) apparus au registre. Une observation faite pendant
- * une transition inachevée — un merge réel du gel vivant dont MERGED n'est pas encore écrit —
- * attend ; elle ne pose pas de blocage irréversible avant la résolution. `task` garde son
- * exécution parallèle.
+ * une transition inachevée — un merge réel du gel vivant dont MERGED n'est pas encore écrit, la
+ * phase Statut d'un MERGED (son effet partiel exact), ou son commit de Statut exact dont
+ * l'INTEGRATED manque — attend ; elle ne pose pas de blocage irréversible avant la résolution.
+ * `task` garde son exécution parallèle.
  */
 function jugerObservation(o: ObservationDesign, apresReprise: boolean): "explique" | "en-attente" | "non-explique" {
   if (etatDesign() === o.etat) return "explique";
   if (INTEGRATION_EN_COURS !== undefined) return "en-attente";
   const autorite = new Set<string>();
   const gelsVivants = new Set<string>();
+  const statutsEnCours: Array<{ integrationCommit: string; du: DesignUpdate }> = [];
   const immobile = baseCommit() === o.instantane.tete;
   if (!immobile) {
     try {
@@ -1590,7 +1619,13 @@ function jugerObservation(o: ObservationDesign, apresReprise: boolean): "expliqu
           if (typeof s?.status_commit === "string") autorite.add(s.status_commit);
         }
       });
-      for (const t of transitionsEnCours(events, integ)) if (t.fenetre === "gel-vivant") gelsVivants.add(t.gel.commit);
+      for (const t of transitionsEnCours(events, integ)) {
+        if (t.fenetre === "gel-vivant") gelsVivants.add(t.gel.commit);
+        if (t.fenetre === "merged") {
+          const du = designUpdateDe(t.work_unit);
+          if (du !== undefined && du !== "inconnu") statutsEnCours.push({ integrationCommit: t.merged.integration_commit, du });
+        }
+      }
     } catch {
       /*
        * DESIGN.md a varié et les faits autoritaires nécessaires à son attribution
@@ -1600,7 +1635,7 @@ function jugerObservation(o: ObservationDesign, apresReprise: boolean): "expliqu
       return "non-explique";
     }
   }
-  return attribuerDesign(process.cwd(), o.instantane, { autorite, gelsVivants }, apresReprise).verdict;
+  return attribuerDesign(process.cwd(), o.instantane, { autorite, gelsVivants, statutsEnCours }, apresReprise).verdict;
 }
 
 /** Après un appel observé dont DESIGN.md a varié : bloquer, attendre, ou rien. */
@@ -3650,9 +3685,13 @@ export default function (pi: ExtensionAPI) {
          * s'attendent jamais.
          */
         const liberer = await entrerFileUnites(unitesDeLAppel(params));
+        // Cette délégation, propriétaire de la transition qu'elle ouvrirait en ligne.
+        const proprietaire = Symbol(`délégation ${_id}`);
         try {
           return await delegation(_id, params, options);
         } finally {
+          // Une transition ouverte par cette délégation ne lui survit pas, même sur exception.
+          fermerTransition(proprietaire);
           liberer();
         }
 
@@ -5007,12 +5046,6 @@ export default function (pi: ExtensionAPI) {
                * revalide `M` avant de toucher la racine.
                */
               /*
-               * Une tentative peut venir d'un runtime antérieur à C0 v1.8 : elle existe
-               * alors malgré le `design_update` que la version courante doit fermer.
-               * La garde du chemin ordinaire ne sera jamais revisitée ici. On la rejoue
-               * donc avant même de construire M, et a fortiori avant son atterrissage.
-               */
-              /*
                * La barrière des risques, avant toute construction de `M` (C3.4, PLAN-LOT7 Q10).
                *
                * Le reviewer de tentative a écrit ses transitions RISK plus haut, sans REVIEWED ;
@@ -5021,16 +5054,10 @@ export default function (pi: ExtensionAPI) {
                * LOT 9 reste propriétaire de la transition d'intégration complète.
                */
               const barriere = barriereDesRisques(unit, results[0]);
-              const statutFerme = refusDesignUpdate(unit);
               if (barriere) {
                 if (barriere.ouverts) porteIntegration = { outcome: "blocked", policy_blockers: ["open-risks"] };
                 integration =
                   `  NON INTÉGRABLE  ${unit} : ${barriere.raison}\n` +
-                  `    la tentative ${attempt.id} reste ouverte ; aucun commit d'intégration, ` +
-                  "aucun merge, aucun INTEGRATED.";
-              } else if (statutFerme) {
-                integration =
-                  `  NON INTÉGRABLE  ${unit} : ${statutFerme}\n` +
                   `    la tentative ${attempt.id} reste ouverte ; aucun commit d'intégration, ` +
                   "aucun merge, aucun INTEGRATED.";
               } else {
@@ -5065,12 +5092,14 @@ export default function (pi: ExtensionAPI) {
                     commit: m.integration.commit,
                     tree: m.integration.tree,
                   }, lease);
-                  // L9-Q5, étape 1 : les transitions inachevées d'abord.
-                  const fermeReprise = reprendreTransitions(lease);
+                  // L9-Q5 : la section couvre la transition entière ; les transitions inachevées d'abord.
+                  const fermeSection = ouvrirTransition(`atterrissage de ${unit}`, proprietaire);
+                  const fermeReprise = fermeSection ?? reprendreTransitions(lease);
                   const atterri: ReturnType<typeof landIntegration> = fermeReprise
                     ? { ok: false, stale: false, reason: fermeReprise }
                     : landIntegration(process.cwd(), m.integration, () => undefined);
                   const fin = atterri.ok ? conclureAtterrissage(unit, attempt, m.integration, lease) : undefined;
+                  fermerTransition();
                   if (atterri.ok && fin?.ok) {
                     ATTEMPTS.delete(unit);
                     INTEGRATED.add(unit);
@@ -5203,27 +5232,21 @@ export default function (pi: ExtensionAPI) {
            * C'est ici, et seulement ici, qu'une unité devient une dépendance
            * satisfaite : intégrée, pas terminée.
            */
-          /*
-           * C0 v1.8 : sans traitement du Statut, seule une unité SANS design_update
-           * s'intègre, par la forme historique d'INTEGRATED. Le refus précède le merge ;
-           * il ne touche ni la lane ni la racine, et un rework ne le lève pas — seul le
-           * plan le peut.
-           */
           const fermeInconnu = inconnu ? `état de la lane inconnu : ${inconnu}` : undefined;
-          const statutFerme = causesC3.length === 0 && !fermeC2 && !fermeInconnu
-            ? refusDesignUpdate(lane.workUnitId)
-            : undefined;
           /*
            * L9-Q5, étapes 1 et 2, avant tout gel : reprendre ou valider les transitions
            * inachevées, puis exiger une racine propre (C5.1, DESIGN.md compris). L'un ou
            * l'autre refuse sans merge, et la lane est conservée.
            */
-          const fermeReprise = causesC3.length === 0 && !fermeC2 && !fermeInconnu && !statutFerme
+          const fermeSection = causesC3.length === 0 && !fermeC2 && !fermeInconnu
+            ? ouvrirTransition(`intégration de ${lane.workUnitId}`, proprietaire)
+            : undefined;
+          const fermeReprise = causesC3.length === 0 && !fermeC2 && !fermeInconnu && !fermeSection
             ? reprendreTransitions(lease)
             : undefined;
           const fermeRacine = racineSale();
           const fermeAvantGel = fermeInconnu ??
-            (causesC3.length === 0 ? fermeC2 ?? statutFerme ?? fermeReprise ?? fermeRacine : undefined);
+            (causesC3.length === 0 ? fermeC2 ?? fermeSection ?? fermeReprise ?? fermeRacine : undefined);
           /*
            * Le gel (C2.4, PLAN-LOT8 Q3) : seulement quand plus rien d'autre ne ferme la porte.
            * Commit, relecture par git du parent et du tree, `FROZEN` durable — et seulement
@@ -5346,6 +5369,8 @@ export default function (pi: ExtensionAPI) {
             // laissait le travail intact et perdait la cause.
             integration = `  ÉCHEC INTÉGRATION  ${lane.workUnitId} : ${merged.reason}`;
           }
+          // La transition ordinaire s'arrête ici, conflit ouvert compris (L9-Q5).
+          fermerTransition();
         }
 
         const result = results[0];

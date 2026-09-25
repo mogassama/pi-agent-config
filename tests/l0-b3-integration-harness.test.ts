@@ -264,7 +264,7 @@ const DESIGN = designMd([{ id: "D-001", titre: "orchestration", statut: "propos�
 const TRANSITION = { decision_id: "D-001", from_status: "proposé", to_status: "en cours" };
 const PLAN_D001 = planAvecDesign([{ id: "W03", design_update: TRANSITION }, { id: "W09" }]);
 
-regression("B3-crash-merge", "un merge sans MERGED se reprend sur l'état exact, et se refuse sinon", async () => {
+regressionCorrigee("B3-crash-merge", "un merge sans MERGED se reprend sur l'état exact, et se refuse sinon", async () => {
   const manques: string[] = [];
 
   /*
@@ -286,7 +286,7 @@ regression("B3-crash-merge", "un merge sans MERGED se reprend sur l'état exact,
     if (!neuf.chargement.ok) {
       manques.push(`témoin : la session ne s'ouvre pas sur un manifeste v2 — ${neuf.chargement.erreur}`);
     } else {
-      const r = await issue(() => integrer(neuf, "W09", "b = 2", "t"));
+      const r = await integrer(neuf, "W09", "b = 2", "t");
       const fin = neuf.evenements().find((e) => e.event === "INTEGRATED" && e.work_unit === "W09");
       if (fin === undefined || integration(r.value)?.outcome !== "integrated") {
         manques.push(`témoin : W09 n'a pas été intégrée depuis un registre v2 ; ${montrer(r)}`);
@@ -331,7 +331,7 @@ regression("B3-crash-merge", "un merge sans MERGED se reprend sur l'état exact,
   );
 });
 
-regression("B3-crash-statut", "MERGED écrit sans Statut traité : la reprise est déterministe", async () => {
+regressionCorrigee("B3-crash-statut", "MERGED écrit sans Statut traité : la reprise est déterministe", async () => {
   const { h, etat } = await fenetre("MERGED");
   try {
     precondition(
@@ -364,7 +364,7 @@ regression("B3-crash-statut", "MERGED écrit sans Statut traité : la reprise es
   } finally { h.fin(); }
 });
 
-regression("B3-crash-integrated", "un Statut commité sans INTEGRATED s'adopte sur preuve exacte", async () => {
+regressionCorrigee("B3-crash-integrated", "un Statut commité sans INTEGRATED s'adopte sur preuve exacte", async () => {
   const manques: string[] = [];
   for (const variante of ["exacte", "parent faux", "transformation fausse"] as const) {
     const fausser = variante === "parent faux" ? "parent"
@@ -400,7 +400,7 @@ regression("B3-crash-integrated", "un Statut commité sans INTEGRATED s'adopte s
 
 // ================================================================== deux décisions à la fois
 
-regression("B3-integration-concurrente", "deux intégrations entrelacées restent indivisibles", async () => {
+regressionCorrigee("B3-integration-concurrente", "deux intégrations entrelacées restent indivisibles", async () => {
   const D = designMd([
     { id: "D-001", titre: "orchestration", statut: "proposé" },
     { id: "D-002", titre: "registres", statut: "proposé" },

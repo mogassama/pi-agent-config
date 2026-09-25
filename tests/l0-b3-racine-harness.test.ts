@@ -121,7 +121,7 @@ regressionCorrigee("B3-racine-sale", "une racine sale fait refuser toute intégr
 
 // ================================================================== C5.1 + C5.2, ensemble
 
-regression("B3-racine-apres", "après un Statut commité, la racine est propre et la suite passe", async () => {
+regressionCorrigee("B3-racine-apres", "après un Statut commité, la racine est propre et la suite passe", async () => {
   const h = await monter({ bundle: true, design: DESIGN, plan: PLAN_DEUX });
   try {
     const premiere = await integrer(h, "W03", "a = 2", "1");

@@ -184,7 +184,7 @@ regressionCorrigee("B3-plan-design-update-refus", "un design_update invalide fai
 
 // ================================================================== C6.2 — les trois issues
 
-regression("B3-statut-committed", "une transition autorisée est appliquée et commitée", async () => {
+regressionCorrigee("B3-statut-committed", "une transition autorisée est appliquée et commitée", async () => {
   const manques: string[] = [];
   for (const [nom, design] of [["nominal", DESIGN], ["décision déplacée", DESIGN_DEPLACE]] as const) {
     const h = await monter({
@@ -235,7 +235,7 @@ regression("B3-statut-committed", "une transition autorisée est appliquée et c
   );
 });
 
-regression("B3-statut-unchanged", "une décision déjà au statut cible ne produit aucun commit", async () => {
+regressionCorrigee("B3-statut-unchanged", "une décision déjà au statut cible ne produit aucun commit", async () => {
   // D-002 est déjà « en cours » : la transition est autorisée, sa cible est atteinte.
   const h = await monter({
     bundle: true, design: DESIGN,
@@ -279,7 +279,7 @@ regressionCorrigee("B3-statut-na", "une unité sans design_update rend not-appli
   } finally { h.fin(); }
 });
 
-regression("B3-statut-refus", "un statut courant inattendu fait refuser la phase Statut", async () => {
+regressionCorrigee("B3-statut-refus", "un statut courant inattendu fait refuser la phase Statut", async () => {
   const h = await monter({
     bundle: true, design: DESIGN,
     // D-001 est « proposé » ; ce plan attend « en cours » — transition autorisée, mais
@@ -308,7 +308,7 @@ regression("B3-statut-refus", "un statut courant inattendu fait refuser la phase
   } finally { h.fin(); }
 });
 
-regression("B3-statut-commit-echec", "un commit de Statut qui échoue laisse l'intégration inachevée", async () => {
+regressionCorrigee("B3-statut-commit-echec", "un commit de Statut qui échoue laisse l'intégration inachevée", async () => {
   const h = await monter({
     bundle: true, design: DESIGN,
     plan: planStatut({ decision_id: "D-001", from_status: "proposé", to_status: "en cours" }),
