@@ -22,10 +22,12 @@ import { join } from "node:path";
 import { laneIdFor } from "../subagent-only/lane-context.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
 import { observeIntegrations } from "../subagent-only/integration-observe.ts";
-import { openRun, readLaneEvents } from "../subagent-only/run-manifest.ts";
+import {
+  acquireRunOwnership, appendLaneEvent, laneState, openRun, readLaneEvents, readWitnesses,
+} from "../subagent-only/run-manifest.ts";
 import { ensureLane, openLanes, runBranches } from "../subagent-only/worktree.ts";
 import {
-  aJeter, cheminIntegrations, cheminLanes, depot, git, hashPlan, manifeste, plan, Registre, RUN, runEcrit,
+  aJeter, AT, cheminIntegrations, cheminLanes, depot, git, hashPlan, manifeste, plan, Registre, RUN, runEcrit,
 } from "./l0-b1-fixtures.ts";
 
 // ------------------------------------------------------------------ espèces
@@ -286,6 +288,98 @@ couverture("C4-demarrage", "aucun registre n'est créé au simple démarrage d'u
   propriete(
     poses.length === 0,
     `l'initialisation reste paresseuse (C4.1) ; posés : ${JSON.stringify(poses)}`,
+  );
+});
+
+/*
+ * PLAN-CORRECTIF-UNKNOWN-LEGACY § 4.1 : l'état C4 se juge avant tout append, quelle que soit
+ * la version de l'en-tête.
+ *
+ * La forme éprouvée est celle de l'arrêt de PORTES-GEL : manifeste v2 portant le témoin
+ * `lanes: 2`, registre à en-tête v1 dont chaque ligne est lisible. C4.9 la classe UNKNOWN (le
+ * témoin ne concorde qu'avec la version de l'en-tête), et c'est ce que la PRÉCONDITION relit
+ * par la fonction même que les observateurs appellent.
+ *
+ * Les deux continuations legacy — ABANDONED et l'INTEGRATED sans `status` — y sont refusées,
+ * et le refus doit nommer l'état C4 : un refus pour une autre raison ne dirait rien de la
+ * garde. Le témoin 3 y est joint : UNKNOWN par la même ligne de C4.9, il fait rougir une
+ * correction qui aurait figé le témoin 2 au lieu de juger l'état. Les témoins sont le même registre v1 avec un témoin absent puis `lanes: 1` : KNOWN
+ * par C4.9, la continuation legacy y reste permise. Ils font partie de la PROPRIÉTÉ, parce
+ * qu'une correction qui fermerait tout le v1 serait fausse et doit rougir ici.
+ *
+ * Une fixture fraîche par appel : aucun append n'hérite de l'effet du précédent.
+ */
+regressionCorrigee("PG-UNKNOWN-LEGACY", "un registre v1 que C4 juge UNKNOWN ne reçoit aucune continuation legacy", () => {
+  type Temoin = "absent" | 1 | 2 | 3;
+  const ecrireManifeste = (r: { dir: string; base: string }, temoin: Temoin): void =>
+    manifeste(r.dir, {
+      version: 2, base: r.base, plan: `${RUN}-plan.json`, planHash: hashPlan(r.dir),
+      ...(temoin === "absent" ? {} : { ledgers: { lanes: temoin } }),
+    });
+  const etatC4 = (dir: string): string => {
+    const lu = readLaneEvents(dir, RUN);
+    return laneState(readWitnesses(dir, RUN), { ...lu, version: lu.version }, RUN);
+  };
+
+  const natures = {
+    ABANDONED: { event: "ABANDONED" as const, work_unit: "W03", at: AT, reason: "PG-UNKNOWN-LEGACY" },
+    INTEGRATED: { event: "INTEGRATED" as const, work_unit: "W03", at: AT },
+  };
+  type Nature = keyof typeof natures;
+
+  /** Un run v1 frais sous manifeste v2, son témoin posé, un append sous bail valide. */
+  function essayer(nature: Nature, temoin: Temoin) {
+    const r = runEcrit(`l0-b1-pgul-${String(temoin)}-`, [{ unite: "W03", ouverte: true }], { ledger: 1, manifesteV1: false });
+    ecrireManifeste(r, temoin);
+    const lu = readLaneEvents(r.dir, RUN);
+    precondition(
+      lu.version === 1 && lu.malformedLines.length === 0 && lu.events.length === 1,
+      `registre v1 lisible, une ouverture ; version ${String(lu.version)}, abîmées ${lu.malformedLines.length}, ` +
+        `événements ${lu.events.length}`,
+    );
+    const etat = etatC4(r.dir);
+    const attendu = temoin === "absent" || temoin === 1 ? "KNOWN" : "UNKNOWN";
+    precondition(
+      etat === attendu,
+      `témoin ${String(temoin)} sur en-tête v1 : état C4 ${etat}, attendu ${attendu} (C4.9)`,
+    );
+    const pris = acquireRunOwnership(r.dir, RUN, `pgul-${nature}-${String(temoin)}`);
+    precondition(pris.ok, `le bail doit être obtenu : le refus éprouvé ne doit pas venir de lui ; ${JSON.stringify(pris)}`);
+    const avant = readFileSync(cheminLanes(r.dir));
+    const bail = pris.ok ? pris.lease : undefined;
+    const i = issue(() => appendLaneEvent(r.dir, natures[nature], bail!));
+    const apres = readFileSync(cheminLanes(r.dir));
+    return { etat, i, identiques: avant.equals(apres), ajout: apres.subarray(avant.length).toString("utf-8").trim() };
+  }
+
+  const refusC4 = (nature: Nature, i: Issue): boolean =>
+    i.kind === "threw" && i.error.startsWith("RecoveryError: ") &&
+    i.error.includes(`registre ${RUN} UNKNOWN : `) && i.error.includes(`ne reçoit aucun ${nature} ; rien n'est écrit`);
+
+  const refus: string[] = [];
+  for (const temoin of [2, 3] as const) {
+    for (const nature of Object.keys(natures) as Nature[]) {
+      const x = essayer(nature, temoin);
+      if (!(refusC4(nature, x.i) && x.identiques)) {
+        refus.push(`${nature} sur UNKNOWN (témoin ${temoin}) : ${x.identiques ? "octets identiques" : `ÉCRIT ${x.ajout}`}, ` +
+          `issue ${montrer(x.i)}`);
+      }
+    }
+  }
+  const continuations: string[] = [];
+  for (const temoin of ["absent", 1] as const) {
+    for (const nature of Object.keys(natures) as Nature[]) {
+      const x = essayer(nature, temoin);
+      const ecrit = x.i.kind === "returned" && !x.identiques && (JSON.parse(x.ajout) as { event?: string }).event === nature;
+      if (!ecrit) continuations.push(`${nature} sur KNOWN (témoin ${String(temoin)}) : issue ${montrer(x.i)}`);
+    }
+  }
+
+  propriete(
+    refus.length === 0 && continuations.length === 0,
+    `sous R, un état C4 autre que KNOWN interdit tout append, en-tête v1 compris, et la continuation ` +
+      `legacy reste permise sous KNOWN ; UNKNOWN non refusé : ${JSON.stringify(refus)} · KNOWN refusé : ` +
+      `${JSON.stringify(continuations)}`,
   );
 });
 

@@ -852,5 +852,23 @@
     "file": "extensions/subagent/index.ts",
     "find": "      if (!r.ok) return { ok: false, etape: \"statut\", raison: r.raison };\n      status = r.outcome === \"unchanged\"",
     "replace": "      status = !r.ok ? { outcome: \"not-applicable\" } : r.outcome === \"unchanged\" // mutant B3-statut-commit-echec : INTEGRATED écrit malgré l'échec du commit"
+  },
+  {
+    "test": "L0 REG PG-UNKNOWN-LEGACY — un registre v1 que C4 juge UNKNOWN ne reçoit aucune continuation legacy",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  exigerRegistreConnu(dir, lease.runId, lu, event.event);\n  if (lu.version === LANE_LEDGER_V2) {\n",
+    "replace": "  // mutant PG-UNKNOWN-LEGACY : la garde C4 ne vaut plus que pour l'en-tête v2\n  if (lu.version === LANE_LEDGER_V2) exigerRegistreConnu(dir, lease.runId, lu, event.event);\n  if (lu.version === LANE_LEDGER_V2) {\n"
+  },
+  {
+    "test": "L0 REG PG-MIGRATE-UNKNOWN — --migrate-ledger ne migre qu'un registre MIGRATION_REQUIRED",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (etat !== \"MIGRATION_REQUIRED\" || postImage !== \"KNOWN\") return refus(postImage);\n",
+    "replace": "    // mutant PG-MIGRATE-UNKNOWN : l'admissibilité n'est plus jugée, ni l'état ni la post-image\n    void postImage;\n"
+  },
+  {
+    "test": "L0 REG PG-LOST-APPEND — un registre des lanes LOST n'est ni recréé ni complété",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (etat !== \"EMPTY\") {\n      throw new RecoveryError(\n        `registre ${lease.runId} ${etat} : un registre des lanes absent ne se crée que sous EMPTY ; ` +",
+    "replace": "    if (false) { // mutant PG-LOST-APPEND : un registre absent se crée quel que soit l'état C4\n      throw new RecoveryError(\n        `registre ${lease.runId} ${etat} : un registre des lanes absent ne se crée que sous EMPTY ; ` +"
   }
 ]

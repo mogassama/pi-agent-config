@@ -17,17 +17,18 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 
 import {
-  acquireRunOwnership, appendIntegrationEvent, appendLaneEvent, setStatus,
+  acquireRunOwnership, appendIntegrationEvent, appendLaneEvent, laneState, readLaneEvents, readWitnesses, setStatus,
 } from "../subagent-only/run-manifest.ts";
-import { openLanes } from "../subagent-only/worktree.ts";
+import { ensureLane, openLanes } from "../subagent-only/worktree.ts";
 import {
-  aJeter, AT, cheminIntegrations, cheminLanes, GUARD_STALE_MS, hashPlan, manifeste, RUN, runEcrit,
+  aJeter, AT, cheminIntegrations, cheminLanes, git as gitFixture, GUARD_STALE_MS, hashPlan, manifeste, RUN, runEcrit,
 } from "./l0-b1-fixtures.ts";
 
 // ------------------------------------------------------------------ espèces
@@ -738,6 +739,313 @@ preservation("C1.8-trace", "un verbe inconnu refuse proprement, sans trace brute
     aRefuse(sortieDe(i)) && !traceBrute(sortieDe(i)),
     `un verbe inconnu se refuse, il ne plante pas ; code ${sortieDe(i).status}, trace brute ` +
       `${traceBrute(sortieDe(i))}`,
+  );
+});
+
+/** Chaque fichier de l'espace des runs, par son empreinte : registres, manifeste, bail, archives, verrous. */
+const empreinteRuns = (dir: string): string =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .map((e) => {
+      const p = join(e.parentPath, e.name);
+      return `${p.slice(dir.length)}:${e.isFile() ? createHash("sha256").update(readFileSync(p)).digest("hex") : "dir"}`;
+    })
+    .sort()
+    .join("\n");
+const etatC4Lanes = (dir: string): string => {
+  const lu = readLaneEvents(dir, RUN);
+  return laneState(readWitnesses(dir, RUN), { ...lu, version: lu.version }, RUN);
+};
+
+/*
+ * PLAN-CORRECTIF-UNKNOWN-LEGACY § 4.2 : les deux verbes opérateur qui aboutissent à une
+ * continuation legacy refusent déjà, par leur propre chemin, sur la forme « en-tête v1,
+ * témoin 2 ». Cette préservation dit pourquoi `bin/subagent-recover` ne change pas : ses
+ * barrières (observation puis relecture après le bail) tiennent sans la garde de l'écrivain.
+ *
+ * Chaque verbe a son témoin nominal : la même fixture sans témoin `lanes`, KNOWN par C4.9, où
+ * le verbe aboutit et écrit. Le refus observé sous UNKNOWN n'est donc pas celui d'une commande
+ * mal formée ni d'une contradiction absente. L'état relevé couvre tout ce qu'un verbe pourrait
+ * muter : chaque fichier de l'espace des runs (registres, bail, archives, verrous), les
+ * worktrees, les références et HEAD.
+ */
+preservation("PG-RECOVER-UNKNOWN", "abandoned et integrated refusent sans rien muter sur un registre v1 UNKNOWN", () => {
+  const etatComplet = (root: string, dir: string): string =>
+    [
+      empreinteRuns(dir),
+      gitFixture(root, "worktree", "list", "--porcelain"),
+      gitFixture(root, "for-each-ref", "--format=%(refname) %(objectname)"),
+      gitFixture(root, "rev-parse", "HEAD"),
+    ].join("\n--\n");
+  const etatC4 = etatC4Lanes;
+
+  /** W03 dans la contradiction que le verbe tranche ; W09 ouverte, dont le worktree doit survivre. */
+  function monter(verbe: "abandoned" | "integrated", temoin: "absent" | 2) {
+    const r = runEcrit(
+      `l0-b1-pgru-${verbe}-${String(temoin)}-`,
+      [{ unite: "W03", ouverte: true }, { unite: "W09", ouverte: true }],
+      { ledger: 1, manifesteV1: false },
+    );
+    manifeste(r.dir, {
+      version: 2, base: r.base, plan: `${RUN}-plan.json`, planHash: hashPlan(r.dir),
+      ...(temoin === 2 ? { ledgers: { lanes: 2 } } : {}),
+    });
+    const lane = ensureLane(r.root, `${RUN}-W03`);
+    if (verbe === "integrated") {
+      writeFileSync(join(lane.cwd, "src", "W03.py"), "W03 = 1\n");
+      gitFixture(lane.cwd, "add", "-A");
+      gitFixture(lane.cwd, "commit", "-qm", "W03");
+      gitFixture(r.root, "merge", "--no-ff", "-q", "-m", "integrate W03", lane.branch);
+    }
+    gitFixture(r.root, "worktree", "remove", "--force", lane.cwd);
+    return r;
+  }
+
+  const ecarts: string[] = [];
+  for (const verbe of ["abandoned", "integrated"] as const) {
+    const nominal = monter(verbe, "absent");
+    precondition(etatC4(nominal.dir) === "KNOWN", `${verbe} : le témoin nominal doit être KNOWN ; ${etatC4(nominal.dir)}`);
+    const registreNominal = readFileSync(cheminLanes(nominal.dir), "utf-8");
+    const n = issue(() => recover(nominal.root, "W03", verbe));
+    precondition(n.kind === "returned", `${verbe} : le dispatcher doit répondre sur le témoin nominal`);
+    const ajout = readFileSync(cheminLanes(nominal.dir), "utf-8").slice(registreNominal.length).trim();
+    const attendu = verbe === "abandoned" ? "ABANDONED" : "INTEGRATED";
+    precondition(
+      aAbouti(sortieDe(n)) && ajout !== "" && (JSON.parse(ajout) as { event?: string }).event === attendu,
+      `${verbe} doit aboutir et écrire ${attendu} sur le témoin KNOWN ; code ${sortieDe(n).status}, ajout ` +
+        `${JSON.stringify(ajout)}, sortie ${sortieDe(n).sortie.slice(0, 300)}`,
+    );
+
+    const r = monter(verbe, 2);
+    const lu = readLaneEvents(r.dir, RUN);
+    precondition(
+      lu.version === 1 && lu.malformedLines.length === 0 && etatC4(r.dir) === "UNKNOWN",
+      `${verbe} : en-tête v1 lisible sous témoin 2, UNKNOWN par C4.9 ; version ${String(lu.version)}, abîmées ` +
+        `${lu.malformedLines.length}, état ${etatC4(r.dir)}`,
+    );
+    precondition(openLanes(r.root).includes(`${RUN}-W09`), `${verbe} : le worktree de W09 doit exister avant l'appel`);
+    const avant = etatComplet(r.root, r.dir);
+    const i = issue(() => recover(r.root, "W03", verbe));
+    precondition(i.kind === "returned", `${verbe} : le dispatcher doit répondre sur le registre UNKNOWN`);
+    const s = sortieDe(i);
+    const intact = etatComplet(r.root, r.dir) === avant;
+    if (!(aRefuse(s) && /inexploitable \(UNKNOWN\)/.test(s.sortie) && intact)) {
+      ecarts.push(`${verbe} : code ${s.status}, raison UNKNOWN ${/inexploitable \(UNKNOWN\)/.test(s.sortie)}, ` +
+        `état intact ${intact}, sortie ${JSON.stringify(s.sortie.slice(0, 300))}`);
+    }
+  }
+
+  propriete(
+    ecarts.length === 0,
+    `sur un registre v1 que C4 juge UNKNOWN, abandoned et integrated refusent pour cette raison, sans ` +
+      `append, sans bail laissé, sans worktree, branche ni référence touchés ; écarts ${JSON.stringify(ecarts)}`,
+  );
+});
+
+/*
+ * ADDENDUM-C2 § 2, § 3 et § 5 : seul un registre MIGRATION_REQUIRED se migre.
+ *
+ * `--migrate-ledger` posait l'en-tête v1 sur tout fichier présent sans version ni ligne
+ * abîmée — le registre vide compris, UNKNOWN par C4.9. Le registre devenait KNOWN, et la
+ * continuation legacy que la garde de l'écrivain refuse passait par ce détour. Les deux formes
+ * vides ou blanches (sans témoin, et sous témoin 2) doivent donc être refusées par le vrai binaire
+ * — un registre v1 que C4 juge UNKNOWN aussi, au lieu d'être dit « déjà migré » —, avec un
+ * code non nul, sans qu'un octet de l'espace des runs change — ni registre, ni témoin, ni
+ * fichier temporaire —, et un append qui suit doit rester refusé. LOST est refusé de même, sans
+ * créer de fichier ; l'append qui le suivrait relève de `creerRegistreV2`, hors de ce correctif
+ * (dette R2), et n'est pas éprouvé ici.
+ *
+ * ADDENDUM-R10-R15 § 5 : MIGRATION_REQUIRED ne suffit plus. Sous un témoin lanes: 2, l'en-tête
+ * v1 que la migration poserait contredirait le manifeste : la post-image serait UNKNOWN. Le
+ * refus est décidé avant tout octet, lignes et témoin intacts.
+ *
+ * Les témoins sont dans la PROPRIÉTÉ, parce qu'un refus de toute migration serait faux : un
+ * registre MIGRATION_REQUIRED dont la post-image est KNOWN migre encore, octet pour octet comme
+ * avant ; un registre KNOWN et un run EMPTY ne sont pas réécrits, et la commande aboutit.
+ */
+regressionCorrigee("PG-MIGRATE-UNKNOWN", "--migrate-ledger ne migre qu'un registre MIGRATION_REQUIRED", () => {
+  type Cas = { nom: string; temoin: "absent" | 2 | 3; contenu: (v1: string) => string | null; etat: string; refus: boolean };
+  const sansEntete = (v1: string): string => v1.split("\n").slice(1).join("\n");
+  const CAS: Cas[] = [
+    { nom: "vide, sans témoin", temoin: "absent", contenu: () => "", etat: "UNKNOWN", refus: true },
+    { nom: "vide, témoin 2", temoin: 2, contenu: () => "", etat: "UNKNOWN", refus: true },
+    { nom: "blanc, sans témoin", temoin: "absent", contenu: () => " \n\t\n\n", etat: "UNKNOWN", refus: true },
+    { nom: "en-tête v1, témoin 2", temoin: 2, contenu: (v1) => v1, etat: "UNKNOWN", refus: true },
+    { nom: "absent, témoin 2", temoin: 2, contenu: () => null, etat: "LOST", refus: true },
+    // R14 : MIGRATION_REQUIRED, mais l'en-tête v1 contredirait le témoin 2 — la post-image serait UNKNOWN.
+    { nom: "sans en-tête, témoin 2", temoin: 2, contenu: sansEntete, etat: "MIGRATION_REQUIRED", refus: true },
+    { nom: "sans en-tête, témoin 3", temoin: 3, contenu: sansEntete, etat: "MIGRATION_REQUIRED", refus: true },
+    { nom: "sans en-tête, sans témoin", temoin: "absent", contenu: sansEntete, etat: "MIGRATION_REQUIRED", refus: false },
+    { nom: "en-tête v1, sans témoin", temoin: "absent", contenu: (v1) => v1, etat: "KNOWN", refus: false },
+    { nom: "absent, sans témoin", temoin: "absent", contenu: () => null, etat: "EMPTY", refus: false },
+  ];
+
+  const ecarts: string[] = [];
+  const temoins: string[] = [];
+  for (const c of CAS) {
+    const r = runEcrit(`l0-b1-pgmu-`, [{ unite: "W03", ouverte: true }], { ledger: 1, manifesteV1: false });
+    manifeste(r.dir, {
+      version: 2, base: r.base, plan: `${RUN}-plan.json`, planHash: hashPlan(r.dir),
+      ...(c.temoin === "absent" ? {} : { ledgers: { lanes: c.temoin } }),
+    });
+    const v1 = readFileSync(cheminLanes(r.dir), "utf-8");
+    const contenu = c.contenu(v1);
+    if (contenu === null) rmSync(cheminLanes(r.dir));
+    else writeFileSync(cheminLanes(r.dir), contenu);
+    const lu = readLaneEvents(r.dir, RUN);
+    precondition(
+      etatC4Lanes(r.dir) === c.etat && lu.malformedLines.length === 0,
+      `${c.nom} : état C4 ${etatC4Lanes(r.dir)}, attendu ${c.etat} ; abîmées ${lu.malformedLines.length}`,
+    );
+    const registreAvant = existsSync(cheminLanes(r.dir)) ? readFileSync(cheminLanes(r.dir), "utf-8") : null;
+    const avant = empreinteRuns(r.dir);
+    const i = issue(() => recover(r.root, "--migrate-ledger"));
+    precondition(i.kind === "returned", `${c.nom} : le dispatcher doit répondre`);
+    const s = sortieDe(i);
+    const apres = empreinteRuns(r.dir);
+    const registreApres = existsSync(cheminLanes(r.dir)) ? readFileSync(cheminLanes(r.dir), "utf-8") : null;
+
+    if (c.refus) {
+      const nomme = new RegExp(`migration refusée : registre ${RUN} ${c.etat} : `).test(s.sortie);
+      let append: Issue = { kind: "threw", error: "non éprouvé (LOST : dette R2)" };
+      let apresAppend = registreApres;
+      if (c.etat === "UNKNOWN") {
+        const pris = acquireRunOwnership(r.dir, RUN, `pgmu-${c.nom}`);
+        precondition(pris.ok, `${c.nom} : le bail doit être obtenu pour l'append qui suit`);
+        const bail = pris.ok ? pris.lease : undefined;
+        append = issue(() => appendLaneEvent(r.dir, { event: "ABANDONED", work_unit: "W03", at: AT, reason: "après migration" }, bail!));
+        apresAppend = existsSync(cheminLanes(r.dir)) ? readFileSync(cheminLanes(r.dir), "utf-8") : null;
+      }
+      const avantAppend = registreApres;
+      if (!(aRefuse(s) && nomme && !traceBrute(s) && apres === avant && append.kind === "threw" && apresAppend === avantAppend)) {
+        ecarts.push(`${c.nom} : code ${s.status}, refus nommé ${nomme}, trace brute ${traceBrute(s)}, espace des runs ` +
+          `${apres === avant ? "intact" : "MODIFIÉ"} (registre ${JSON.stringify(registreApres)}), append suivant ` +
+          `${append.kind === "threw" ? "refusé" : "ÉCRIT"}${apresAppend === avantAppend ? "" : ` ${JSON.stringify(apresAppend)}`}`);
+      }
+    } else {
+      const attendu = c.etat === "MIGRATION_REQUIRED" ? `${JSON.stringify({ ledger: 1 })}\n${registreAvant ?? ""}` : registreAvant;
+      if (!(aAbouti(s) && registreApres === attendu && !traceBrute(s))) {
+        temoins.push(`${c.nom} : code ${s.status}, registre ${JSON.stringify(registreApres)} au lieu de ${JSON.stringify(attendu)}, ` +
+          `sortie ${JSON.stringify(s.sortie.slice(0, 200))}`);
+      }
+    }
+  }
+
+  propriete(
+    ecarts.length === 0 && temoins.length === 0,
+    `hors MIGRATION_REQUIRED, --migrate-ledger refuse sans écrire et ne rend aucun append possible ; ` +
+      `MIGRATION_REQUIRED migre encore, KNOWN et EMPTY ne sont pas réécrits ; refus manquants ` +
+      `${JSON.stringify(ecarts)} · témoins faux ${JSON.stringify(temoins)}`,
+  );
+});
+
+/*
+ * ADDENDUM-R10-R15 § 2 et § 3 : un registre des lanes absent ne se crée que sous EMPTY.
+ *
+ * Sous LOST — le manifeste atteste `lanes: 2`, le fichier n'est plus là —, l'écrivain recréait
+ * un registre v2 neuf, le témoin le rendait KNOWN, et l'OPENED s'y ajoutait : l'histoire que le
+ * témoin promettait disparaissait, et le runtime lançait le worker. La preuve éprouve
+ * l'écrivain directement, puis le chemin nominal de délégation, par une vraie instance de
+ * l'extension sous le chargeur de substitution, dans un processus à part (cette preuve n'est
+ * pas un harnais). La création d'un worktree avant le refus n'en fait pas partie (R11).
+ *
+ * Les témoins sont dans la PROPRIÉTÉ : sous EMPTY, le registre v2 et son témoin sont encore
+ * créés et l'OPENED écrit ; sous KNOWN, l'OPENED s'ajoute au registre existant.
+ */
+regressionCorrigee("PG-LOST-APPEND", "un registre des lanes LOST n'est ni recréé ni complété", () => {
+  const ecarts: string[] = [];
+  const temoins: string[] = [];
+  const ouvrir = (unite: string) => ({
+    event: "OPENED" as const, work_unit: unite, at: AT, base: "b", lane: `${RUN}-${unite}-g1`, generation: 1,
+  });
+
+  // 1. L'écrivain, sous LOST (témoin 2, puis témoin 1), EMPTY et KNOWN, pour OPENED puis pour ABANDONED
+  //    — toute nature, pas la seule ouverture (§ 2) — : une fixture fraîche par cellule.
+  const abandonner = (unite: string) => ({ event: "ABANDONED" as const, work_unit: unite, at: AT, reason: "PG-LOST-APPEND" });
+  for (const [cas, temoin, nature] of [
+    ["LOST", 2, "OPENED"], ["LOST", 1, "OPENED"], ["LOST", 2, "ABANDONED"], ["LOST", 1, "ABANDONED"],
+    ["EMPTY", undefined, "OPENED"], ["KNOWN", 2, "OPENED"], ["KNOWN", 2, "ABANDONED"],
+  ] as const) {
+    const r = runEcrit(`l0-b1-pgla-${cas}-`, [{ unite: "W03", ouverte: true }]);
+    if (cas !== "KNOWN") rmSync(cheminLanes(r.dir));
+    if (cas !== "KNOWN") {
+      manifeste(r.dir, {
+        version: 2, base: r.base, plan: `${RUN}-plan.json`, planHash: hashPlan(r.dir),
+        ...(temoin === undefined ? {} : { ledgers: { lanes: temoin } }),
+      });
+    }
+    precondition(etatC4Lanes(r.dir) === cas, `écrivain témoin ${String(temoin)} : état C4 ${etatC4Lanes(r.dir)}, attendu ${cas}`);
+    const manifesteAvant = readFileSync(join(r.dir, "active-run.json"), "utf-8");
+    const registreAvant = existsSync(cheminLanes(r.dir)) ? readFileSync(cheminLanes(r.dir), "utf-8") : null;
+    const pris = acquireRunOwnership(r.dir, RUN, `pgla-${cas}`);
+    precondition(pris.ok, `écrivain ${cas} : le bail doit être obtenu`);
+    const bail = pris.ok ? pris.lease : undefined;
+    const unite = nature === "OPENED" ? "W09" : "W03";
+    const i = issue(() => appendLaneEvent(r.dir, nature === "OPENED" ? ouvrir(unite) : abandonner(unite), bail!));
+    const registreApres = existsSync(cheminLanes(r.dir)) ? readFileSync(cheminLanes(r.dir), "utf-8") : null;
+    const manifesteApres = readFileSync(join(r.dir, "active-run.json"), "utf-8");
+    if (cas === "LOST") {
+      const nomme = i.kind === "threw" && i.error.includes(`registre ${RUN} LOST : `);
+      if (!(nomme && registreApres === null && manifesteApres === manifesteAvant)) {
+        ecarts.push(`écrivain LOST (témoin ${String(temoin)}) ${nature} : refus nommé ${nomme}, registre ${JSON.stringify(registreApres)}, manifeste ` +
+          `${manifesteApres === manifesteAvant ? "intact" : "MODIFIÉ"}, issue ${montrer(i)}`);
+      }
+    } else {
+      const lignes = (registreApres ?? "").trim().split("\n");
+      // Lu sans lever : un témoin faux doit rougir sur la PROPRIÉTÉ, pas sur une exception de lecture.
+      const derniere = ((): { event?: string; work_unit?: string } => {
+        try { return JSON.parse(lignes.at(-1) ?? "{}") as { event?: string; work_unit?: string }; } catch { return {}; }
+      })();
+      const cree = cas === "EMPTY"
+        ? lignes[0] === JSON.stringify({ ledger: 2 }) && manifesteApres.includes('"lanes": 2')
+        : registreApres?.startsWith(registreAvant ?? "\u0000") === true;
+      if (!(i.kind === "returned" && cree && derniere.event === nature && derniere.work_unit === unite)) {
+        temoins.push(`écrivain ${cas} ${nature} : issue ${montrer(i)}, registre ${JSON.stringify(registreApres)}`);
+      }
+    }
+  }
+
+  // 2. Le chemin nominal de délégation, dans un processus à part sous le chargeur.
+  const harnais = join(REPO, "tests", "l0-b2-harness.ts");
+  const code =
+    `import { existsSync, readFileSync, rmSync } from "node:fs";\n` +
+    `import { join } from "node:path";\n` +
+    `import { compter, monter, tache, texte } from ${JSON.stringify(harnais)};\n` +
+    `const h = await monter();\n` +
+    `const p = () => join(h.runDir, \`\${h.runId}-lanes.jsonl\`);\n` +
+    `const lire = () => (existsSync(p()) ? readFileSync(p(), "utf-8") : null);\n` +
+    `const r1 = await h.outil.execute("1", tache("W03"));\n` +
+    `const apres1 = lire();\n` +
+    `rmSync(p(), { force: true });\n` +
+    `const h2 = await h.recharger();\n` +
+    `const workers = compter("worker");\n` +
+    `const r2 = await h2.outil.execute("2", tache("W09"));\n` +
+    `const sortie = { premier: !r1.isError, registre1: apres1, erreur: r2.isError === true, texte: texte(r2),\n` +
+    `  registre: lire(), workers: compter("worker") - workers, manifeste: readFileSync(join(h.runDir, "active-run.json"), "utf-8") };\n` +
+    `console.log("PGLA " + JSON.stringify(sortie));\n` +
+    `h.fin();\n`;
+  const p = spawnSync(process.execPath, [...flags(), "--import", "./tests/stubs/loader.mjs", "--input-type=module", "-e", code], {
+    cwd: REPO, encoding: "utf-8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
+  });
+  const ligne = `${p.stdout}`.split("\n").find((l) => l.startsWith("PGLA "));
+  precondition(ligne !== undefined, `runtime : le processus doit rendre son relevé ; code ${p.status}, ${`${p.stderr}`.slice(-400)}`);
+  const vu = JSON.parse(ligne!.slice(5)) as {
+    premier: boolean; registre1: string | null; erreur: boolean; texte: string; registre: string | null; workers: number;
+    manifeste: string;
+  };
+  // La première délégation est le témoin EMPTY du runtime : elle crée le registre et publie le témoin.
+  if (!(vu.premier && (vu.registre1 ?? "").includes('"event":"OPENED"') && vu.manifeste.includes('"lanes": 2'))) {
+    temoins.push(`runtime EMPTY : la première délégation n'ouvre pas W03 ou ne publie pas le témoin ; ` +
+      `${JSON.stringify(vu).slice(0, 300)}`);
+  } else if (!(vu.erreur && /ouverture non enregistrée/.test(vu.texte) && vu.registre === null && vu.workers === 0)) {
+    ecarts.push(`runtime LOST : erreur ${vu.erreur}, workers lancés ${vu.workers}, registre ${JSON.stringify(vu.registre)}, ` +
+      `texte ${JSON.stringify(vu.texte.slice(0, 200))}`);
+  }
+
+  propriete(
+    ecarts.length === 0 && temoins.length === 0,
+    `sous LOST, aucun registre n'est recréé et aucun OPENED n'est écrit, ni par l'écrivain ni par la délégation, ` +
+      `qui ne lance aucun worker ; EMPTY crée encore, KNOWN écrit encore ; écarts ${JSON.stringify(ecarts)} · ` +
+      `témoins faux ${JSON.stringify(temoins)}`,
   );
 });
 

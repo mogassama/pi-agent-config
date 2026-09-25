@@ -2332,7 +2332,8 @@ export function laneAllocationSections(): number {
 }
 
 /**
- * Un registre v2 présent ne reçoit rien s'il n'est pas KNOWN (PLAN-LOT7 Q2).
+ * Un registre des lanes présent ne reçoit rien s'il n'est pas KNOWN (PLAN-LOT7 Q2), qu'il
+ * soit v2 ou v1 (PLAN-CORRECTIF-UNKNOWN-LEGACY).
  *
  * Lisible ne suffit pas : un `event_seq` dupliqué ou décroissant, une lane qu'aucune
  * ouverture ne porte, un témoin qui contredit le fichier laissent chaque ligne analysable
@@ -2340,12 +2341,16 @@ export function laneAllocationSections(): number {
  * encore. L'état se juge ici comme les observateurs le jugent — témoins relus sous R et
  * même fonction —, avant la séquence et avant le premier octet. Un seul lieu, pour toutes
  * les entrées de l'écrivain.
+ *
+ * Le v1 n'y échappe pas : un en-tête v1 sous un manifeste qui témoigne `lanes: 2` est
+ * UNKNOWN (C4.9), même si chacune de ses lignes legacy se lit. Sous KNOWN, sa grammaire
+ * historique décide ensuite seule de ce qu'il accepte.
  */
 function exigerRegistreConnu(dir: string, runId: string, lu: LedgerRead, quoi: string): void {
   const etat = laneState(readWitnesses(dir, runId), { ...lu, version: lu.version }, runId);
   if (etat !== "KNOWN") {
     throw new RecoveryError(
-      `registre ${runId} ${etat} : un registre v2 qui n'est pas KNOWN ne reçoit aucun ` +
+      `registre ${runId} ${etat} : un registre v${String(lu.version)} qui n'est pas KNOWN ne reçoit aucun ` +
         `${quoi} ; rien n'est écrit`,
     );
   }
@@ -2354,23 +2359,40 @@ function exigerRegistreConnu(dir: string, runId: string, lu: LedgerRead, quoi: s
 /** Le corps de `appendLaneEvent`, R déjà tenu et le bail déjà vérifié. */
 function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
   const path = laneLedgerPath(dir, lease.runId);
-  if (!existsSync(path)) creerRegistreV2(dir, lease, path);
+  if (!existsSync(path)) {
+    /*
+     * L'état C4 avant toute création (ADDENDUM-R10-R15 § 2) : seul EMPTY crée. Sous LOST, le
+     * manifeste atteste un registre qui n'est plus là ; en créer un neuf effacerait l'histoire
+     * que le témoin promet, et le rendrait KNOWN pour l'append qui suit. Il reste absent.
+     */
+    const absent = readLaneEvents(dir, lease.runId);
+    const etat = laneState(readWitnesses(dir, lease.runId), { ...absent, version: absent.version }, lease.runId);
+    if (etat !== "EMPTY") {
+      throw new RecoveryError(
+        `registre ${lease.runId} ${etat} : un registre des lanes absent ne se crée que sous EMPTY ; ` +
+          `aucun ${event.event}, rien n'est écrit`,
+      );
+    }
+    creerRegistreV2(dir, lease, path);
+  }
   const lu = readLaneEvents(dir, lease.runId);
   if (lu.malformedLines.length > 0) {
     throw new RecoveryError(
       `registre ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
     );
   }
-  if (lu.version === LANE_LEDGER_V2) {
-    exigerRegistreConnu(dir, lease.runId, lu, event.event);
-    appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
-    return;
-  }
-  if (lu.version !== LANE_LEDGER_VERSION) {
+  if (lu.version !== LANE_LEDGER_V2 && lu.version !== LANE_LEDGER_VERSION) {
     const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
     throw new RecoveryError(
       `registre ${lease.runId} ${trouve} : migration requise avant toute écriture`,
     );
+  }
+  // L'état C4, une fois, sur ce qui vient d'être relu — pour les deux versions, avant que la
+  // grammaire ne décide. Une continuation legacy n'est permise que sous KNOWN.
+  exigerRegistreConnu(dir, lease.runId, lu, event.event);
+  if (lu.version === LANE_LEDGER_V2) {
+    appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
+    return;
   }
   if (event.event === "REVIEWED" || event.event === "VIOLATION" || event.event === "RISK" || event.event === "FROZEN" ||
     event.event === "MERGED" || (event.event === "INTEGRATED" && event.status !== undefined)) {
@@ -2693,7 +2715,8 @@ export type LaneLedgerMigration =
   | { status: "current"; events: number }
   | { status: "unsupported"; version: number }
   | { status: "malformed"; lines: number[] }
-  | { status: "migrated"; events: number };
+  | { status: "migrated"; events: number }
+  | { status: "refused"; state: LedgerState; reason: string };
 
 /**
  * Pose l'en-tête courant sur un registre legacy, sous la même capability et la
@@ -2701,6 +2724,12 @@ export type LaneLedgerMigration =
  *
  * Le remplacement est atomique : un crash pendant l'écriture du fichier
  * temporaire ne peut pas tronquer la provenance existante.
+ *
+ * Seul un registre que C4 classe MIGRATION_REQUIRED se migre (ADDENDUM-C2 § 2). La décision
+ * est prise ici, sur l'état relu sous la garde, avant tout octet : un registre vide ou blanc
+ * est UNKNOWN, et lui poser un en-tête fabriquerait une histoire KNOWN à partir de rien — la
+ * continuation legacy qu'on vient de fermer passerait alors par ce détour. Il est refusé et
+ * conservé tel quel ; LOST de même. Le binaire opérateur présente le refus, il ne rejuge pas.
  */
 export function migrateLaneLedger(
   dir: string,
@@ -2713,11 +2742,19 @@ export function migrateLaneLedger(
   return withRunGuard(dir, runId, () => {
     assertOwner(dir, lease, `migrer le registre de ${runId}`);
     const path = laneLedgerPath(dir, runId);
-    if (!existsSync(path)) return { status: "missing" };
-
     const lu = readLaneEvents(dir, runId);
+    const etat = laneState(readWitnesses(dir, runId), { ...lu, version: lu.version }, runId);
+    const refus = (postImage?: LedgerState): LaneLedgerMigration => ({
+      status: "refused",
+      state: etat,
+      reason: `registre ${runId} ${etat} : seul un registre MIGRATION_REQUIRED dont la post-image v1 serait ` +
+        `KNOWN se migre${postImage === undefined ? "" : ` (post-image ${postImage})`} ; il est conservé tel quel, ` +
+        "rien n'est écrit",
+    });
+    if (!existsSync(path)) return etat === "LOST" ? refus() : { status: "missing" };
+
     if (lu.version === LANE_LEDGER_VERSION) {
-      return { status: "current", events: lu.events.length };
+      return etat === "KNOWN" ? { status: "current", events: lu.events.length } : refus();
     }
     if (lu.version !== undefined) {
       return { status: "unsupported", version: lu.version };
@@ -2725,6 +2762,14 @@ export function migrateLaneLedger(
     if (lu.malformedLines.length > 0) {
       return { status: "malformed", lines: [...lu.malformedLines] };
     }
+    /*
+     * La post-image, jugée avant le premier octet (ADDENDUM-R10-R15 § 5) : l'en-tête v1 posé sur
+     * ces lignes, relues par la même grammaire v1, face aux témoins inchangés. Sous un témoin
+     * lanes: 2, l'étiquette v1 contredirait le manifeste et rendrait le registre UNKNOWN ; il
+     * n'est ni réétiqueté, ni reconstruit en v2, ni amputé : il est refusé tel quel.
+     */
+    const postImage = laneState(readWitnesses(dir, runId), { ...lu, version: LANE_LEDGER_VERSION }, runId);
+    if (etat !== "MIGRATION_REQUIRED" || postImage !== "KNOWN") return refus(postImage);
 
     const original = readFileSync(path, "utf-8");
     const temp = `${path}.migrate-${lease.leaseId}-${randomBytes(4).toString("hex")}`;

@@ -223,6 +223,11 @@ function migrerRegistre() {
       case "migrated":
         console.log(`registre migré en version ${LANE_LEDGER_VERSION} : ${r.events} fait(s) conservé(s).`);
         return;
+      case "refused":
+        // La décision est celle de migrateLaneLedger (ADDENDUM-C2 § 4) : elle est présentée, pas rejugée.
+        console.error(`migration refusée : ${r.reason}.`);
+        process.exitCode = 1;
+        return;
     }
   } finally {
     releaseRunOwnership(dir, lease);
