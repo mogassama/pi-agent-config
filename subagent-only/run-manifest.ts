@@ -1131,6 +1131,14 @@ function integrationEventIsWellFormed(doc: Record<string, unknown>): boolean {
  * tentatives : c'est une vérité durable sur le run, et la laisser hors de la
  * capacité ouvrirait une seconde vérité sans règles — celle-là même que le
  * registre des lanes a été gardé pour éviter.
+ *
+ * Et gardé par C4, comme le registre des lanes (PLAN-CORRECTIF-PRE-PILOTE-C4 § 6, C4.1, C4.2,
+ * C4.5, C4.9). La décision se prend ici, sur un seul passage : registre des lanes, registre des
+ * intégrations, témoins, puis `laneState` et `integrationLedgerState` sur ce même état des lanes.
+ * Seuls KNOWN et EMPTY s'écrivent ; LOST, UNKNOWN (lanes inexploitables comprises),
+ * MIGRATION_REQUIRED et RUN_WITHOUT_WITNESS refusent avant tout octet. Le fichier absent n'est
+ * plus « à créer » d'office : sous un témoin, il est perdu, et le recréer effacerait l'histoire
+ * que le témoin atteste. Les appelants — `noteAttempt`, le binaire — héritent du refus.
  */
 export function appendIntegrationEvent(
   dir: string,
@@ -1140,24 +1148,81 @@ export function appendIntegrationEvent(
   withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, `enregistrer ${event.event} sur ${event.id}`);
     const path = integrationLedgerPath(dir, lease.runId);
-    if (!existsSync(path)) {
-      appendFileSync(path, `${JSON.stringify({ integration_ledger: INTEGRATION_LEDGER_VERSION })}\n`);
-    } else {
-      const lu = readIntegrationEvents(dir, lease.runId);
-      if (lu.version !== INTEGRATION_LEDGER_VERSION) {
-        const trouve = lu.version === undefined ? "sans version" : `version ${lu.version}`;
-        throw new RecoveryError(
-          `registre d'intégrations ${lease.runId} ${trouve} : migration requise avant toute écriture`,
-        );
-      }
-      if (lu.malformedLines.length > 0) {
-        throw new RecoveryError(
-          `registre d'intégrations ${lease.runId} illisible ligne(s) ${lu.malformedLines.join(", ")}`,
-        );
-      }
+    const lanes = readLaneEvents(dir, lease.runId);
+    const integrations = readIntegrationEvents(dir, lease.runId);
+    const temoins = readWitnesses(dir, lease.runId);
+    const etatLanes = laneState(temoins, { ...lanes, version: lanes.version }, lease.runId);
+    const etat = integrationLedgerState(temoins, integrations, etatLanes);
+    if (etat !== "KNOWN" && etat !== "EMPTY") {
+      // La décision est prise sur `etat` ; le diagnostic dit seulement pourquoi, au plus précis.
+      const faits = integrations.present && integrations.malformedLines.length > 0
+        ? `illisible ligne(s) ${integrations.malformedLines.join(", ")}`
+        : integrations.present && integrations.version !== INTEGRATION_LEDGER_VERSION
+          ? `${integrations.version === undefined ? "sans version" : `version ${integrations.version}`} : ` +
+            "migration requise avant toute écriture"
+          : ledgerFacts(temoins, integrations, "integrations", INTEGRATION_LEDGER_VERSION);
+      throw new RecoveryError(
+        `registre des intégrations ${lease.runId} ${etat} (lanes ${etatLanes}) : ${faits} ; aucun ` +
+          `${event.event}, rien n'est écrit`,
+      );
+    }
+    if (etat === "EMPTY") {
+      creerRegistreIntegrations(dir, lease, path);
+    } else if (temoins?.manifestVersion === 2 && temoins.ledgers.integrations === undefined) {
+      synchroniserChemin(path);
+      synchroniserChemin(dir);
+      publierTemoinIntegrations(dir, lease);
     }
     appendFileSync(path, `${JSON.stringify(event)}\n`);
   });
+}
+
+/**
+ * Crée le registre des intégrations d'un run, sous EMPTY seulement, puis publie son témoin.
+ *
+ * L'ordre de C4.1, le même que pour les lanes (`creerRegistreV2`) : création exclusive — un
+ * fichier apparu depuis la décision fait échouer, il n'est pas écrasé —, en-tête seul, `fsync`
+ * du fichier, puis du répertoire, et seulement ensuite `ledgers.integrations = 1`. Un crash entre
+ * les deux laisse un en-tête durable sans témoin, que C4.9 lit KNOWN (ligne 6) et que l'ajout
+ * suivant reprend ; l'ordre inverse laisserait un témoin sans registre, lu LOST.
+ */
+function creerRegistreIntegrations(dir: string, lease: Lease, path: string): void {
+  const manifeste = mutable(dir, lease, "créer le registre des intégrations");
+  if (manifeste.version !== 2) {
+    throw new RecoveryError(
+      `registre des intégrations ${lease.runId} : un manifeste v${String(manifeste.version)} ne peut ` +
+        "attester aucun registre, aucun n'est créé",
+    );
+  }
+  const fd = openSync(path, "wx");
+  try {
+    writeFileSync(fd, `${JSON.stringify({ integration_ledger: INTEGRATION_LEDGER_VERSION })}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  synchroniserChemin(dir);
+  publierTemoinIntegrations(dir, lease);
+}
+
+/**
+ * Publie `ledgers.integrations = 1` sur un manifeste v2 qui ne le porte pas encore.
+ *
+ * Appelé après un en-tête durable : à la création, ou pour reprendre la fenêtre de crash de C4.1
+ * (registre KNOWN, témoin absent). Rien n'est réécrit dans le registre. Un témoin déjà présent et
+ * différent n'est jamais corrigé : l'état est alors UNKNOWN, et la décision en amont a refusé.
+ */
+function publierTemoinIntegrations(dir: string, lease: Lease): void {
+  const manifeste = mutable(dir, lease, "publier le témoin du registre des intégrations");
+  const temoins = manifeste.ledgers ?? {};
+  if (temoins.integrations === INTEGRATION_LEDGER_VERSION) return;
+  if (temoins.integrations !== undefined) {
+    throw new RecoveryError(
+      `registre des intégrations ${lease.runId} : le manifeste atteste déjà integrations: ` +
+        `${String(temoins.integrations)}, rien n'est corrigé`,
+    );
+  }
+  writeManifest(dir, { ...manifeste, ledgers: { ...temoins, integrations: INTEGRATION_LEDGER_VERSION } });
 }
 
 // ------------------------------------------------ le registre des lanes
@@ -2302,7 +2367,21 @@ export function allocateLanes<T>(
   SECTIONS_D_ALLOCATION += 1;
   return withRunGuard(dir, lease.runId, () => {
     assertOwner(dir, lease, "allouer des lanes");
-    const decisions = decide(readLaneEvents(dir, lease.runId));
+    /*
+     * L'état C4, relu sous R, avant `decide` (PLAN-CORRECTIF-PRE-PILOTE-C4 § 3.3) : `decide` crée
+     * worktrees et branches. Sur un registre ni KNOWN ni EMPTY, il n'est pas appelé — rien ne
+     * s'ouvre ni ne se rejoint, et l'écrivain n'a pas à refuser après coup une ouverture déjà faite.
+     * Défense contre un écart entre la reconstruction du runtime et ce disque, relu maintenant.
+     */
+    const lu = readLaneEvents(dir, lease.runId);
+    const etat = laneState(readWitnesses(dir, lease.runId), { ...lu, version: lu.version }, lease.runId);
+    if (etat !== "KNOWN" && etat !== "EMPTY") {
+      throw new RecoveryError(
+        `registre ${lease.runId} ${etat} : aucune lane ne s'alloue sur un registre ni KNOWN ni EMPTY ; ` +
+          "rien n'est ouvert, rejoint ni écrit",
+      );
+    }
+    const decisions = decide(lu);
     for (const d of decisions) {
       if (!d.opened) continue;
       try {

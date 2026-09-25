@@ -107,6 +107,7 @@ import {
   observeLanes,
   type LaneRead,
   type LaneSnapshot,
+  type ObservedLanes,
 } from "../../subagent-only/lane-observe.js";
 import {
   readGitInvocationCount,
@@ -718,6 +719,13 @@ let RECOVERY_CONFLICTS = new Map<string, Conflict>();
  */
 let LAST_LANES: LaneSnapshot | undefined;
 let LAST_INTEGRATIONS: IntegrationSnapshot | undefined;
+/**
+ * L'observation C4 des lanes posée par la dernière reconstruction, telle que `observeLanes` l'a
+ * rendue : l'état et, s'il n'est pas exploitable, la raison. La porte des délégations liées à une
+ * lane décide sur elle (PLAN-CORRECTIF-PRE-PILOTE-C4 § 3.2), jamais sur un drapeau recalculé à
+ * part, qui pourrait diverger de ce que l'observateur a conclu.
+ */
+let OBSERVATION_LANES: ObservedLanes | undefined;
 let LAST_SCAN: RunMetrics = { recovery_scan_ms: 0, git_probe_count: 0 };
 
 /**
@@ -1234,6 +1242,12 @@ function reprendreEnTete(): void {
   try {
     const lu = readLaneEvents(RUN_DIR, RUN_ID);
     if (!lu.present || lu.version !== LANE_LEDGER_V2) return;
+    /*
+     * Aucune reprise sur un registre des lanes que C4 ne dit pas KNOWN (PLAN-CORRECTIF-PRE-PILOTE-C4
+     * § 3.2) : reprendre, c'est prendre le bail et agir sur la racine au nom d'une histoire qu'on ne
+     * sait pas lire. La porte de délégation, après la reconstruction, nomme ensuite le refus.
+     */
+    if (laneState(readWitnesses(RUN_DIR, RUN_ID), { ...lu, version: lu.version }, RUN_ID) !== "KNOWN") return;
     const candidates = transitionsEnCours(lu.events, readIntegrationEvents(RUN_DIR, RUN_ID).events)
       .filter((t) => t.fenetre === "merged" ||
         (t.fenetre === "gel-vivant" && fenetreDeReprise(process.cwd(), { gel: t.gel.commit }).fenetre === "apres-merge"));
@@ -2534,6 +2548,7 @@ function reconstruireSousMesure(): void {
    * deux.
    */
   const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead });
+  OBSERVATION_LANES = vu;
 
   RECOVERY_MALFORMED = laneRead.malformedLines;
   RECOVERY_LEDGER_VERSION = laneRead.version;
@@ -3982,6 +3997,34 @@ export default function (pi: ExtensionAPI) {
                 `[run: reprise à trancher]\n${describeConflicts(RECOVERY_CONFLICTS)}\n` +
                 `Aucune délégation n'a été lancée, aucune séquence réservée, ` +
                 `aucun worktree ouvert.`,
+            }],
+            isError: true,
+          };
+        }
+
+        /*
+         * R11 (PLAN-CORRECTIF-PRE-PILOTE-C4 § 3.2) : une délégation liée à une lane ne part que sur
+         * des lanes que C4 dit KNOWN ou EMPTY.
+         *
+         * Les portes ci-dessus ne ferment que sur une version inconnue, des lignes abîmées ou des
+         * contradictions : un registre lisible mais UNKNOWN (doublon d'`event_seq`, témoin qui
+         * contredit l'en-tête), LOST (registre attesté et absent) ou RUN_WITHOUT_WITNESS les
+         * franchissait, et la délégation réservait sa séquence, ouvrait ou rejoignait un worktree,
+         * lançait l'enfant — pour être refusée après coup. La décision est celle de l'observateur,
+         * posée par la reconstruction qui précède ; elle tombe avant le garde de revue, le bail,
+         * toute reprise d'atterrissage, le plan attaché, la séquence, l'ouverture et le lancement.
+         * Les rôles globaux gardent leurs règles propres.
+         */
+        const vuDesLanes = OBSERVATION_LANES;
+        if (isLaneBound(agent.envelopeRole ?? agent.name) && (vuDesLanes === undefined || !vuDesLanes.usable)) {
+          const etatC4 = vuDesLanes === undefined ? "UNKNOWN" : vuDesLanes.state;
+          const raison = vuDesLanes === undefined ? "le registre des lanes n'a pas été observé" : vuDesLanes.reason;
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                `[run: registre des lanes ${etatC4}] ${raison}\n` +
+                `Aucune délégation n'a été lancée, aucune séquence réservée, aucun worktree ouvert ni rejoint.`,
             }],
             isError: true,
           };

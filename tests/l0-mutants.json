@@ -870,5 +870,17 @@
     "file": "subagent-only/run-manifest.ts",
     "find": "    if (etat !== \"EMPTY\") {\n      throw new RecoveryError(\n        `registre ${lease.runId} ${etat} : un registre des lanes absent ne se crée que sous EMPTY ; ` +",
     "replace": "    if (false) { // mutant PG-LOST-APPEND : un registre absent se crée quel que soit l'état C4\n      throw new RecoveryError(\n        `registre ${lease.runId} ${etat} : un registre des lanes absent ne se crée que sous EMPTY ; ` +"
+  },
+  {
+    "test": "L0 REG PG-DELEGATION-C4-GATE — une délégation liée à une lane ne part que sur des lanes KNOWN ou EMPTY",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (etat !== \"KNOWN\" && etat !== \"EMPTY\") {\n      throw new RecoveryError(\n        `registre ${lease.runId} ${etat} : aucune lane ne s'alloue",
+    "replace": "    if (false) { // mutant PG-DELEGATION-C4-GATE : decide est appelé quel que soit l'état C4\n      throw new RecoveryError(\n        `registre ${lease.runId} ${etat} : aucune lane ne s'alloue"
+  },
+  {
+    "test": "L0 REG PG-INTEGRATION-C4 — le registre des intégrations ne s'écrit que sous KNOWN ou EMPTY, témoin publié après l'en-tête",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (etat !== \"KNOWN\" && etat !== \"EMPTY\") {\n      // La décision est prise sur `etat`",
+    "replace": "    if (false) { // mutant PG-INTEGRATION-C4 : l'état C4 des intégrations n'est plus jugé\n      // La décision est prise sur `etat`"
   }
 ]

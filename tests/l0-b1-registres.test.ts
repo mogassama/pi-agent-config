@@ -16,6 +16,7 @@
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -23,7 +24,8 @@ import { laneIdFor } from "../subagent-only/lane-context.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
 import { observeIntegrations } from "../subagent-only/integration-observe.ts";
 import {
-  acquireRunOwnership, appendLaneEvent, laneState, openRun, readLaneEvents, readWitnesses,
+  acquireRunOwnership, appendIntegrationEvent, appendLaneEvent, integrationLedgerState, laneState, openRun,
+  readIntegrationEvents, readLaneEvents, readWitnesses,
 } from "../subagent-only/run-manifest.ts";
 import { ensureLane, openLanes, runBranches } from "../subagent-only/worktree.ts";
 import {
@@ -380,6 +382,183 @@ regressionCorrigee("PG-UNKNOWN-LEGACY", "un registre v1 que C4 juge UNKNOWN ne r
     `sous R, un état C4 autre que KNOWN interdit tout append, en-tête v1 compris, et la continuation ` +
       `legacy reste permise sous KNOWN ; UNKNOWN non refusé : ${JSON.stringify(refus)} · KNOWN refusé : ` +
       `${JSON.stringify(continuations)}`,
+  );
+});
+
+// ================================================================== R19 — le registre des intégrations sous C4
+
+/*
+ * PLAN-CORRECTIF-PRE-PILOTE-C4 § 6 et § 7 (R19) : `appendIntegrationEvent` décide sur l'état C4
+ * avant tout octet — lanes, intégrations, témoins, un seul passage.
+ *
+ * Sur la base, l'écrivain créait l'en-tête dès que le fichier manquait, sans lire aucun témoin ni
+ * l'état des lanes, et ne publiait jamais `ledgers.integrations` : un registre supprimé se
+ * recréait sans trace, sous LOST comme sous des lanes inexploitables. Chaque cellule part d'une
+ * fixture fraîche, lanes v2 KNOWN par défaut. Les refus comparent registre des lanes, registre des
+ * intégrations (présence et octets) et manifeste ; ils doivent nommer l'état C4 attendu.
+ *
+ * Le chemin réel de `noteAttempt` est éprouvé par la vraie extension, dans un processus à part
+ * sous le chargeur : une revue approuvée sur une lane qui conflicte avec la racine ouvre une
+ * tentative. Un hook `post-checkout` — l'ouverture du contexte d'intégration est un
+ * `git worktree add` — publie `integrations: 1` à cet instant, après FROZEN et avant
+ * `noteAttempt` : l'état devient LOST sous l'appelant, comme le ferait un acteur concurrent.
+ *
+ * Les témoins sont dans la PROPRIÉTÉ : EMPTY crée l'en-tête puis publie le témoin puis écrit ;
+ * KNOWN écrit ; KNOWN sans témoin (la fenêtre de crash de C4.1) publie le témoin puis écrit, sans
+ * réécrire le préfixe ; le v1 legacy sous manifeste v1 écrit sans témoin.
+ */
+regressionCorrigee("PG-INTEGRATION-C4", "le registre des intégrations ne s'écrit que sous KNOWN ou EMPTY, témoin publié après l'en-tête", () => {
+  const ecarts: string[] = [];
+  const temoins: string[] = [];
+  let n = 0;
+  const tentative = () => {
+    n += 1;
+    return {
+      event: "ATTEMPT_OPENED" as const, id: `${RUN}-W03-${90 + n}`, work_unit: "W03", seq: 90 + n,
+      p1: "a".repeat(40), p2: "b".repeat(40), conflicts: ["src/W03.py"], at: AT,
+    };
+  };
+  const entete = `${JSON.stringify({ integration_ledger: 1 })}\n`;
+  const ligne = (e: Record<string, unknown>) => `${JSON.stringify(e)}\n`;
+  const lire = (p: string) => (existsSync(p) ? readFileSync(p, "utf-8") : null);
+  const pertinents = (dir: string) =>
+    JSON.stringify([lire(cheminLanes(dir)), lire(cheminIntegrations(dir)), lire(join(dir, "active-run.json"))]);
+  const etats = (dir: string) => {
+    const temoinsRun = readWitnesses(dir, RUN);
+    const lanes = readLaneEvents(dir, RUN);
+    const lanesEtat = laneState(temoinsRun, { ...lanes, version: lanes.version }, RUN);
+    return { lanes: lanesEtat, integrations: integrationLedgerState(temoinsRun, readIntegrationEvents(dir, RUN), lanesEtat) };
+  };
+  const temoinManifeste = (dir: string, integrations: number | undefined, lanes: number | undefined = 2) => {
+    const m = JSON.parse(readFileSync(join(dir, "active-run.json"), "utf-8")) as Record<string, unknown>;
+    const ledgers: Record<string, number> = {};
+    if (lanes !== undefined) ledgers.lanes = lanes;
+    if (integrations !== undefined) ledgers.integrations = integrations;
+    writeFileSync(join(dir, "active-run.json"), `${JSON.stringify({ ...m, ledgers }, null, 2)}\n`);
+  };
+  const dupliquerLanes = (dir: string) => {
+    const l = readFileSync(cheminLanes(dir), "utf-8").trim().split("\n");
+    writeFileSync(cheminLanes(dir), `${[...l, l.at(-1)].join("\n")}\n`);
+  };
+  const connu = (dir: string) => writeFileSync(cheminIntegrations(dir), entete + ligne(tentative()));
+
+  type Cellule = {
+    nom: string; ledger?: 1; manifesteV1?: boolean; poser: (dir: string) => void;
+    lanes: string; integrations: string;
+    refus: boolean;
+    /** Pour une cellule positive : la post-image attendue. */
+    attendu?: (avantIntegrations: string | null, ajout: string, manifeste: string) => boolean;
+  };
+  const cellules: Cellule[] = [
+    { nom: "1 LOST", poser: (d) => temoinManifeste(d, 1), lanes: "KNOWN", integrations: "LOST", refus: true },
+    { nom: "2 UNKNOWN fichier vide", poser: (d) => writeFileSync(cheminIntegrations(d), ""), lanes: "KNOWN", integrations: "UNKNOWN", refus: true },
+    { nom: "3 MIGRATION_REQUIRED sans en-tête", poser: (d) => writeFileSync(cheminIntegrations(d), ligne(tentative())),
+      lanes: "KNOWN", integrations: "MIGRATION_REQUIRED", refus: true },
+    { nom: "4 RUN_WITHOUT_WITNESS manifeste v1, absent", ledger: 1, manifesteV1: true, poser: () => {},
+      lanes: "KNOWN", integrations: "RUN_WITHOUT_WITNESS", refus: true },
+    { nom: "5 EMPTY apparent, lanes UNKNOWN", poser: (d) => dupliquerLanes(d), lanes: "UNKNOWN", integrations: "UNKNOWN", refus: true },
+    { nom: "6 KNOWN apparent, lanes LOST", poser: (d) => { connu(d); rmSync(cheminLanes(d)); }, lanes: "LOST", integrations: "UNKNOWN", refus: true },
+    { nom: "7 KNOWN apparent, lanes MIGRATION_REQUIRED", poser: (d) => {
+      connu(d); writeFileSync(cheminLanes(d), readFileSync(cheminLanes(d), "utf-8").split("\n").slice(1).join("\n"));
+    }, lanes: "MIGRATION_REQUIRED", integrations: "UNKNOWN", refus: true },
+    { nom: "8 KNOWN apparent, lanes RUN_WITHOUT_WITNESS", poser: (d) => {
+      connu(d);
+      const m = JSON.parse(readFileSync(join(d, "active-run.json"), "utf-8")) as Record<string, unknown>;
+      delete m.ledgers; delete m.planHash;
+      writeFileSync(join(d, "active-run.json"), `${JSON.stringify({ ...m, version: 1 }, null, 2)}\n`);
+    }, lanes: "RUN_WITHOUT_WITNESS", integrations: "UNKNOWN", refus: true },
+    { nom: "9 EMPTY, lanes KNOWN", poser: () => {}, lanes: "KNOWN", integrations: "EMPTY", refus: false,
+      attendu: (avant, ajout, m) => avant === null && ajout.startsWith(entete) && ajout.split("\n").length === 3 &&
+        /"integrations": 1/.test(m) },
+    { nom: "10 KNOWN, témoin 1", poser: (d) => { connu(d); temoinManifeste(d, 1); }, lanes: "KNOWN", integrations: "KNOWN", refus: false,
+      attendu: (avant, ajout, m) => avant !== null && ajout.split("\n").length === 2 && /"integrations": 1/.test(m) },
+    { nom: "11 KNOWN sans témoin (fenêtre C4.1)", poser: (d) => connu(d), lanes: "KNOWN", integrations: "KNOWN", refus: false,
+      attendu: (avant, ajout, m) => avant !== null && ajout.split("\n").length === 2 && /"integrations": 1/.test(m) },
+    { nom: "12 témoin contradictoire", poser: (d) => { connu(d); temoinManifeste(d, 2); }, lanes: "KNOWN", integrations: "UNKNOWN", refus: true },
+    { nom: "14 legacy : manifeste v1, lanes v1, intégrations v1", ledger: 1, manifesteV1: true, poser: (d) => connu(d),
+      lanes: "KNOWN", integrations: "KNOWN", refus: false,
+      attendu: (avant, ajout, m) => avant !== null && ajout.split("\n").length === 2 && !/integrations/.test(m) },
+  ];
+
+  for (const c of cellules) {
+    const r = runEcrit(`l0-b1-pgi4-`, [{ unite: "W03", ouverte: true }], c.ledger ? { ledger: 1, manifesteV1: c.manifesteV1 } : {});
+    c.poser(r.dir);
+    const vu = etats(r.dir);
+    precondition(vu.lanes === c.lanes && vu.integrations === c.integrations,
+      `${c.nom} : états lanes ${vu.lanes} (attendu ${c.lanes}), intégrations ${vu.integrations} (attendu ${c.integrations})`);
+    const pris = acquireRunOwnership(r.dir, RUN, `pgi4-${n}`);
+    precondition(pris.ok, `${c.nom} : le bail doit être obtenu`);
+    const bail = pris.ok ? pris.lease : undefined;
+    const avant = pertinents(r.dir);
+    const avantIntegrations = lire(cheminIntegrations(r.dir));
+    const i = issue(() => appendIntegrationEvent(r.dir, tentative(), bail!));
+    if (c.refus) {
+      const nomme = i.kind === "threw" && i.error.includes(`registre des intégrations ${RUN} ${c.integrations} (lanes ${c.lanes})`);
+      if (!(nomme && pertinents(r.dir) === avant)) {
+        ecarts.push(`${c.nom} : refus nommé ${nomme}, artefacts ${pertinents(r.dir) === avant ? "intacts" : "MODIFIÉS"} ; ${montrer(i)}`);
+      }
+    } else {
+      const apresIntegrations = lire(cheminIntegrations(r.dir)) ?? "";
+      const ajout = avantIntegrations === null ? apresIntegrations : apresIntegrations.slice(avantIntegrations.length);
+      const prefixe = avantIntegrations === null || apresIntegrations.startsWith(avantIntegrations);
+      const m = lire(join(r.dir, "active-run.json")) ?? "";
+      if (!(i.kind === "returned" && prefixe && c.attendu!(avantIntegrations, ajout, m) && etats(r.dir).integrations === "KNOWN")) {
+        temoins.push(`${c.nom} : issue ${montrer(i)}, préfixe ${prefixe}, ajout ${JSON.stringify(ajout).slice(0, 160)}, ` +
+          `état après ${etats(r.dir).integrations}`);
+      }
+    }
+  }
+
+  // 13. Le chemin réel de noteAttempt, sous le chargeur.
+  const repo = join(import.meta.dirname, "..");
+  const code =
+    `import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";\n` +
+    `import { join } from "node:path";\n` +
+    `import { PILOTE } from ${JSON.stringify(join(repo, "tests", "stubs", "dispatch.ts"))};\n` +
+    `import { ecrire, git, monter, revue, tache, texte } from ${JSON.stringify(join(repo, "tests", "l0-b2-harness.ts"))};\n` +
+    `const h = await monter();\n` +
+    `PILOTE.pendant = ecrire("src/a.py", "a = 2\\n");\n` +
+    `const r1 = await h.outil.execute("1", tache("W03"));\n` +
+    `PILOTE.pendant = undefined;\n` +
+    `writeFileSync(join(h.root, "src", "a.py"), "a = 'racine'\\n"); git(h.root, "add", "-A"); git(h.root, "commit", "-qm", "la racine avance");\n` +
+    `const manifeste = join(h.runDir, "active-run.json"); const marqueur = join(h.root, ".git", "pgi4-hook");\n` +
+    `const edition = "const fs=require('fs');const p=" + JSON.stringify(manifeste) + ";const m=JSON.parse(fs.readFileSync(p,'utf-8'));" +\n` +
+    `  "m.ledgers={...(m.ledgers||{}),integrations:1};fs.writeFileSync(p,JSON.stringify(m,null,2)+'\\\\n');";\n` +
+    `writeFileSync(join(h.root, ".git", "hooks", "post-checkout"),\n` +
+    `  "#!/bin/sh\\ncase \\"$PWD\\" in *pi-integrations*) " + JSON.stringify(process.execPath) + " -e \\"" + edition.replace(/"/g, '\\\\"') + "\\" && touch " + JSON.stringify(marqueur) + " ;; esac\\n");\n` +
+    `chmodSync(join(h.root, ".git", "hooks", "post-checkout"), 0o755);\n` +
+    `const integ = join(h.runDir, h.runId + "-integrations.jsonl");\n` +
+    `const avant = existsSync(integ) ? readFileSync(integ, "utf-8") : null;\n` +
+    `let issue;\n` +
+    `try { const r = await h.outil.execute("2", revue("W03")); issue = { erreur: r.isError === true, texte: texte(r) }; }\n` +
+    `catch (e) { issue = { erreur: true, texte: "EXCEPTION " + (e && e.message) }; }\n` +
+    `PILOTE.resultat = undefined;\n` +
+    `console.log("PGI4 " + JSON.stringify({ runId: h.runId, premier: !r1.isError, avant, apres: existsSync(integ) ? readFileSync(integ, "utf-8") : null,\n` +
+    `  hook: existsSync(marqueur), ...issue }));\n` +
+    `h.fin();\n`;
+  const flagsNode = Number(process.versions.node.split(".")[0]) < 23 ? ["--experimental-strip-types"] : [];
+  const p = spawnSync(process.execPath, [...flagsNode, "--import", "./tests/stubs/loader.mjs", "--input-type=module", "-e", code], {
+    cwd: repo, encoding: "utf-8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
+  });
+  const releve = `${p.stdout}`.split("\n").find((l) => l.startsWith("PGI4 "));
+  precondition(releve !== undefined, `noteAttempt : le processus doit rendre son relevé ; code ${p.status}, ${`${p.stderr}`.slice(-400)}`);
+  const vu = JSON.parse(releve!.slice(5)) as { runId: string; premier: boolean; avant: string | null; apres: string | null; hook: boolean; erreur: boolean; texte: string };
+  precondition(vu.premier && vu.avant === null, `noteAttempt : la lane doit être ouverte et aucune tentative encore écrite ; ${JSON.stringify(vu).slice(0, 300)}`);
+  precondition(vu.hook, `noteAttempt : l'ouverture du contexte d'intégration doit avoir eu lieu (hook exécuté) ; ${vu.texte.slice(0, 200)}`);
+  // Le refus d'appendIntegrationEvent remonte en exception jusqu'à l'outil : la séquence est déjà réservée et le
+  // contexte d'intégration ouvert, mais aucun octet n'est écrit (fermé par défaut). C'est le refus central qui
+  // est exigé, pas un refus quelconque.
+  const refusCentral = vu.texte.includes(`registre des intégrations ${vu.runId} LOST (lanes KNOWN)`) &&
+    vu.texte.includes("aucun ATTEMPT_OPENED");
+  if (!(vu.apres === null && vu.erreur && refusCentral)) {
+    ecarts.push(`13 noteAttempt sous LOST : registre ${JSON.stringify(vu.apres)}, erreur ${vu.erreur}, ${vu.texte.slice(0, 200)}`);
+  }
+
+  propriete(
+    ecarts.length === 0 && temoins.length === 0,
+    `hors KNOWN et EMPTY, aucun événement d'intégration n'est écrit, noteAttempt compris ; EMPTY crée puis publie ` +
+      `le témoin, KNOWN écrit, la fenêtre C4.1 reprend son témoin ; refus manquants ${JSON.stringify(ecarts)} · ` +
+      `témoins faux ${JSON.stringify(temoins)}`,
   );
 });
 

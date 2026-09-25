@@ -2172,6 +2172,12 @@ test("une tentative en attente d'atterrissage est retrouvée avec son commit", a
   }
 });
 
+/*
+ * ADDENDUM-SIXIEME-CHEMIN § 3 (PLAN-CORRECTIF-PRE-PILOTE-C4, R19) : la création du registre des
+ * intégrations publie `ledgers.integrations = 1` (C4.1). Le supprimer ensuite ne rend plus un run
+ * « sans provenance » à diagnostiquer, mais un registre LOST (C4.9) : la porte se ferme sur cet
+ * état, sans reconstituer de contexte orphelin depuis un registre absent, et sans rien recréer.
+ */
 test("un contexte sans provenance ferme la porte au redémarrage", async () => {
   const h = await monter();
   let h2: Awaited<ReturnType<typeof monter>> | undefined;
@@ -2180,16 +2186,26 @@ test("un contexte sans provenance ferme la porte au redémarrage", async () => {
     await h.outil.execute("2", revueDe("approved"));
     PILOTE.resultat = undefined;
 
-    // Le registre disparaît, le contexte reste : exactement ce qu'un runtime
-    // sans provenance durable produisait à chaque redémarrage.
-    rmSync(join(h.runDir, `${h.runId}-integrations.jsonl`));
+    const integrations = join(h.runDir, `${h.runId}-integrations.jsonl`);
+    const manifeste = join(h.runDir, "active-run.json");
+    const lanes = join(h.runDir, `${h.runId}-lanes.jsonl`);
+    assert.match(readFileSync(manifeste, "utf-8"), /"integrations": 1/, "le témoin des intégrations doit être publié");
+    rmSync(integrations);
     h2 = await redemarrer(h);
+    const manifesteAvant = readFileSync(manifeste, "utf-8");
+    const lanesAvant = readFileSync(lanes, "utf-8");
+    const appelsAvant = APPELS.length;
 
     const r = await h2.outil.execute("1", tache("W09"));
     assert.ok(enErreur(r), texte(r));
-    assert.match(texte(r), /tentatives d'intégration à trancher/);
-    assert.match(texte(r), /contexte-sans-provenance/);
-    assert.deepEqual(APPELS.slice(-1).filter((a) => a.role === "worker" && a.task.includes("W09")), []);
+    assert.match(texte(r), /tentatives d'intégration à trancher|journal-illisible/);
+    assert.match(texte(r), /LOST/);
+    assert.match(texte(r), /registre absent, alors que le manifeste l'atteste/);
+    assert.match(texte(r), /Aucune délégation n'a été lancée/);
+    assert.deepEqual(APPELS.slice(appelsAvant).filter((a) => a.role === "worker" && a.task.includes("W09")), []);
+    assert.equal(existsSync(integrations), false, "le registre des intégrations n'est pas recréé");
+    assert.equal(readFileSync(manifeste, "utf-8"), manifesteAvant, "le manifeste et son témoin restent intacts");
+    assert.equal(readFileSync(lanes, "utf-8"), lanesAvant, "le registre des lanes reste intact");
   } finally {
     (h2 ?? h).done();
   }
@@ -2483,21 +2499,37 @@ test("l'outil n'intègre jamais M lui-même", async () => {
   }
 });
 
+/*
+ * ADDENDUM-SIXIEME-CHEMIN § 4 : même état C4. Le registre des intégrations attesté puis supprimé
+ * est LOST ; `attempts` le refuse en le nommant, sans lister de contexte reconstruit depuis un
+ * registre absent, et `return-to-lane` refuse toujours. Aucun artefact autoritaire ne bouge.
+ */
 test("un contexte sans provenance n'a pas de verbe", async () => {
   const h = await monter();
   try {
     const id = await tentativeOuverte(h);
-    rmSync(join(h.runDir, `${h.runId}-integrations.jsonl`));
+    const integrations = join(h.runDir, `${h.runId}-integrations.jsonl`);
+    const manifeste = join(h.runDir, "active-run.json");
+    const lanes = join(h.runDir, `${h.runId}-lanes.jsonl`);
+    assert.match(readFileSync(manifeste, "utf-8"), /"integrations": 1/, "le témoin des intégrations doit être publié");
+    rmSync(integrations);
+    const artefacts = () => JSON.stringify([
+      readFileSync(lanes, "utf-8"), existsSync(integrations) ? readFileSync(integrations, "utf-8") : null,
+      readFileSync(manifeste, "utf-8"),
+    ]);
+    const avant = artefacts();
 
     const vu = recover(h.root, ["attempts"]);
-    assert.equal(vu.ok, true, vu.out);
-    assert.match(vu.out, /aucune provenance au registre/);
-    assert.match(vu.out, /ne se clôt pas, il se comprend/);
+    assert.equal(vu.ok, false, vu.out);
+    assert.match(vu.out, /LOST/);
+    assert.match(vu.out, /registre absent, alors que le manifeste l'atteste/);
+    assert.equal(vu.out.includes(id), false, `aucune tentative n'est listée depuis un registre absent : ${vu.out}`);
+    assert.equal(artefacts(), avant, "attempts ne mute rien");
 
     // Et aucun verbe ne s'applique : rien n'est fabriqué pour le faire taire.
     const r = recover(h.root, ["attempt", id, "return-to-lane"]);
-    assert.equal(r.ok, false);
-    assert.match(r.out, /n'existe pas au registre/);
+    assert.equal(r.ok, false, r.out);
+    assert.equal(artefacts(), avant, "return-to-lane refusé ne mute rien");
   } finally {
     h.done();
   }

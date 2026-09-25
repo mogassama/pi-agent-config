@@ -24,7 +24,8 @@ import {
 import { join } from "node:path";
 
 import {
-  acquireRunOwnership, appendIntegrationEvent, appendLaneEvent, laneState, readLaneEvents, readWitnesses, setStatus,
+  acquireRunOwnership, allocateLanes, appendIntegrationEvent, appendLaneEvent, laneState, readLaneEvents, readWitnesses,
+  setStatus,
 } from "../subagent-only/run-manifest.ts";
 import { ensureLane, openLanes } from "../subagent-only/worktree.ts";
 import {
@@ -948,6 +949,10 @@ regressionCorrigee("PG-MIGRATE-UNKNOWN", "--migrate-ledger ne migre qu'un regist
  * l'extension sous le chargeur de substitution, dans un processus à part (cette preuve n'est
  * pas un harnais). La création d'un worktree avant le refus n'en fait pas partie (R11).
  *
+ * Depuis PLAN-CORRECTIF-PRE-PILOTE-C4 (R11), la délégation sous LOST est refusée plus tôt, par la
+ * porte C4 du runtime, avant toute séquence ou ouverture : ce refus-là est admis au même titre que
+ * « ouverture non enregistrée ». Les effets exigés absents ne changent pas.
+ *
  * Les témoins sont dans la PROPRIÉTÉ : sous EMPTY, le registre v2 et son témoin sont encore
  * créés et l'OPENED écrit ; sous KNOWN, l'OPENED s'ajoute au registre existant.
  */
@@ -1036,7 +1041,8 @@ regressionCorrigee("PG-LOST-APPEND", "un registre des lanes LOST n'est ni recré
   if (!(vu.premier && (vu.registre1 ?? "").includes('"event":"OPENED"') && vu.manifeste.includes('"lanes": 2'))) {
     temoins.push(`runtime EMPTY : la première délégation n'ouvre pas W03 ou ne publie pas le témoin ; ` +
       `${JSON.stringify(vu).slice(0, 300)}`);
-  } else if (!(vu.erreur && /ouverture non enregistrée/.test(vu.texte) && vu.registre === null && vu.workers === 0)) {
+  } else if (!(vu.erreur && /ouverture non enregistrée|\[run: registre des lanes LOST\][^]*Aucune délégation n'a été lancée/.test(vu.texte) &&
+    vu.registre === null && vu.workers === 0)) {
     ecarts.push(`runtime LOST : erreur ${vu.erreur}, workers lancés ${vu.workers}, registre ${JSON.stringify(vu.registre)}, ` +
       `texte ${JSON.stringify(vu.texte.slice(0, 200))}`);
   }
@@ -1046,6 +1052,163 @@ regressionCorrigee("PG-LOST-APPEND", "un registre des lanes LOST n'est ni recré
     `sous LOST, aucun registre n'est recréé et aucun OPENED n'est écrit, ni par l'écrivain ni par la délégation, ` +
       `qui ne lance aucun worker ; EMPTY crée encore, KNOWN écrit encore ; écarts ${JSON.stringify(ecarts)} · ` +
       `témoins faux ${JSON.stringify(temoins)}`,
+  );
+});
+
+/*
+ * PLAN-CORRECTIF-PRE-PILOTE-C4 § 3 et § 4 (R11) : une délégation liée à une lane ne part que sur des
+ * lanes que C4 dit KNOWN ou EMPTY.
+ *
+ * Sur la base, un registre lisible mais UNKNOWN, LOST ou RUN_WITHOUT_WITNESS franchissait la porte :
+ * la délégation réservait sa séquence, ouvrait worktree et branche ou rejoignait la lane, lançait
+ * l'enfant, puis se faisait refuser. La preuve éprouve la vraie extension, dans un processus à part
+ * sous le chargeur de substitution (cette preuve n'est pas un harnais) : une première délégation
+ * ouvre W03, le registre est abîmé dans chacune des quatre formes, une session neuve délègue une
+ * lane neuve (W09) ou la continuation (W03). Les effets relevés avant et après : registre des lanes,
+ * registre des intégrations, manifeste (séquence et témoins), worktrees, branches, lancements.
+ *
+ * La seconde barrière, `allocateLanes` sous R, est éprouvée directement : `decide` — qui crée les
+ * worktrees — n'est jamais appelé hors KNOWN et EMPTY.
+ *
+ * Les témoins sont dans la PROPRIÉTÉ : sous EMPTY la première ouverture part, sous KNOWN la
+ * continuation part ; `decide` est appelé sous EMPTY et KNOWN.
+ */
+regressionCorrigee("PG-DELEGATION-C4-GATE", "une délégation liée à une lane ne part que sur des lanes KNOWN ou EMPTY", () => {
+  const ecarts: string[] = [];
+  const temoins: string[] = [];
+
+  // 1. Le runtime réel.
+  const harnais = join(REPO, "tests", "l0-b2-harness.ts");
+  const manifesteC4 = join(REPO, "subagent-only", "run-manifest.ts");
+  const code =
+    `import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";\n` +
+    `import { execFileSync } from "node:child_process";\n` +
+    `import { join } from "node:path";\n` +
+    `import { PILOTE } from ${JSON.stringify(join(REPO, "tests", "stubs", "dispatch.ts"))};\n` +
+    `import { compter, ecrire, monter, revue, tache, texte } from ${JSON.stringify(harnais)};\n` +
+    `import { laneState, readLaneEvents, readWitnesses } from ${JSON.stringify(manifesteC4)};\n` +
+    `const etat = (h) => { const lu = readLaneEvents(h.runDir, h.runId); return laneState(readWitnesses(h.runDir, h.runId), { ...lu, version: lu.version }, h.runId); };\n` +
+    `const lire = (p) => (existsSync(p) ? readFileSync(p, "utf-8") : null);\n` +
+    `const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf-8" });\n` +
+    `const lanes = (h) => join(h.runDir, h.runId + "-lanes.jsonl");\n` +
+    `const manifeste = (h) => join(h.runDir, "active-run.json");\n` +
+    `const releve = (h) => ({ lanes: lire(lanes(h)), integ: lire(join(h.runDir, h.runId + "-integrations.jsonl")),\n` +
+    `  manifeste: lire(manifeste(h)), wt: git(h.root, "worktree", "list", "--porcelain"),\n` +
+    `  br: git(h.root, "for-each-ref", "--format=%(refname) %(objectname)"),\n` +
+    `  bail: existsSync(join(h.runDir, h.runId + ".lease", "owner.json")),\n` +
+    `  lancements: compter("worker") + compter("reviewer") });\n` +
+    `const editerManifeste = (h, f) => { const m = JSON.parse(readFileSync(manifeste(h), "utf-8")); f(m); writeFileSync(manifeste(h), JSON.stringify(m, null, 2) + "\\n"); };\n` +
+    `const abimer = {\n` +
+    `  UNKNOWN: (h) => { if (!existsSync(lanes(h))) return; const l = readFileSync(lanes(h), "utf-8").trim().split("\\n"); writeFileSync(lanes(h), [...l, l.at(-1)].join("\\n") + "\\n"); },\n` +
+    `  LOST: (h) => rmSync(lanes(h), { force: true }),\n` +
+    `  MIGRATION_REQUIRED: (h) => { if (existsSync(lanes(h))) writeFileSync(lanes(h), readFileSync(lanes(h), "utf-8").split("\\n").slice(1).join("\\n")); },\n` +
+    `  RUN_WITHOUT_WITNESS: (h) => editerManifeste(h, (m) => { delete m.ledgers; delete m.planHash; m.version = 1; }),\n` +
+    `};\n` +
+    `const appels = {\n` +
+    `  neuve: () => tache("W09"),\n` +
+    `  continuation: () => tache("W03"),\n` +
+    `  reviewer: () => revue("W03"),\n` +
+    `  lot: () => ({ agent: "worker", batch: [{ work_unit: "W09", task: "écrire pour W09" }] }),\n` +
+    `};\n` +
+    `const sortie = [];\n` +
+    `async function cas(forme, chemin, { recharger = true, preparer, poser } = {}) {\n` +
+    `  let h = await monter();\n` +
+    `  try {\n` +
+    `    let premier = true;\n` +
+    `    try { premier = await (preparer ?? (async (x) => !(await x.outil.execute("1", tache("W03"))).isError))(h); } catch { premier = false; }\n` +
+    `    PILOTE.resultat = undefined; PILOTE.pendant = undefined;\n` +
+    `    if (!premier) { sortie.push({ forme, chemin, premier }); return; }\n` +
+    `    (poser ?? abimer[forme])(h);\n` +
+    `    if (recharger) h = await h.recharger();\n` +
+    `    const e = etat(h); const avant = releve(h);\n` +
+    `    const r = await h.outil.execute("2", appels[chemin === "reprise" || chemin === "neuve-en-session" ? "neuve" : chemin === "continuation-en-session" ? "continuation" : chemin]());\n` +
+    `    PILOTE.resultat = undefined;\n` +
+    `    const apres = releve(h);\n` +
+    `    sortie.push({ forme, chemin, premier, etat: e, erreur: r.isError === true, texte: texte(r),\n` +
+    `      effets: Object.keys(avant).filter((k) => avant[k] !== apres[k]) });\n` +
+    `  } finally { h.fin(); }\n` +
+    `}\n` +
+    `for (const forme of Object.keys(abimer)) for (const chemin of Object.keys(appels)) await cas(forme, chemin);\n` +
+    `await cas("UNKNOWN", "neuve-en-session", { recharger: false });\n` +
+    `await cas("LOST", "continuation-en-session", { recharger: false });\n` +
+    `// La reprise en tête : MERGED durable sans INTEGRATED, sous un témoin qui contredit l'en-tête.\n` +
+    `await cas("UNKNOWN", "reprise", {\n` +
+    `  preparer: async (h) => {\n` +
+    `    PILOTE.pendant = ecrire("src/a.py", "a = 2\\n");\n` +
+    `    const r1 = await h.outil.execute("1", tache("W03")); PILOTE.pendant = undefined;\n` +
+    `    const r2 = await h.outil.execute("2", revue("W03"));\n` +
+    `    return !r1.isError && !r2.isError && (lire(lanes(h)) ?? "").includes('"event":"INTEGRATED"');\n` +
+    `  },\n` +
+    `  poser: (h) => {\n` +
+    `    const l = readFileSync(lanes(h), "utf-8").trim().split("\\n");\n` +
+    `    writeFileSync(lanes(h), l.filter((x) => !x.includes('"event":"INTEGRATED"')).join("\\n") + "\\n");\n` +
+    `    editerManifeste(h, (m) => { m.ledgers = { ...(m.ledgers ?? {}), lanes: 1 }; });\n` +
+    `  },\n` +
+    `});\n` +
+    `{ const h = await monter(); try { const e = etat(h); const n = compter("worker"); const r = await h.outil.execute("1", tache("W03"));\n` +
+    `  sortie.push({ forme: "EMPTY", chemin: "neuve", etat: e, erreur: r.isError === true, texte: texte(r), lancements: compter("worker") - n,\n` +
+    `    ouverte: (lire(lanes(h)) ?? "").includes('"event":"OPENED"') }); } finally { h.fin(); } }\n` +
+    `{ let h = await monter(); try { const r1 = await h.outil.execute("1", tache("W03")); h = await h.recharger(); const e = etat(h);\n` +
+    `  const n = compter("worker"); const r = await h.outil.execute("2", tache("W03"));\n` +
+    `  sortie.push({ forme: "KNOWN", chemin: "continuation", premier: !r1.isError, etat: e, erreur: r.isError === true, texte: texte(r),\n` +
+    `    lancements: compter("worker") - n }); } finally { h.fin(); } }\n` +
+    `console.log("PGDG " + JSON.stringify(sortie));\n`;
+  const p = spawnSync(process.execPath, [...flags(), "--import", "./tests/stubs/loader.mjs", "--input-type=module", "-e", code], {
+    cwd: REPO, encoding: "utf-8", maxBuffer: 32 * 1024 * 1024, timeout: 600_000,
+  });
+  const ligne = `${p.stdout}`.split("\n").find((l) => l.startsWith("PGDG "));
+  precondition(ligne !== undefined, `runtime : le processus doit rendre son relevé ; code ${p.status}, ${`${p.stderr}`.slice(-400)}`);
+  type Cas = { forme: string; chemin: string; premier?: boolean; etat?: string; erreur?: boolean; texte?: string;
+    effets?: string[]; lancements?: number; ouverte?: boolean };
+  const vus = JSON.parse(ligne!.slice(5)) as Cas[];
+  precondition(vus.length === 21, `runtime : vingt et un relevés attendus, ${vus.length} rendus`);
+  for (const c of vus) {
+    if (c.forme === "EMPTY" || c.forme === "KNOWN") {
+      const ok = c.etat === c.forme && !c.erreur && c.lancements === 1 && (c.forme === "KNOWN" ? c.premier === true : c.ouverte === true);
+      if (!ok) temoins.push(`runtime ${c.forme} ${c.chemin} : état ${c.etat}, erreur ${c.erreur}, lancements ${c.lancements} ; ${(c.texte ?? "").slice(0, 160)}`);
+      continue;
+    }
+    // Le montage passe par une ouverture nominale sous EMPTY : son échec est un témoin faux, pas une panne.
+    if (c.premier !== true) {
+      temoins.push(`runtime ${c.forme} ${c.chemin} : le montage nominal (première délégation sous EMPTY) a échoué`);
+      continue;
+    }
+    precondition(c.etat === c.forme, `runtime ${c.forme} ${c.chemin} : état C4 observé ${c.etat}`);
+    const refus = c.erreur === true && /Aucune délégation n'a été lancée/.test(c.texte ?? "");
+    if (!(refus && (c.effets ?? []).length === 0)) {
+      ecarts.push(`runtime ${c.forme} ${c.chemin} : refus ${refus}, effets ${JSON.stringify(c.effets)} ; ${(c.texte ?? "").slice(0, 160)}`);
+    }
+  }
+
+  // 2. allocateLanes sous R : `decide` n'est appelé que sous KNOWN et EMPTY.
+  const formesDirectes: Array<[string, (r: ReturnType<typeof runEcrit>) => void]> = [
+    ["UNKNOWN", (r) => { const l = readFileSync(cheminLanes(r.dir), "utf-8").trim().split("\n"); writeFileSync(cheminLanes(r.dir), `${[...l, l.at(-1)].join("\n")}\n`); }],
+    ["LOST", (r) => rmSync(cheminLanes(r.dir))],
+    ["MIGRATION_REQUIRED", (r) => writeFileSync(cheminLanes(r.dir), readFileSync(cheminLanes(r.dir), "utf-8").split("\n").slice(1).join("\n"))],
+    ["RUN_WITHOUT_WITNESS", (r) => manifeste(r.dir, { version: 1, base: r.base, plan: `${RUN}-plan.json` })],
+    ["EMPTY", (r) => { rmSync(cheminLanes(r.dir)); manifeste(r.dir, { version: 2, base: r.base, plan: `${RUN}-plan.json`, planHash: hashPlan(r.dir) }); }],
+    ["KNOWN", () => {}],
+  ];
+  for (const [forme, poser] of formesDirectes) {
+    const r = runEcrit(`l0-b1-pgdg-${forme}-`, [{ unite: "W03", ouverte: true }]);
+    poser(r);
+    precondition(etatC4Lanes(r.dir) === forme, `allocateLanes : état C4 ${etatC4Lanes(r.dir)}, attendu ${forme}`);
+    const pris = acquireRunOwnership(r.dir, RUN, `pgdg-${forme}`);
+    precondition(pris.ok, `allocateLanes ${forme} : le bail doit être obtenu`);
+    const bail = pris.ok ? pris.lease : undefined;
+    let appele = false;
+    const i = issue(() => allocateLanes(r.dir, bail!, () => { appele = true; return []; }));
+    if (forme === "EMPTY" || forme === "KNOWN") {
+      if (!(appele && i.kind === "returned")) temoins.push(`allocateLanes ${forme} : decide appelé ${appele}, issue ${montrer(i)}`);
+    } else if (appele || i.kind !== "threw" || !i.error.includes(`registre ${RUN} ${forme} : `)) {
+      ecarts.push(`allocateLanes ${forme} : decide appelé ${appele}, issue ${montrer(i)}`);
+    }
+  }
+
+  propriete(
+    ecarts.length === 0 && temoins.length === 0,
+    `hors KNOWN et EMPTY, aucune délégation liée à une lane ne produit d'effet et decide n'est pas appelé ; ` +
+      `EMPTY ouvre et KNOWN continue encore ; écarts ${JSON.stringify(ecarts)} · témoins faux ${JSON.stringify(temoins)}`,
   );
 });
 
