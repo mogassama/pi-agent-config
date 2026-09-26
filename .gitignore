@@ -40,3 +40,6 @@ evidence/
 # exclut *secret*, ce qui a rendu ce répertoire invisible pendant une semaine.
 !extensions/pi-secret-gate/
 !extensions/pi-secret-gate/**
+
+# Caches régénérables (PLAN-PORTES-GEL v2 § 3, étape 2)
+cache/

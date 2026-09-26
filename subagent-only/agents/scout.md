@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Read-only reconnaissance — finds where something lives, who calls it, what a change would touch.
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 fallbackModels: [google/gemini-3.1-flash-lite, google/gemini-3.5-flash-lite]
 thinking: low
 tools: [read, grep, find, ls, submit]

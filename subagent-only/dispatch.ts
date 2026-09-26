@@ -720,7 +720,7 @@ const RATES: Array<[string, { in: number; out: number; cacheWrite?: number; cach
   // bill is worse than one that reports more, so this encodes the ceiling:
   // 0.44/1.32 peak, against 0.22/0.66 off-peak. Cache write is free and cache
   // read is 0.007/M, i.e. 0.016 of the peak input rate.
-  ["deepseek/deepseek-v4-flash", { in: 0.44, out: 1.32, cacheWrite: 0, cacheRead: 0.016 }],
+  ["deepseek/deepseek-flash", { in: 0.44, out: 1.32, cacheWrite: 0, cacheRead: 0.016 }],
   ["deepseek/deepseek-v4-pro", { in: 0.88, out: 2.64, cacheWrite: 0, cacheRead: 0.016 }],
   // Qwen-Max on pay-as-you-go.
   //
