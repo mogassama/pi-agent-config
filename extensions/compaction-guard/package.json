@@ -1,0 +1,8 @@
+{
+  "name": "pi-compaction-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Orchestrator auto-compaction at 50% of the current model's context window, edge-triggered.",
+  "main": "index.ts"
+}

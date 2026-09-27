@@ -88,9 +88,39 @@ The four root files (`INSTRUCTIONS.md`, `ARCHITECTURE.md`, `DESIGN.md`, `CONVENT
 **Owned by pi, in-session and ephemeral:** decomposing one backlog item into worker-executable steps, which files to create or modify, execution order and dependencies, per-step test strategy.
 
 **DESIGN.md status updates:** the orchestrator never edits a decision's `Statut`
-inline. It may declare a `design_update` in the frozen plan; after a real
-integration, the runtime alone may apply that frozen transition to the canonical
-`DESIGN.md`.
+inline. After a real integration, the runtime alone applies to the canonical
+`DESIGN.md` the transition declared by the frozen plan.
+
+**Design decisions — `design_update` is mandatory.** When a work unit
+substantively implements a decision whose current status in `DESIGN.md` is
+`proposé`, the frozen plan MUST declare a `design_update` for that decision, on
+that work unit:
+
+```json
+{
+  "id": "W01",
+  "goal": "…",
+  "depends_on": [],
+  "expected_write_scope": ["…"],
+  "design_update": {
+    "decision_id": "D-001",
+    "from_status": "proposé",
+    "to_status": "en cours"
+  }
+}
+```
+
+- The declaration MUST be present in the frozen plan before the work unit is
+  dispatched. A plan frozen without it is not repaired afterwards.
+- `from_status` MUST match the decision's current `Statut` in `DESIGN.md` at plan
+  freeze.
+- A `design_update` MUST correspond to substantive work performed by the unit. A
+  status-only unit MUST NOT be created solely to exercise or advance a design
+  decision.
+- The object has exactly these three keys. `decision_id` is the `D-nnn` of the
+  decision's `### D-nnn — …` heading; the statuses are `proposé`, `en cours`,
+  `terminé`, and the only transitions are `proposé → en cours` and
+  `en cours → terminé`. A decision has at most one owning unit per plan.
 
 The bundle is a *direction*, not a specification. It is silent on almost everything by construction. Silence is the normal state and is never a defect.
 
