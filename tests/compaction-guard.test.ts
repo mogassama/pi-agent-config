@@ -11,6 +11,13 @@
  *   D  retour sous le seuil puis nouveau franchissement → une nouvelle compaction
  * et les bords qui les rendent vraies : usage inconnu (pas de réarmement), verrou pendant
  * la compaction, échec, lancement qui jette, fenêtre relative au modèle courant.
+ * Puis la reprise adjugée le 28-09 (ctx.compact() interrompt le run) :
+ *   R1 run actif + onComplete → exactement 1 reprise, type, contenu et triggerTurn exacts
+ *   R2 run actif + onError    → exactement 1 reprise
+ *   R3/R4 run inactif          → 0 reprise, succès comme erreur
+ *   R5 callback répété/réentrant → au plus 1 reprise
+ *   R6 lancement qui jette     → 0 reprise
+ *   R7 la reprise ne réarme pas le seuil
  * La porte E (run réel avec lane ouverte) se joue chez l'opérateur, avec pi et ses
  * fournisseurs : elle n'est pas simulable ici sans simuler ce qu'elle doit prouver.
  */
@@ -19,7 +26,18 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import compactionGuard from "../extensions/compaction-guard/index.ts";
-import { decider, etatInitial, SEUIL_RELATIF, terminer, type EtatGarde, type Usage } from "../extensions/compaction-guard/garde.ts";
+import {
+  clore,
+  decider,
+  etatInitial,
+  MESSAGE_REPRISE,
+  ouvrirTentative,
+  SEUIL_RELATIF,
+  terminer,
+  TYPE_REPRISE,
+  type EtatGarde,
+  type Usage,
+} from "../extensions/compaction-guard/garde.ts";
 import { validerDesignUpdates } from "../subagent-only/design-update.ts";
 
 const FENETRE = 272_000;
@@ -105,7 +123,10 @@ test("PROPRIÉTÉ : l'état initial est armé (une session reprise au-dessus com
 interface Faux {
   usages: Array<Usage | undefined>;
   compacts: Array<{ onComplete?: (r: unknown) => void; onError?: (e: Error) => void }>;
+  reprises: Array<{ message: unknown; options: unknown }>;
   jette?: boolean;
+  /** Un run de l'agent est en cours au turn_end (le cas réel) ; false : pi inactif. */
+  actif: boolean;
   tour(): void;
 }
 
@@ -114,6 +135,8 @@ function monter(): Faux {
   const faux: Faux = {
     usages: [],
     compacts: [],
+    reprises: [],
+    actif: true,
     tour() {
       assert.ok(handler, "l'extension n'a pas enregistré de handler turn_end");
       handler!({}, ctx);
@@ -125,12 +148,16 @@ function monter(): Faux {
       if (faux.jette) throw new Error("pas maintenant");
       faux.compacts.push(o);
     },
+    isIdle: () => !faux.actif,
     hasUI: false,
   };
   compactionGuard({
     on: (evenement: string, h: (e: unknown, ctx: unknown) => void) => {
       assert.equal(evenement, "turn_end");
       handler = h;
+    },
+    sendMessage: (message: unknown, options: unknown) => {
+      faux.reprises.push({ message, options });
     },
   } as never);
   return faux;
@@ -182,6 +209,121 @@ test("câblage — PROPRIÉTÉ : un lancement qui jette ne bloque pas le garde",
   f.usages.push(u(40_000), u(140_000));
   f.tour(); f.tour();
   assert.equal(f.compacts.length, 1);
+});
+
+// ------------------------------------------------------------------ la reprise après ctx.compact()
+
+const REPRISE_ATTENDUE = {
+  message: { customType: "compaction-guard", content: "Compaction automatique terminée : reprends exactement là où tu t'étais arrêté.", display: true },
+  options: { triggerTurn: true },
+};
+
+test("la reprise adjugée : type et message mot pour mot", () => {
+  assert.equal(TYPE_REPRISE, "compaction-guard");
+  assert.equal(MESSAGE_REPRISE, "Compaction automatique terminée : reprends exactement là où tu t'étais arrêté.");
+});
+
+test("R1 — PROPRIÉTÉ : run actif puis onComplete → exactement une reprise, type, contenu et triggerTurn exacts", () => {
+  const f = monter();
+  f.usages.push(u(140_000));
+  f.tour();
+  assert.equal(f.reprises.length, 0, "aucune reprise avant la fin de la compaction");
+  f.compacts[0].onComplete?.({});
+  assert.deepEqual(f.reprises, [REPRISE_ATTENDUE]);
+});
+
+test("R2 — PROPRIÉTÉ : run actif puis onError → exactement une reprise", () => {
+  const f = monter();
+  f.usages.push(u(140_000));
+  f.tour();
+  f.compacts[0].onError?.(new Error("Nothing to compact (session too small)"));
+  assert.deepEqual(f.reprises, [REPRISE_ATTENDUE]);
+});
+
+test("R3 — PROPRIÉTÉ : run inactif puis succès → aucune reprise", () => {
+  const f = monter();
+  f.actif = false;
+  f.usages.push(u(140_000));
+  f.tour();
+  f.compacts[0].onComplete?.({});
+  assert.equal(f.reprises.length, 0);
+});
+
+test("R4 — PROPRIÉTÉ : run inactif puis erreur → aucune reprise", () => {
+  const f = monter();
+  f.actif = false;
+  f.usages.push(u(140_000));
+  f.tour();
+  f.compacts[0].onError?.(new Error("fournisseur indisponible"));
+  assert.equal(f.reprises.length, 0);
+});
+
+test("R5 — PROPRIÉTÉ : callbacks répétés ou croisés → au plus une reprise", () => {
+  const f = monter();
+  f.usages.push(u(140_000));
+  f.tour();
+  const o = f.compacts[0];
+  o.onComplete?.({});
+  o.onComplete?.({});
+  o.onError?.(new Error("tardif"));
+  assert.equal(f.reprises.length, 1);
+});
+
+test("R5 — PROPRIÉTÉ : un callback réentrant (pendant l'envoi de la reprise) n'en ajoute pas", () => {
+  const f = monter();
+  f.usages.push(u(140_000));
+  f.tour();
+  const o = f.compacts[0];
+  let reentre = false;
+  const avant = f.reprises.push.bind(f.reprises);
+  f.reprises.push = (...x) => {
+    if (!reentre) { reentre = true; o.onError?.(new Error("réentrant")); }
+    return avant(...x);
+  };
+  o.onComplete?.({});
+  assert.equal(f.reprises.length, 1);
+});
+
+test("R5 — PROPRIÉTÉ : un callback répété ne libère pas le verrou d'une tentative suivante", () => {
+  const f = monter();
+  f.usages.push(u(140_000));
+  f.tour();
+  const premiere = f.compacts[0];
+  premiere.onComplete?.({});
+  f.usages.push(u(40_000), u(140_000));
+  f.tour(); f.tour();                       // seconde tentative, en cours
+  assert.equal(f.compacts.length, 2);
+  premiere.onComplete?.({});                // écho tardif de la première
+  f.usages.push(u(40_000), u(140_000));
+  f.tour(); f.tour();
+  assert.equal(f.compacts.length, 2, "la seconde tentative doit rester verrouillée");
+});
+
+test("R6 — PROPRIÉTÉ : un lancement qui jette → aucune reprise", () => {
+  const f = monter();
+  f.jette = true;
+  f.usages.push(u(140_000));
+  f.tour();
+  assert.equal(f.reprises.length, 0);
+});
+
+test("R7 — PROPRIÉTÉ : la reprise ne réarme pas le seuil", () => {
+  const f = monter();
+  f.usages.push(u(140_000));
+  f.tour();
+  f.compacts[0].onComplete?.({});
+  f.usages.push(u(null), u(140_000), u(150_000));   // le tour repris, encore au-dessus
+  f.tour(); f.tour(); f.tour();
+  assert.equal(f.compacts.length, 1);
+  assert.equal(f.reprises.length, 1);
+});
+
+test("PROPRIÉTÉ : la fin d'une tentative est unique, et ne reprend que si un run était actif", () => {
+  const actif = clore(ouvrirTentative(true));
+  assert.deepEqual([actif.premiere, actif.reprise], [true, true]);
+  assert.deepEqual([clore(actif.tentative).premiere, clore(actif.tentative).reprise], [false, false]);
+  const inactif = clore(ouvrirTentative(false));
+  assert.deepEqual([inactif.premiere, inactif.reprise], [true, false]);
 });
 
 // ------------------------------------------------------------------ C — la règle design_update d'AGENTS.md

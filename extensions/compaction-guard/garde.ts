@@ -28,6 +28,23 @@
  * Un échec de compaction libère le verrou sans réarmer : l'usage est resté au-dessus,
  * et réessayer à chaque tour ferait une boucle d'échecs. Le garde se réarme quand
  * l'usage redescend, par exemple après un /compact manuel de récupération.
+ *
+ * LA REPRISE, ADJUGÉE (Sol, 28-09, après la première porte E). `ctx.compact()` de pi
+ * 0.86.0 commence par interrompre le run de l'agent (`AgentSession.compact()` :
+ * `await this.abort()`) et ne le reprend jamais. Lancé sur un `turn_end`, le garde
+ * arrêtait donc l'orchestrateur, que la compaction réussisse ou non. D'où la règle :
+ *
+ *   run actif au lancement, puis onComplete   exactement une reprise
+ *   run actif au lancement, puis onError      exactement une reprise
+ *   run inactif au lancement                  aucune reprise : rien n'a été interrompu
+ *   lancement qui jette                       aucune reprise : rien n'établit qu'un tour
+ *                                             a été interrompu
+ *   callback répété ou réentrant              au plus une reprise, et le verrou d'une
+ *                                             tentative n'est libéré qu'une fois
+ *
+ * La reprise est un message de l'extension (`customType` "compaction-guard"), pas un
+ * message opérateur, et ne dit rien du travail : ni unité, ni plan, ni décision. Elle
+ * ne réarme pas le garde.
  */
 
 /** Le seuil adjugé : 50 % de la fenêtre du modèle courant. */
@@ -74,4 +91,27 @@ export function decider(usage: Usage | undefined, etat: EtatGarde): Decision {
 /** Fin de la compaction lancée par le garde, réussie ou non : le verrou tombe, l'arme reste baissée. */
 export function terminer(etat: EtatGarde): EtatGarde {
   return { arme: etat.arme, enCours: false };
+}
+
+/** Le message de reprise adjugé, mot pour mot, et son type. */
+export const TYPE_REPRISE = "compaction-guard";
+export const MESSAGE_REPRISE = "Compaction automatique terminée : reprends exactement là où tu t'étais arrêté.";
+
+/** Une compaction lancée par le garde : le run était-il actif au lancement, est-elle close ? */
+export interface Tentative {
+  runActif: boolean;
+  close: boolean;
+}
+
+export function ouvrirTentative(runActif: boolean): Tentative {
+  return { runActif, close: false };
+}
+
+/**
+ * La fin d'une tentative, sur onComplete comme sur onError. Seule la première fin compte
+ * (`premiere`) : c'est elle qui libère le verrou et, si le run était actif, demande la reprise.
+ */
+export function clore(t: Tentative): { premiere: boolean; reprise: boolean; tentative: Tentative } {
+  if (t.close) return { premiere: false, reprise: false, tentative: t };
+  return { premiere: true, reprise: t.runActif, tentative: { runActif: t.runActif, close: true } };
 }
