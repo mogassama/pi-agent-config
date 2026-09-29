@@ -28,11 +28,11 @@
  * a judgement call — whether a search is worth delegating, whether a fork is
  * durable — stays in the prompts.
  *
- * One reminder, and only a reminder (lot ITE, P1-B): grouping independent edits IS
- * a judgement call, so it lives in the worker prompt. What is detectable is the
- * shape that contradicts it — the same file edited alone turn after turn — and
- * there a note is appended to the call's result. Never a block: a refusal costs a
- * turn.
+ * One reminder, and only a reminder (lot ITE, P1-B and P1-C): grouping reads and
+ * independent edits IS a judgement call, so it lives in the worker and reviewer
+ * prompts. What is detectable is the shape that contradicts it — the same file
+ * edited alone turn after turn, reads staggered over consecutive turns — and there
+ * a note is appended to the call's result. Never a block: a refusal costs a turn.
  *
  * The predicates themselves are in `role-rules.ts`, which imports nothing from
  * pi and is therefore unit-testable. This file is the wiring.
@@ -45,7 +45,7 @@ export default function (pi: ExtensionAPI): void {
   const role = process.env.PI_SUBAGENT_ROLE ?? "";
   const readOnly = process.env.PI_SUBAGENT_READONLY === "1";
   const root = bundleRoot(process.cwd());
-  // P1-B : les tours clos, le tour en cours, et une note au plus par tour.
+  // P1-B, P1-C : les tours clos, le tour en cours, et une note au plus par tour.
   const historique: TourObserve[] = [];
   let courant: TourObserve = { appels: [] };
   let noteDonnee = false;

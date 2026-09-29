@@ -5,7 +5,7 @@
  * d'événements que pi 0.86 émet : `tool_call` pour chaque appel du tour, puis `tool_result`, puis
  * `turn_end`. La note est ajoutée au CONTENU du résultat, après ce que les extensions précédentes y ont
  * mis — un retour ruff reste en place — et jamais sous forme de refus — ITE-P1B-branchement (worker),
- * ITE-P1C-branchement (reviewer, lot suivant de ce fichier).
+ * ITE-P1C-branchement (reviewer).
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
@@ -70,4 +70,14 @@ regressionCorrigee("ITE-P1B-branchement", "role-guard ajoute la note P1-B au ré
   await worker([{ outil: "edit", path: "src/io.py", contenu: ruff }]);
   const [correction] = await worker([{ outil: "edit", path: "src/io.py" }]);
   propriete(correction === undefined, `la correction d'un retour ruff n'est pas notée (${texte(correction)})`);
+});
+
+regressionCorrigee("ITE-P1C-branchement", "role-guard ajoute la note P1-C au premier résultat du deuxième tour de lecture seule du reviewer, sans refus", async () => {
+  const reviewer = enfant("reviewer", true);
+  await reviewer([{ outil: "read", path: "src/config.py" }, { outil: "read", path: "src/run.py" }]);
+  const t1 = await reviewer([{ outil: "read", path: "src/config.py" }]);
+  propriete(t1.every((c) => c === undefined), "premier tour de lecture après le premier : rien");
+  const t2 = await reviewer([{ outil: "read", path: "tests/a.py" }, { outil: "read", path: "tests/b.py" }]);
+  propriete(texte(t2[0]).includes("Lectures échelonnées sur 2 tours"), `deuxième tour de lecture : note (${texte(t2[0])})`);
+  propriete(t2[1] === undefined, "une seule note dans le tour");
 });

@@ -111,12 +111,17 @@ rate and it was the single largest line of a measured run: 77k tokens of output
 and reasoning across seven reviews whose envelopes together came to under 6k.
 Reach the verdict, then call the tool.
 
-**Read everything you were named in one turn.** Each turn re-reads your whole
+**Group the reads you already know you need.** Each turn re-reads your whole
 context before you act, so a turn spent on a single `read` is the most wasteful
-shape available to you. Fire all the named files at once, then judge what came
-back. Measured: a review given five named files spent six turns reading them one
-or two at a time, hit its ceiling, and returned nothing at all — the deliverable
-went unreviewed and 136k tokens bought no envelope.
+shape available to you. Read in one turn the independent files you already know
+you need — the files named in the task first — then read any dependency you
+discover afterwards. This is about how you read, not how much: keep the full
+coverage the review requires, the consuming side of a type across its boundary
+included. Measured: a review given five named files spent six turns reading them
+one or two at a time, hit its ceiling, and returned nothing at all — the
+deliverable went unreviewed and 136k tokens bought no envelope. On run
+`ec276ba9` both reviews still spread their reads over five turns; a note now says
+so when it happens.
 
 **Twelve turns is the budget, not a backstop.** Measured: a review that ran nine
 turns cost 306k tokens and returned two findings. Read the files named in the

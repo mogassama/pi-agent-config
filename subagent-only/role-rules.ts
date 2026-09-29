@@ -629,7 +629,7 @@ export function decideRoleGuard(
   return null;
 }
 
-// ------------------------------------------------------------------ regroupement (lot ITE, P1-B)
+// ------------------------------------------------------------------ regroupement (lot ITE, P1-B et P1-C)
 
 /**
  * Ce qu'un tour d'enfant a appelé, tel que role-guard l'a vu passer (`tool_call`), et si un de ses
@@ -642,17 +642,21 @@ export interface TourObserve {
   ruff?: boolean;
 }
 
+const LECTURES = new Set(["read", "ls", "grep", "find"]);
+
 /**
  * La note de regroupement à ajouter au résultat de `appel`, ou `null` (plan P1 v2 gelé, `fbf65045`).
  *
- * Le constat : sur QD-P0 et QD, un worker a enchaîné jusqu'à huit tours à un seul `edit` ; chaque
- * tour relit tout le contexte accumulé.
+ * Le constat : sur QD-P0 et QD, un worker a enchaîné jusqu'à huit tours à un seul `edit`, et chaque
+ * reviewer a étalé ses lectures sur cinq à sept tours ; chaque tour relit tout le contexte accumulé.
  * La consigne est dans le prompt du rôle ; ceci la rappelle là où l'écart se voit. Jamais un refus :
  * refuser coûterait lui-même un tour.
  *
  *   P1-B, rôle qui écrit : au deuxième tour consécutif qui ne porte qu'un `edit` sur le même fichier.
  *        Un tour qui suit un retour ruff ne compte pas : corriger ce que le plancher de vérification a
  *        signalé prime, et c'est un tour qu'on ne pouvait pas grouper d'avance.
+ *   P1-C, reviewer : deux tours consécutifs composés uniquement de lectures, après le premier tour,
+ *        quel que soit le nombre de fichiers par tour. Une fois par tour.
  *
  * `historique` : les tours clos, dans l'ordre ; `courant` : les appels du tour en cours, tous
  * pré-examinés avant la première exécution (pi 0.86 exécute les appels d'un tour après leur
@@ -682,5 +686,19 @@ export function noteDeRegroupement(
       : null;
   }
 
+  if (ctx.role === "reviewer" && LECTURES.has(appel.outil)) {
+    const lectureSeule = (t: TourObserve) => t.appels.length > 0 && t.appels.every((a) => LECTURES.has(a.outil));
+    if (!lectureSeule(courant)) return null;
+    // Le tour précédent doit être lui aussi de lecture seule, et ne pas être le premier du rôle.
+    let n = 1;
+    for (let i = historique.length - 1; i >= 1; i--) {
+      if (!lectureSeule(historique[i])) break;
+      n++;
+    }
+    return n >= 2
+      ? `Lectures échelonnées sur ${n} tours : regrouper en un seul tour les lectures indépendantes ` +
+          "déjà connues, puis ne lire ensuite que les dépendances découvertes"
+      : null;
+  }
   return null;
 }
