@@ -20,7 +20,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
 import { commandeDeTestDuFichierDetail, commandeEtablie, type CommandeRetenue } from "../../subagent-only/test-command.js";
-import { actionLines, countsLine, reviewRisks, riskLines } from "../../subagent-only/counts.js";
+import { actionLines, countsLine, ligneWorker, reviewRisks, riskLines } from "../../subagent-only/counts.js";
 import {
   continuationReturned,
   openRisks,
@@ -5957,7 +5957,10 @@ export default function (pi: ExtensionAPI) {
         const violation = reserved.length
           ? `  ${reserved.join(", ")} — la lane n'en est pas propriétaire, non intégrable`
           : "";
-        const under = [bilan, violation, integration, action, risks].filter(Boolean).join("\n");
+        // P1-D : les fichiers observés et les tests déclarés d'un worker, pour lancer la revue sans
+        // relire l'artefact.
+        const travail = ligneWorker(result);
+        const under = [bilan, violation, integration, travail, action, risks].filter(Boolean).join("\n");
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`

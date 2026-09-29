@@ -68,6 +68,11 @@ export interface RunResult extends EnvelopeCounts {
    */
   deviations?: string[];
   /**
+   * Lot ITE, P1-D : ce que le worker déclare avoir lancé (`validation` de son enveloppe), porté tel
+   * quel dans la ligne de résultat. Une déclaration, pas une preuve : c'est la revue qui juge.
+   */
+  validation?: string;
+  /**
    * Ids of the risks this review says it settled, as submitted.
    *
    * Only ever a claim, and only meaningful on a follow-up review. Not a count,
@@ -500,6 +505,7 @@ async function runOnce(
     next: deriveNext(envelope),
     verdict: typeof envelope.verdict === "string" ? envelope.verdict : undefined,
     deviations: envelopeStrings(envelope, "deviations"),
+    validation: typeof envelope.validation === "string" ? envelope.validation : undefined,
     resolvedRisks: envelopeStrings(envelope, "resolved_risks"),
     recommendation:
       typeof envelope.recommendation === "string" ? envelope.recommendation : undefined,

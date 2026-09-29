@@ -1312,5 +1312,23 @@
     "file": "subagent-only/role-rules.ts",
     "find": "  if (dejaNote) return null;\n",
     "replace": "  // mutant ITE-P1B-une-par-tour : plusieurs notes par tour\n"
+  },
+  {
+    "test": "L0 REG ITE-P1D-ligne — la ligne d'un worker porte les fichiers observés, les tests déclarés et le diff transmis ; rien pour un autre rôle ni pour un échec",
+    "file": "subagent-only/counts.ts",
+    "find": "  if (r.role !== \"worker\" || r.failure) return \"\";",
+    "replace": "  if (r.failure) return \"\"; // mutant ITE-P1D-ligne : portée à tous les rôles"
+  },
+  {
+    "test": "L0 REG ITE-P1D-resultat — le texte rendu à l'orchestrateur pour un worker porte la ligne, et pas celui d'une revue",
+    "file": "extensions/subagent/index.ts",
+    "find": "        const travail = ligneWorker(result);",
+    "replace": "        const travail = \"\"; // mutant ITE-P1D-resultat : la ligne n'atteint pas le résultat"
+  },
+  {
+    "test": "L0 REG ITE-P1D-validation — le champ validation de l'enveloppe traverse dispatch jusqu'au runtime",
+    "file": "subagent-only/dispatch.ts",
+    "find": "    validation: typeof envelope.validation === \"string\" ? envelope.validation : undefined,",
+    "replace": "    validation: undefined, // mutant ITE-P1D-validation : le champ ne traverse pas"
   }
 ]

@@ -229,6 +229,36 @@ export function actionLines(action: ReviewAction | undefined): string {
   return lines.join("\n");
 }
 
+/**
+ * Lot ITE, P1-D : ce que l'orchestrateur allait relire dans l'artefact d'un worker.
+ *
+ * Mesuré sur QD-P0 : après chacun des deux workers, un tour entier de l'orchestrateur (~40 k et
+ * ~45 k de contexte) a servi à relire l'artefact `.json` — la tâche qu'il avait lui-même écrite et
+ * l'enveloppe — avant de lancer la revue ; puis l'artefact est resté résident. Ce qu'il y cherchait
+ * tient en trois lignes : les fichiers modifiés, que le runtime a observés dans l'arbre et non lus
+ * dans la déclaration ; les tests que le worker déclare avoir lancés ; et le fait que la revue
+ * recevra le diff sans qu'on le lui recopie.
+ */
+export const NOTE_DIFF_AU_REVIEWER =
+  "le runtime transmet ces changements au reviewer sous forme de diff : l'artefact n'a pas à être relu pour lancer la revue";
+
+const VALIDATION_MAX = 300;
+
+export function ligneWorker(r: {
+  role: string;
+  failure?: unknown;
+  changedFiles?: readonly string[];
+  validation?: string;
+}): string {
+  if (r.role !== "worker" || r.failure) return "";
+  const fichiers = r.changedFiles?.length ? r.changedFiles.join(", ") : "aucun";
+  const brute = r.validation ? flat(r.validation).trim() : "";
+  const tests = !brute
+    ? "non déclarés"
+    : brute.length > VALIDATION_MAX ? `${brute.slice(0, VALIDATION_MAX)}…` : brute;
+  return `  fichiers modifiés : ${fichiers}\n  tests déclarés : ${tests}\n  ${NOTE_DIFF_AU_REVIEWER}`;
+}
+
 function flat(text: string): string {
   return text.replace(/\s+/g, " ");
 }
