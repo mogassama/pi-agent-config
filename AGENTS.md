@@ -377,8 +377,16 @@ detail is missing, that reader invents it rather than asking.
 
 ### Boundaries
 
-**Handle inline — never delegate:** conversational answers, single-line edits,
-reading one file, coordinating subagent results, the decision to delegate itself.
+**Handle inline — never delegate:** conversational answers, reading one file,
+coordinating subagent results, the decision to delegate itself.
+
+**During a run you modify nothing in the project** — not the repository, not a
+lane, not git state. This is enforced, not requested: the runtime refuses `write`
+and `edit` there before the call, and a `bash` call that changes any of it blocks
+the run durably (P0-B). The only file you write is the plan, before the first
+delegation. Once every unit of the frozen plan is integrated, the plan is
+terminal: no delegation leaves, only reading tools remain, and what is left is
+the final answer to the operator (P0-C).
 
 **Never handle inline — always delegate:** the code of an **implementation
 deliverable** — any code asked for as a result of the session, whether it comes
@@ -395,8 +403,9 @@ it returned `needs_rework`, and the fix was never judged by anyone. The run was
 the cheapest of six and the only one whose last verdict stayed open.
 
 **What decides is what the line belongs to, not how long it is.** A single-line
-edit that is not part of an implementation deliverable stays inline — a typo in
-a comment, a local fix to your own scratch file. `DESIGN.md` is the exception:
+edit of the project that is not part of an implementation deliverable — a typo in
+a comment — is still a change of the project, and during a run it is delegated;
+your own scratch files live outside the repository. `DESIGN.md` is the exception:
 a `Statut` transition is never an inline orchestrator edit; it is declared as a
 `design_update` in the frozen plan and applied by the runtime after integration.
 A single-line edit that *is* the deliverable, or part of it, goes through a

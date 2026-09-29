@@ -382,6 +382,26 @@
     "test": "L0 PRES B3-jamais-deux-merges — une unité déjà intégrée ne se remerge pas après rechargement",
     "edits": [
       {
+        "file": "extensions/subagent/index.ts",
+        "find": "  const terminales = unitesTerminales(e.events, unites);",
+        "replace": "  const terminales: string[] = []; void unitesTerminales; // mutant composé : porte P0-A retirée"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  if (e.terminal?.etat === \"terminal\") {\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\"",
+        "replace": "  if (false) { // mutant composé : porte P0-C retirée\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\""
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    if (unitesTerminales(lu.events, [unit]).length > 0) {",
+        "replace": "    if (false) { // mutant composé : deciderLane rejoint la lane intégrée"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  if (event.event !== \"VIOLATION\" && event.event !== \"ABANDONED\" && laneIntegree(lu.events, ouverte.lane)) {",
+        "replace": "  if (false) { // mutant composé : l'écrivain accepte une transition sur une lane intégrée"
+      },
+      {
         "file": "subagent-only/lane-ledger.ts",
         "find": "        if (worktrees.has(unit) && sales.has(unit)) {",
         "replace": "        if (false && worktrees.has(unit) && sales.has(unit)) { // mutant B3 : une unité intégrée au worktree sale n'est plus une contradiction"
@@ -444,9 +464,23 @@
   },
   {
     "test": "L0 REG C-P1-F05b — une lane dont HEAD n'est plus sa base, sans FROZEN, est refusée avant revue et sans reset",
-    "file": "extensions/subagent/index.ts",
-    "find": "  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;",
-    "replace": "  if (frozenExact || integrated) return undefined; // mutant : un ancien INTEGRATED excuse toute tête future"
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  const terminales = unitesTerminales(e.events, unites);",
+        "replace": "  const terminales: string[] = []; void unitesTerminales; // mutant composé : porte P0-A retirée"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    if (unitesTerminales(lu.events, [unit]).length > 0) {",
+        "replace": "    if (false) { // mutant composé : deciderLane rejoint la lane intégrée"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  if (frozenExact || (integrated && isMerged(root, laneId, base))) return undefined;",
+        "replace": "  if (frozenExact || integrated) return undefined; // mutant : un ancien INTEGRATED excuse toute tête future"
+      }
+    ]
   },
   {
     "test": "L0 REG F-generation — l'identité d'une lane porte sa génération dès la première",
@@ -746,9 +780,18 @@
   },
   {
     "test": "L0 REG B3-statut-inline — un contournement de la garde bloque durablement le run",
-    "file": "extensions/subagent/index.ts",
-    "find": "    if (etatDesign() !== avant) attribuerApresAppel(obs);",
-    "replace": "    void avant; // mutant B3-statut-inline : abonnement tool_result conservé, DESIGN.md n'est plus comparé"
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    if (etatDesign() !== avant) attribuerApresAppel(obs);",
+        "replace": "    void avant; // mutant B3-statut-inline : abonnement tool_result conservé, DESIGN.md n'est plus comparé"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    const constat = apresAppelP0B(id);\n    if (constat === undefined) return undefined;",
+        "replace": "    void apresAppelP0B; const constat: string | undefined = undefined; // mutant B3-statut-inline : P0-B ne juge plus après l'appel, garde redondante retirée avec C6.4\n    if (constat === undefined) return undefined;"
+      }
+    ]
   },
   {
     "test": "L0 COUV B3-merge-sans-changement — une lane approuvée sans changement suit la chaîne entière",
@@ -882,5 +925,194 @@
     "file": "subagent-only/run-manifest.ts",
     "find": "    if (etat !== \"KNOWN\" && etat !== \"EMPTY\") {\n      // La décision est prise sur `etat`",
     "replace": "    if (false) { // mutant PG-INTEGRATION-C4 : l'état C4 des intégrations n'est plus jugé\n      // La décision est prise sur `etat`"
+  },
+  {
+    "test": "L0 REG ITE-A-tete — après INTEGRATED, toute délégation qui désigne l'unité est refusée avant réservation, quel que soit le rôle",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const terminales = unitesTerminales(e.events, unites);",
+    "replace": "  const terminales: string[] = []; void unitesTerminales; // mutant ITE-A-tete : la porte ne juge plus les unités"
+  },
+  {
+    "test": "L0 REG ITE-A-allocation — une lane intégrée ne se rejoint plus, même quand la porte manque",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  const terminales = unitesTerminales(e.events, unites);",
+        "replace": "  const terminales: string[] = []; void unitesTerminales; // mutant ITE-A-allocation (1/2) : porte retirée"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    if (unitesTerminales(lu.events, [unit]).length > 0) {",
+        "replace": "    if (false) { // mutant ITE-A-allocation (2/2) : deciderLane rejoint la lane intégrée"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG ITE-A-ecrivain — l'écrivain refuse toute transition sur une lane intégrée, sauf VIOLATION et ABANDONED",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  if (event.event !== \"VIOLATION\" && event.event !== \"ABANDONED\" && laneIntegree(lu.events, ouverte.lane)) {",
+    "replace": "  if (false) { // mutant ITE-A-ecrivain : l'écrivain accepte une transition sur une lane intégrée"
+  },
+  {
+    "test": "L0 REG ITE-A-generation — aucune génération ne s'ouvre après INTEGRATED sans ABANDONED opérateur",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "    if (precedente !== undefined && laneIntegree(lu.events, precedente.lane)) {",
+    "replace": "    if (false) { // mutant ITE-A-generation : une génération s'ouvre sur une lane intégrée"
+  },
+  {
+    "test": "L0 REG ITE-C-delegation — un plan entièrement intégré refuse toute délégation, tous rôles, avant réservation",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (e.terminal?.etat === \"terminal\") {\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\"",
+    "replace": "  if (false) { // mutant ITE-C-delegation : la porte ne juge plus le plan terminal\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\""
+  },
+  {
+    "test": "L0 REG ITE-C-outils — un plan terminal réduit l'orchestrateur à la lecture native vérifiée, et tool_call fait autorité",
+    "file": "extensions/subagent/index.ts",
+    "find": "    PI_API?.setActiveTools?.(cible);",
+    "replace": "    void cible; // mutant ITE-C-outils (a) : les outils actifs ne sont plus réduits"
+  },
+  {
+    "test": "L0 REG ITE-C-outils — un plan terminal réduit l'orchestrateur à la lecture native vérifiée, et tool_call fait autorité",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (typeof nom !== \"string\" || !outilLectureVerifie(nom)) {\n          return { block: true, reason: `Refusé : ${TEXTE_PLAN_TERMINAL}` };",
+    "replace": "        if (false) { // mutant ITE-C-outils (b) : tool_call ne fait plus autorité en plan terminal\n          return { block: true, reason: `Refusé : ${TEXTE_PLAN_TERMINAL}` };"
+  },
+  {
+    "test": "L0 REG ITE-C-outils — un plan terminal réduit l'orchestrateur à la lecture native vérifiée, et tool_call fait autorité",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return outil?.sourceInfo?.source === \"builtin\" && outil.sourceInfo.path === `<builtin:${nom}>`;",
+    "replace": "  return outil !== undefined; // mutant ITE-C-outils (c) : le nom seul vaut provenance"
+  },
+  {
+    "test": "L0 REG ITE-C-irrevocable — un ABANDONED opérateur après le plan terminal ne réouvre ni la délégation ni une génération",
+    "file": "subagent-only/terminal.ts",
+    "find": "    if (toutes) return { etat: \"terminal\", indice: i };",
+    "replace": "    if (toutes && i === events.length - 1) return { etat: \"terminal\", indice: i }; // mutant ITE-C-irrevocable : seul l'état final compte"
+  },
+  {
+    "test": "L0 REG ITE-C-redemarrage — après redémarrage, l'état terminal se retrouve sur le registre et retire les outils",
+    "file": "extensions/subagent/index.ts",
+    "find": "      if (e.lisible && e.terminal?.etat === \"terminal\") activerEtatTerminal();",
+    "replace": "      void e; // mutant ITE-C-redemarrage : session_start ne relit plus l'état terminal"
+  },
+  {
+    "test": "L0 REG ITE-C-plan-rompu — un plan attaché qui diverge, manque ou devient illisible refuse toute délégation",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  if (hash !== manifest.planHash) {",
+    "replace": "  if (false) { // mutant ITE-C-plan-rompu : l'empreinte du plan n'est plus vérifiée"
+  },
+  {
+    "test": "L0 REG ITE-C-indetermine — un INTEGRATED sans status sous un plan à design_update rend la qualification indéterminée",
+    "file": "subagent-only/terminal.ts",
+    "find": "  if (plan.avecDesignUpdate) {\n    const sansStatus",
+    "replace": "  if (false) { // mutant ITE-C-indetermine\n    const sansStatus"
+  },
+  {
+    "test": "L0 REG ITE-C-delegation — un plan entièrement intégré refuse toute délégation, tous rôles, avant réservation",
+    "file": "subagent-only/terminal.ts",
+    "find": "    const toutes = plan.unites.every((u) => {",
+    "replace": "    const toutes = plan.unites.some((u) => { // mutant ITE-C-delegation (every → some)"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "\"--branch\", \"--untracked-files=all\"",
+    "replace": "\"--branch\", \"--untracked-files=no\" /* mutant ITE-B-effet : non suivis */"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "    for (const w of wt.chemins) {\n      if (!existsSync(w)) {",
+    "replace": "    for (const w of wt.chemins.slice(0, 1)) { // mutant ITE-B-effet : la racine seule, pas les lanes\n      if (!existsSync(w)) {"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "      const contenus = chemins.map((c) => `${c} ${contenu(join(w, c))}`);",
+    "replace": "      const contenus: string[] = []; void chemins; // mutant ITE-B-effet : contenu des chemins sales"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "      poser(`index:${w}`, [sha(index.join(\"\\0\")), ...masques]);",
+    "replace": "      poser(`index:${w}`, []); void masques; // mutant ITE-B-effet : index"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "    poser(\"refs\", git(root,",
+    "replace": "    ((_n: string, _l: string[]) => {})(\"refs\", git(root, // mutant ITE-B-effet : refs\n     "
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "    poser(\"worktrees\", wt.brut);",
+    "replace": "    void wt.brut; // mutant ITE-B-effet : worktrees"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "    poser(\"config\", cfg.lignes, cfg.condense);",
+    "replace": "    void cfg; // mutant ITE-B-effet : config"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "    poser(\"runs\", runs.lignes, runs.condense);",
+    "replace": "    void runs; // mutant ITE-B-effet : registres"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "extensions/subagent/index.ts",
+    "find": "  bloquerContinuation();\n  const quoi = Array.isArray(ecarts)",
+    "replace": "  void bloquerContinuation; // mutant ITE-B-effet : sanction non durable\n  const quoi = Array.isArray(ecarts)"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "extensions/subagent/index.ts",
+    "find": "    const constat = apresAppelP0B(id);",
+    "replace": "    const constat = (event as { isError?: boolean }).isError ? undefined : apresAppelP0B(id); // mutant ITE-B-effet : un outil en échec n'est pas jugé"
+  },
+  {
+    "test": "L0 REG ITE-B-capacite — write et edit vers le dépôt, une lane ou .git sont refusés avant l'appel, liens compris",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (protege && !planAvantAttache) {",
+    "replace": "    if (false) { // mutant ITE-B-capacite : write/edit ne sont plus refusés"
+  },
+  {
+    "test": "L0 REG ITE-B-capacite — write et edit vers le dépôt, une lane ou .git sont refusés avant l'appel, liens compris",
+    "file": "extensions/subagent/index.ts",
+    "find": "    reel = join(realpathSync(existant), ...reste);",
+    "replace": "    reel = join(existant, ...reste); // mutant ITE-B-capacite : liens symboliques non résolus"
+  },
+  {
+    "test": "L0 REG ITE-B-capacite — write et edit vers le dépôt, une lane ou .git sont refusés avant l'appel, liens compris",
+    "file": "extensions/subagent/index.ts",
+    "find": "    lienDur = st.isFile() && st.nlink > 1;",
+    "replace": "    lienDur = false; void st; // mutant ITE-B-capacite : liens durs ignorés"
+  },
+  {
+    "test": "L0 REG ITE-B-exclusion — une primitive et un appel observé frères ne s'exécutent pas ensemble, dans les deux ordres",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const conflit = [...EN_VOL.values()].some((k) => (primitive ? k === \"observe\" : k === \"primitive\"));",
+    "replace": "  const conflit = false; // mutant ITE-B-exclusion"
+  },
+  {
+    "test": "L0 REG ITE-B-provenance — un outil de lecture redéfini par une extension est observé comme les autres",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return outil?.sourceInfo?.source === \"builtin\" && outil.sourceInfo.path === `<builtin:${nom}>`;",
+    "replace": "  return outil !== undefined; // mutant ITE-B-provenance : le nom seul vaut provenance"
+  },
+  {
+    "test": "L0 REG ITE-B-sonde — un relevé impossible refuse l'appel avant, et bloque le run après",
+    "file": "extensions/subagent/index.ts",
+    "find": "    ecarts = `relevé après l'appel impossible : ${err instanceof Error ? err.message : String(err)}`;",
+    "replace": "    ecarts = []; void err; // mutant ITE-B-sonde : un relevé impossible passe pour « rien n'a changé »"
+  },
+  {
+    "test": "L0 REG ITE-B-plan-attache — le plan s'écrit avant son attachement, jamais après",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (obs.planAvantAttache || lirePlanAttache(RUN_DIR).etat === \"non-attache\") {",
+    "replace": "    if (true) { // mutant ITE-B-plan-attache : le plan se réécrit après attachement"
   }
 ]

@@ -203,7 +203,12 @@ regressionCorrigee("B2-risque-routed", "routed laisse le risque ouvert, seul res
     PILOTE.resultat = { verdict: "approved", changedFiles: [], resolvedRisks: ["r-1"] } as never;
     const apresResolution = await issue(() => h.outil.execute("4", { agent: "reviewer", work_unit: "W03", for_risks: ["r-1"], task: "juger" }));
     PILOTE.resultat = undefined;
-    precondition(compter("reviewer") === 3, "la revue de continuation doit être partie");
+    /*
+     * Lot ITE : si `routed` fermait le risque, W03 serait déjà intégrée, et la continuation
+     * serait refusée par P0-A (unité terminale). Ce n'est donc plus une précondition mais une
+     * partie de la propriété : la revue de continuation part parce que le risque était resté ouvert.
+     */
+    const continuationPartie = compter("reviewer") === 3;
     // Le parcours se relit APRÈS la résolution : une fermeture qui ne vivrait qu'en
     // mémoire laisserait le registre à « routed », et le risque reviendrait à la session
     // suivante.
@@ -232,6 +237,7 @@ regressionCorrigee("B2-risque-routed", "routed laisse le risque ouvert, seul res
 
     propriete(
       bloqueApresRoute &&
+        continuationPartie &&
         formes.length === 0 &&
         JSON.stringify(apresRegistre) === JSON.stringify(["opened", "routed", "resolved"]) &&
         JSON.stringify(survit) === JSON.stringify(apresRegistre) &&

@@ -37,6 +37,7 @@ import {
   type LaneEventV1, type ProofMode, type RiskFact, type RiskTransition, type ViolationKind,
 } from "./lane-ledger.ts";
 import { verifierCompleted } from "./run-end.ts";
+import { planGele, terminalite, type PlanGele } from "./terminal.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -615,6 +616,61 @@ export function createRunExclusive(dir: string, manifest: RunManifest): OpenRun 
 
 export function planHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+/**
+ * Le plan gelé du run, identité vérifiée (lot ITE, § 0 du PLAN-LOT-ITE v2).
+ *
+ * Les unités attendues viennent du plan gelé dont l'empreinte correspond au `planHash` du
+ * manifeste. Tant que rien n'est attaché, le run n'a pas de plan gelé : `non-attache`. Une fois
+ * attaché, un plan qui manque, diverge ou devient illisible est `rompu` — et cet état ne signifie
+ * JAMAIS « plan non terminal » : toute nouvelle délégation est refusée.
+ *
+ * Relu depuis le disque à chaque appel, jamais mémorisé : c'est ce qui rend l'état juste après un
+ * redémarrage et ce qui voit une réécriture faite hors du runtime.
+ */
+export type PlanAttache =
+  | { etat: "non-attache" }
+  | { etat: "attache"; texte: string; plan: PlanGele }
+  | { etat: "rompu"; raison: string };
+
+export function lirePlanAttache(dir: string): PlanAttache {
+  let manifest: RunManifest | undefined;
+  try {
+    manifest = readManifest(dir);
+  } catch (err) {
+    return { etat: "rompu", raison: err instanceof Error ? err.message : String(err) };
+  }
+  if (!manifest) return { etat: "rompu", raison: `${MANIFEST} absent` };
+  if (!manifest.planHash) return { etat: "non-attache" };
+  const nom = manifest.plan ?? `${manifest.runId}-plan.json`;
+  let texte: string;
+  try {
+    texte = readFileSync(join(dir, nom), "utf-8");
+  } catch {
+    return { etat: "rompu", raison: `le plan gelé ${nom} a disparu depuis son attachement` };
+  }
+  const hash = planHash(texte);
+  if (hash !== manifest.planHash) {
+    return {
+      etat: "rompu",
+      raison: `le plan gelé ${nom} a changé depuis son attachement (${manifest.planHash} → ${hash})`,
+    };
+  }
+  const plan = planGele(texte);
+  if (!plan) return { etat: "rompu", raison: `le plan gelé ${nom} n'est plus un plan exploitable` };
+  return { etat: "attache", texte, plan };
+}
+
+/** Une lane porte-t-elle un INTEGRATED, sans ABANDONED depuis ? (P0-A, sur le registre relu sous R.) */
+function laneIntegree(events: readonly LaneEvent[], lane: string): boolean {
+  let integree = false;
+  for (const e of events) {
+    if (!("lane" in e) || e.lane !== lane) continue;
+    if (e.event === "INTEGRATED") integree = true;
+    else if (e.event === "ABANDONED") integree = false;
+  }
+  return integree;
 }
 
 /**
@@ -1496,6 +1552,18 @@ function evenementV2(
     if (lu.events.some((e) => e.event === "OPENED" && "lane" in e && e.lane === lane)) {
       throw new RecoveryError(`${quoi} : ${lane} a déjà été ouverte, aucune génération n'est réutilisée`);
     }
+    /*
+     * P0-A (lot ITE) : une unité intégrée est terminale. La génération suivante n'existe qu'après
+     * un ABANDONED opérateur de la lane intégrée — la sortie de `bin/subagent-recover` quand le
+     * registre dit intégrée et que git ne le confirme pas.
+     */
+    const precedente = lastLaneOfUnit(lu.events, event.work_unit);
+    if (precedente !== undefined && laneIntegree(lu.events, precedente.lane)) {
+      throw new RecoveryError(
+        `${quoi} : ${precedente.lane} est intégrée, l'unité est terminale (P0-A) ; aucune génération ` +
+          "ne s'ouvre sans ABANDONED opérateur",
+      );
+    }
     return { event_seq: seq, work_unit: event.work_unit, lane, at: event.at, event: "OPENED", base: event.base, generation };
   }
   const ouverte = lastLaneOfUnit(lu.events, event.work_unit);
@@ -1503,6 +1571,15 @@ function evenementV2(
     throw new RecoveryError(`${quoi} : le registre n'a jamais ouvert de lane pour ${event.work_unit}`);
   }
   const enveloppe = { event_seq: seq, work_unit: event.work_unit, lane: ouverte.lane, at: event.at };
+  /*
+   * P0-A (lot ITE) : sur une lane intégrée, plus aucune transition d'unité. VIOLATION reste une
+   * observation, jamais une réouverture ; ABANDONED reste la sortie opérateur contrôlée.
+   */
+  if (event.event !== "VIOLATION" && event.event !== "ABANDONED" && laneIntegree(lu.events, ouverte.lane)) {
+    throw new RecoveryError(
+      `${quoi} : ${ouverte.lane} est intégrée, l'unité est terminale (P0-A) ; aucun ${event.event} ne s'y enregistre`,
+    );
+  }
   if (event.event === "VIOLATION") {
     if (event.lane !== ouverte.lane) {
       throw new RecoveryError(`${quoi} : ${event.lane} n'est pas la lane courante ${ouverte.lane}`);
@@ -2435,6 +2512,28 @@ function exigerRegistreConnu(dir: string, runId: string, lu: LedgerRead, quoi: s
   }
 }
 
+/**
+ * P0-C (lot ITE), du côté de l'écrivain : aucune lane ne s'ouvre dans un run dont le plan gelé est
+ * terminal — état irrévocable, relu sur le registre sous R —, rompu ou indéterminé. Le refus du
+ * runtime vient avant ; celui-ci tient si un autre chemin appelait l'écrivain.
+ */
+function exigerPlanOuvert(dir: string, lu: LedgerRead, unite: string): void {
+  const attache = lirePlanAttache(dir);
+  if (attache.etat === "non-attache") return;
+  if (attache.etat === "rompu") {
+    throw new RecoveryError(`OPENED sur ${unite} : plan gelé rompu — ${attache.raison} ; rien n'est ouvert`);
+  }
+  const t = terminalite(attache.plan, lu.events);
+  if (t.etat === "terminal") {
+    throw new RecoveryError(
+      `OPENED sur ${unite} : le plan gelé est terminal (P0-C) ; aucune lane ne s'ouvre dans ce run`,
+    );
+  }
+  if (t.etat === "indetermine") {
+    throw new RecoveryError(`OPENED sur ${unite} : qualification indéterminée — ${t.raison}`);
+  }
+}
+
 /** Le corps de `appendLaneEvent`, R déjà tenu et le bail déjà vérifié. */
 function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
   const path = laneLedgerPath(dir, lease.runId);
@@ -2470,6 +2569,8 @@ function ajouterSousR(dir: string, event: LaneWrite, lease: Lease): void {
   // grammaire ne décide. Une continuation legacy n'est permise que sous KNOWN.
   exigerRegistreConnu(dir, lease.runId, lu, event.event);
   if (lu.version === LANE_LEDGER_V2) {
+    // Un OPENED n'existe qu'en v2 : c'est là seulement que P0-C a une lane à refuser.
+    if (event.event === "OPENED") exigerPlanOuvert(dir, lu, event.work_unit);
     appendFileSync(path, `${JSON.stringify(evenementV2(lu, event, lease.runId))}\n`);
     return;
   }

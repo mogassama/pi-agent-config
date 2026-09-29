@@ -23,7 +23,7 @@ import {
   poserPreCommitRacine, racinePropre, statutDe, teteDe,
 } from "./l0-b3-fixtures.ts";
 import { openLanes } from "../subagent-only/worktree.ts";
-import { releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
+import { poserBlocageContinuation, releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
 
 type Preuve = (t: TestContext) => Promise<void> | void;
 function regression(id: string, titre: string, fn: Preuve): void {
@@ -453,21 +453,31 @@ regressionCorrigee("B3-statut-inline", "un contournement de la garde bloque dura
     let manifesteApresCompleted: Record<string, unknown> = {};
     let prete = false;
     let manifesteIntact = false;
+    let contournementTerminalRefuse = false;
     try {
       await integrer(terminable, "W03", "a = 2", "1");
       const integree2 = terminable.evenements().some((e) => e.event === "INTEGRATED");
-      await terminable.emettre("tool_call", {
+      /*
+       * Lot ITE (P0-C, adjudication ITE Q-I) : le plan [W03] est maintenant terminal. Le
+       * contournement ne passe plus le pré-appel — aucun outil autre que la lecture native
+       * vérifiée n'est admis —, et c'est ce qui est constaté ici. Le blocage dont ce sous-cas
+       * éprouve la fin de run se pose donc par le verbe de production lui-même, sous le bail de
+       * la session : ce qui est jugé ensuite — `completed` refuse, `abandoned` aboutit,
+       * l'archive porte le bloc — ne dépend pas de la façon dont il a été posé.
+       */
+      const refusTerminal = await terminable.emettre("tool_call", {
         toolName: "bash", toolCallId: "t1", input: { command: contournement },
       });
-      writeFileSync(join(terminable.root, "DESIGN.md"), `${DESIGN}\n<!-- contourné -->\n`);
-      const apres2 = terminable.abonnements().find((x) => x === "tool_result");
-      if (apres2) await terminable.emettre(apres2, { toolName: "bash", toolCallId: "t1" });
+      contournementTerminalRefuse = (refusTerminal as { block?: boolean } | undefined)?.block === true;
+      const ownerBloc = join(terminable.runDir, `${terminable.runId}.lease`, "owner.json");
+      if (existsSync(ownerBloc)) {
+        poserBlocageContinuation(
+          terminable.runDir, new Date().toISOString(),
+          JSON.parse(readFileSync(ownerBloc, "utf-8")) as Lease,
+        );
+      }
       blocTerminal = bloc(terminable);
 
-      // La modification reste observable, mais la racine redevient propre : un opérateur
-      // la commite. Sans cela, `completed` refuserait pour racine sale.
-      git(terminable.root, "add", "-A");
-      git(terminable.root, "commit", "-qm", "trace du contournement");
       const owner = join(terminable.runDir, `${terminable.runId}.lease`, "owner.json");
       if (existsSync(owner)) {
         releaseRunOwnership(terminable.runDir, JSON.parse(readFileSync(owner, "utf-8")) as Lease);
@@ -492,7 +502,8 @@ regressionCorrigee("B3-statut-inline", "un contournement de la garde bloque dura
           lireOuAbsent(join(terminable.runDir, `${terminable.runId}-run.json`)),
         ) as Record<string, unknown>).continuation_block as Record<string, unknown> | undefined;
       } catch { blocArchive = undefined; }
-      sousCas = `terminable ${prete} (bail rendu ${bailRendu}), manifeste intact ` +
+      sousCas = `terminable ${prete} (bail rendu ${bailRendu}), contournement refusé en plan terminal ` +
+        `${contournementTerminalRefuse}, manifeste intact ` +
         `${manifesteIntact}, statut ${String(manifesteApresCompleted.status)}`;
     } finally { terminable.fin(); }
 
@@ -516,6 +527,7 @@ regressionCorrigee("B3-statut-inline", "un contournement de la garde bloque dura
         rienMuteApres &&
         immuableApres &&
         prete &&
+        contournementTerminalRefuse &&
         blocTerminal?.code === "RUN_CONTINUATION_BLOCKED" &&
         finRefusee.status !== 0 &&
         manifesteIntact &&

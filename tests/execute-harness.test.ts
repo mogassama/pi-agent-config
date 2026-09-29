@@ -1255,35 +1255,24 @@ const ecriture = (path: string) => ({
 
 const review = () => ({ agent: "reviewer", task: "juger le changement" });
 
-test("une écriture inline de l'orchestrateur entre dans l'historique", async () => {
+test("pendant un run, une écriture inline de l'orchestrateur dans le dépôt est refusée avant l'appel", async () => {
+  /*
+   * Lot ITE, P0-B (adjudication ITE Q-O) : dès qu'un run existe, l'orchestrateur ne modifie
+   * aucun fichier du projet. Ce test disait l'inverse — une écriture inline entrait dans
+   * `HISTORY` et la revue suivante en recevait le diff. Le refus vient maintenant AVANT
+   * l'appel, et rien n'entre dans l'historique : la revue qui suit n'a pas ce fichier à juger.
+   */
   const h = await monter({ avecPlan: false });
   try {
     const toolCall = h.evenement("tool_call");
     assert.ok(toolCall, "l'extension ne s'abonne pas à tool_call");
 
-    writeFileSync(join(h.root, "src", "a.py"), "a = 2\n");
-    await toolCall(ecriture("src/a.py"));
+    const d = (await toolCall(ecriture("src/a.py"))) as { block?: boolean; reason?: string } | undefined;
+    assert.equal(d?.block, true, "l'écriture inline dans le dépôt doit être refusée avant l'appel");
+    assert.match(d?.reason ?? "", /P0-B/);
 
     const r1 = await h.outil.execute("1", review());
-    assert.equal(enErreur(r1), false, texte(r1));
-    // Le diff est là parce que l'écriture est entrée dans l'historique.
-    assert.match(APPELS[0].task, /src\/a\.py/);
-    assert.match(APPELS[0].task, /a = 2/);
-
-    writeFileSync(join(h.root, "src", "a.py"), "a = 3\n");
-    await toolCall(ecriture("src/a.py"));
-
-    /*
-     * La partie qui tombe quand le gestionnaire est mort.
-     *
-     * Sans l'entrée poussée par l'écriture, la dernière délégation reste le
-     * reviewer et cette seconde review est refusée — « a review already ran and
-     * no worker has run since ». C'est ce qui distingue « le filtre marche » de
-     * « rien n'est jamais arrivé ».
-     */
-    const r2 = await h.outil.execute("2", review());
-    assert.equal(enErreur(r2), false, texte(r2));
-    assert.match(APPELS[1].task, /a = 3/);
+    assert.doesNotMatch(APPELS[0]?.task ?? texte(r1), /src\/a\.py/);
   } finally {
     h.done();
   }

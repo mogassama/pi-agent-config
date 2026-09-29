@@ -524,33 +524,29 @@ preservation("B3-jamais-deux-merges", "une unité déjà intégrée ne se remerg
     const neuve = await h.recharger();
     await issue(() => integrer(neuve, "W09", "b = 2", "2"));
     /*
-     * Une tentative complète sur une unité déjà intégrée : worker puis revue. Une simple
-     * revue serait refusée par la garde de streak, et le mutant ne mordrait pas.
+     * Une tentative complète sur une unité déjà intégrée : worker puis revue.
      *
-     * Elle est écrite ici plutôt que confiée à `integrer`, parce que sa PRÉCONDITION lui
-     * est propre : le worker doit être ADMIS. `integrer` sert cinq autres preuves qui
-     * n'ont pas à porter cette exigence, et l'imposer dans le helper la rendrait globale.
-     *
-     * Pourquoi cette précondition. La propriété ne dit que « un seul merge, racine
-     * propre » — deux faits vrais de TOUT run qui refuse toute délégation. Sans elle, une
-     * mutation qui paralyse le run à la porte de reprise laisserait la preuve verte pour
-     * une raison étrangère à ce qu'elle affirme. Un worker admis établit que le run est
-     * vivant ; ce qui suit mesure alors quelque chose.
-     *
-     * Elle n'affirme rien sur la revue : sur l'objet intact, le refus de la revue par
-     * `residu-sale` est légitime, et c'est lui qui empêche le second merge.
+     * Avant le lot ITE, le worker devait être ADMIS : l'exception de C1.5 rejoignait la lane
+     * d'une unité intégrée, et la précondition établissait que le run était vivant. Cette
+     * exception est supprimée (adjudication ITE, Q-G) : une unité intégrée est terminale
+     * (P0-A), et ici le plan [W03, W09] est entièrement intégré, donc terminal (P0-C). Le
+     * worker est donc refusé PAR CES PORTES sur l'objet — ou admis quand elles sont retirées
+     * (mutant composé) ; toute autre issue serait une paralysie étrangère, qui ne prouverait
+     * rien. La garde de l'objet antérieur, `residu-sale`, reste éprouvée sous les portes P0 :
+     * son mutant les retire avec elle.
      */
     const encore = await neuve.recharger();
     PILOTE.pendant = ecrire("src/a.py", "a = 3\n");
     const worker: unknown = await encore.outil.execute("3a", tache("W03"));
     PILOTE.pendant = undefined;
-    const admis =
-      typeof worker === "object" && worker !== null &&
+    const code = (worker as { details?: { run_guard?: { code?: unknown } } } | undefined)
+      ?.details?.run_guard?.code;
+    const admis = typeof worker === "object" && worker !== null &&
       (worker as { isError?: unknown }).isError === false;
     precondition(
-      admis,
-      `le worker de la seconde tentative doit être admis — un run paralysé ne prouve rien ; ` +
-        `${JSON.stringify(worker).slice(0, 250)}`,
+      code === "ITE_PLAN_TERMINAL" || code === "ITE_UNITE_TERMINALE" || admis,
+      `le worker de la seconde tentative doit être refusé par P0-C ou P0-A, ou admis — jamais ` +
+        `arrêté par autre chose ; ${JSON.stringify(worker).slice(0, 250)}`,
     );
     await issue(() => encore.outil.execute("3b", revue("W03")));
     PILOTE.resultat = undefined;

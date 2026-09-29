@@ -111,6 +111,29 @@ export interface Harnais {
   fin: () => void;
 }
 
+/**
+ * Les outils de la session, tels que pi 0.86 les expose (`getAllTools`, `getActiveTools`,
+ * `setActiveTools`) — lot ITE, P0-C. Les natifs portent la provenance `<builtin:NOM>` ; `task`
+ * est celui de l'extension. Une preuve peut redéfinir un outil (provenance locale) ou rétablir
+ * la liste active ; `monter` remet l'état par défaut, `recharger` le garde.
+ */
+export interface OutilPi { name: string; sourceInfo: { source: string; path: string } }
+const natif = (name: string): OutilPi => ({ name, sourceInfo: { source: "builtin", path: `<builtin:${name}>` } });
+export const OUTILS_PI: { tous: OutilPi[]; actifs: string[]; appelsSetActive: string[][] } = {
+  tous: [],
+  actifs: [],
+  appelsSetActive: [],
+};
+export function outilsPiParDefaut(): void {
+  OUTILS_PI.tous = [
+    ...["read", "grep", "find", "ls", "bash", "write", "edit"].map(natif),
+    { name: "task", sourceInfo: { source: "local", path: join(REPO, "extensions", "subagent") } },
+  ];
+  OUTILS_PI.actifs = OUTILS_PI.tous.map((o) => o.name);
+  OUTILS_PI.appelsSetActive = [];
+}
+outilsPiParDefaut();
+
 let generation = 0;
 const jetables: string[] = [];
 export const aJeter = (): readonly string[] => jetables;
@@ -130,6 +153,12 @@ async function instancier(root: string): Promise<Harnais> {
       registerTool: (t: unknown) => { outil = t as Harnais["outil"]; },
       registerCommand: () => {},
       ui: { setStatus: () => {}, setFooter: () => {} },
+      getAllTools: () => OUTILS_PI.tous.map((o) => ({ ...o, sourceInfo: { ...o.sourceInfo } })),
+      getActiveTools: () => [...OUTILS_PI.actifs],
+      setActiveTools: (noms: string[]) => {
+        OUTILS_PI.appelsSetActive.push([...noms]);
+        OUTILS_PI.actifs = noms.filter((n) => OUTILS_PI.tous.some((o) => o.name === n));
+      },
     });
     if (outil === undefined) chargement = { ok: false, erreur: "aucun outil enregistré" };
   } catch (e) {
@@ -199,6 +228,7 @@ export async function monter(options: {
 } = {}): Promise<Harnais> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-l0b2-")));
   jetables.push(root);
+  outilsPiParDefaut();
   git(root, "init", "-q");
   git(root, "config", "user.email", "t@t");
   git(root, "config", "user.name", "t");

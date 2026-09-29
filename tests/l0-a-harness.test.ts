@@ -221,7 +221,13 @@ regressionCorrigee("C-P1-F01", "une écriture globale de l'orchestrateur entre d
     precondition(compter("reviewer") === 1, "la première revue doit être partie");
     const toolCall = h.handler("tool_call") as ((e: unknown) => Promise<unknown>) | undefined;
     precondition(toolCall !== undefined, "l'extension doit écouter tool_call");
-    await toolCall!({ toolName: "write", toolCallId: "orch-1", input: { path: "NOTES.md", content: "note\n" } });
+    /*
+     * Lot ITE, P0-B (adjudication ITE Q-O) : pendant un run, l'orchestrateur n'écrit plus rien
+     * dans le dépôt — `NOTES.md` à la racine serait refusé avant l'appel et n'entrerait jamais
+     * dans l'historique. L'écriture globale qui reste possible est hors du dépôt : c'est elle
+     * qui entre dans l'historique, et c'est donc elle que la vue d'une lane doit ignorer.
+     */
+    await toolCall!({ toolName: "write", toolCallId: "orch-1", input: { path: join(tmpdir(), `notes-orchestrateur-${h.runId}.md`), content: "note\n" } });
     await h.outil.execute("3", revue("W03"));
     PILOTE.resultat = undefined;
     propriete(compter("reviewer") === 1, `aucune seconde revue ne doit partir sur la lane inchangée ; lancés : ${agents().join(", ")}`);

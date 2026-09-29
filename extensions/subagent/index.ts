@@ -12,7 +12,7 @@ import { defineTool, isToolCallEventType, type ExtensionAPI } from "@earendil-wo
 import { Type, type Static } from "typebox";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
@@ -66,6 +66,8 @@ import {
   type RiskWrite,
   readManifest,
   readLaneEvents,
+  lirePlanAttache,
+  type PlanAttache,
   allocateSeq,
   attachPlan,
   describeAccess,
@@ -162,6 +164,11 @@ import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
 import { BUNDLE_FILES, bundleRoot } from "../../subagent-only/role-rules.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
+import { terminalite, unitesTerminales, type Terminalite } from "../../subagent-only/terminal.js";
+import {
+  comparerEmpreintes, DOSSIER_PREUVES_P0B, EmpreinteImpossible, prendreEmpreinte, seulementLePlan,
+  type Ecart, type Empreinte,
+} from "../../subagent-only/empreinte.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const SELF_DIR = join(AGENT_DIR, "subagent-only");
@@ -805,8 +812,11 @@ interface OuvertureDeLane {
  * La lane d'une unité, telle que le registre relu SOUS R la nomme — ou la suivante.
  *
  * L'identité vient de l'`OPENED` autoritaire (`laneOfUnit`), jamais de l'unité seule :
- * dès g1, `${RUN_ID}-${unit}` ne désigne plus aucune lane. Une unité ouverte ou intégrée
- * rejoint sa lane — rework, revue, reprise après intégration — sans nouvelle ouverture.
+ * dès g1, `${RUN_ID}-${unit}` ne désigne plus aucune lane. Une unité ouverte rejoint sa
+ * lane — rework, revue — sans nouvelle ouverture. Une unité INTÉGRÉE ne se rejoint plus :
+ * elle est terminale (lot ITE, P0-A, Q-G) ; l'exception de C1.5 qui la rejoignait, et qui a
+ * rouvert W01 quatre fois après son intégration au run QD, est supprimée. Les portes de
+ * `execute` la refusent avant toute réservation ; ce refus-ci tient si elles manquaient.
  * Une lane abandonnée ne se rejoint pas : C0 § F alloue g(n+1) après l'ABANDONED de g(n),
  * et ne réutilise ni génération ni branche. Une unité inconnue du registre reçoit g1.
  *
@@ -819,6 +829,9 @@ function deciderLane(unit: string, lu: LedgerRead): LaneAllocation<OuvertureDeLa
   const abandonnee = connue !== undefined && lu.events.some((e) =>
     e.event === "ABANDONED" && "lane" in e && e.lane === connue.laneId);
   if (connue && !abandonnee) {
+    if (unitesTerminales(lu.events, [unit]).length > 0) {
+      throw new RecoveryError(`${unit} est intégrée : l'unité est terminale (P0-A), sa lane ne se rejoint pas`);
+    }
     const l = ensureLane(root, connue.laneId);
     const lane = { laneId: connue.laneId, workUnitId: unit, cwd: l.cwd, branch: l.branch };
     return { value: { lane, base: l.base, generation: connue.generation, nouvelle: false } };
@@ -1700,18 +1713,388 @@ function refusDeGarde() {
     // Un manifeste illisible se juge plus loin, par les chemins qui le lisent déjà.
   }
   if (!bloc) return undefined;
+  const preuveP0B = dernierePreuveP0B();
+  const cause = preuveP0B === undefined
+    ? "DESIGN.md a été modifié hors de la garde (C6.4)"
+    : `un appel d'outil de l'orchestrateur a modifié l'état du projet hors des primitives du runtime ` +
+      `(P0-B) ; preuve conservée : ${RUNS_DIR}/${DOSSIER_PREUVES_P0B}/${preuveP0B}`;
   return {
     content: [{
       type: "text" as const,
       text:
-        `[run: continuation bloquée] ${bloc.code} posé le ${bloc.at} : DESIGN.md a été modifié ` +
-        "hors de la garde (C6.4). Aucune délégation, aucune séquence, aucun registre : le run " +
+        `[run: continuation bloquée] ${bloc.code} posé le ${bloc.at} : ${cause}. ` +
+        "Aucune délégation, aucune séquence, aucun registre : le run " +
         "reste non terminal, sans reset. Ce qui a été écrit reste visible ; la sortie est " +
         "l'abandon explicite du run (bin/subagent-recover run abandoned).",
     }],
     details: { run_guard: { outcome: "blocked" as const, code: bloc.code } },
     isError: true,
   };
+}
+
+
+// ================================================================== lot ITE — P0-A, P0-C, P0-B
+
+/*
+ * Ce que ce bloc garantit, et d'où il vient (sol/29, PLAN-LOT-ITE v2) :
+ *
+ *   P0-A  une unité INTEGRATED est terminale : aucune délégation qui la désigne, quel que soit le
+ *         rôle, refusée avant la réservation d'une séquence et avant le lancement d'un agent ;
+ *   P0-C  un plan entièrement intégré est terminal, irrévocablement pour le run : aucune
+ *         délégation, et l'orchestrateur est ramené aux seuls outils de lecture dont la
+ *         provenance native est vérifiée ; une réponse finale reste possible ;
+ *   P0-B  aucun appel d'outil de l'orchestrateur ne modifie l'état du projet hors des primitives
+ *         du runtime : `write`/`edit` vers le dépôt sont refusés avant l'appel ; tout autre appel
+ *         est jugé par effet, empreinte avant et après ; un écart pose le blocage durable de C6.6.
+ *
+ * Tout se relit sur le disque — registre des lanes, plan gelé d'identité vérifiée, manifeste : rien
+ * ne dépend de la mémoire du processus, et un redémarrage retrouve le même état.
+ */
+
+/** L'API de pi, pour ce que ce bloc en utilise. Posée au chargement de l'extension. */
+interface OutilConnu { name: string; sourceInfo?: { source?: string; path?: string } }
+let PI_API: {
+  setActiveTools?: (noms: string[]) => void;
+  getActiveTools?: () => string[];
+  getAllTools?: () => OutilConnu[];
+} | undefined;
+
+/** Les seuls outils qu'un plan terminal laisse à l'orchestrateur — s'ils sont bien ceux de pi. */
+const OUTILS_LECTURE = ["read", "grep", "find", "ls"];
+
+/**
+ * Un outil de lecture dont l'implémentation chargée est la native de pi.
+ *
+ * Le nom seul ne prouve rien : une extension peut enregistrer un `read` qui écrit. pi 0.86 donne à
+ * chaque outil natif la provenance synthétique `<builtin:NOM>`, source `builtin`, et l'extension
+ * qui redéfinit un nom remplace cette provenance par la sienne. Sans `getAllTools`, rien n'est
+ * vérifiable : aucun outil n'est exempté.
+ */
+function outilLectureVerifie(nom: string): boolean {
+  if (!OUTILS_LECTURE.includes(nom)) return false;
+  let tous: OutilConnu[] | undefined;
+  try {
+    tous = PI_API?.getAllTools?.();
+  } catch {
+    return false;
+  }
+  const outil = tous?.find((o) => o.name === nom);
+  return outil?.sourceInfo?.source === "builtin" && outil.sourceInfo.path === `<builtin:${nom}>`;
+}
+
+type EtatP0 =
+  | { lisible: true; plan: PlanAttache; events: LaneEvent[]; terminal: Terminalite | undefined }
+  | { lisible: false; raison: string };
+
+/** Le plan gelé et le registre des lanes, relus. Illisible n'est jamais « rien à signaler ». */
+function lireEtatP0(): EtatP0 {
+  const plan = lirePlanAttache(RUN_DIR);
+  let lu: LedgerRead;
+  try {
+    lu = readLaneEvents(RUN_DIR, RUN_ID);
+  } catch (err) {
+    return { lisible: false, raison: err instanceof Error ? err.message : String(err) };
+  }
+  if (lu.malformedLines.length > 0) {
+    return { lisible: false, raison: `registre illisible ligne(s) ${lu.malformedLines.join(", ")}` };
+  }
+  const terminal = plan.etat === "attache" ? terminalite(plan.plan, lu.events) : undefined;
+  return { lisible: true, plan, events: lu.events, terminal };
+}
+
+const TEXTE_PLAN_TERMINAL =
+  "PLAN TERMINAL — toutes les unités du plan gelé sont intégrées. Rédige la réponse finale ; " +
+  "aucune autre action : ni délégation, ni modification, ni revue. Seule la fin du run (completed ou " +
+  "abandoned, par l'opérateur) libère ce verrou, pour un nouveau run.";
+
+/**
+ * Réduire l'orchestrateur à la lecture vérifiée. Idempotent : n'écrit rien si la liste active est
+ * déjà la bonne. Le refus en `tool_call` reste la couche qui fait autorité si la liste active était
+ * rétablie par ailleurs.
+ */
+function activerEtatTerminal(): void {
+  const cible = OUTILS_LECTURE.filter(outilLectureVerifie);
+  try {
+    const actifs = PI_API?.getActiveTools?.();
+    if (actifs && actifs.length === cible.length && actifs.every((n) => cible.includes(n))) return;
+    PI_API?.setActiveTools?.(cible);
+  } catch {
+    // La couche `tool_call` refuse de toute façon.
+  }
+}
+
+/**
+ * Le refus d'une délégation par P0-A ou P0-C, ou `undefined`. Ne mute rien.
+ *
+ * Un registre illisible : avant la reconstruction, les portes de reprise existantes le refusent
+ * elles-mêmes, avec leur motif, avant toute réservation — `illisibleRefuse` est alors faux et la
+ * décision leur revient. Après la reconstruction, ces portes sont passées : un registre devenu
+ * illisible là refuse ici (`illisibleRefuse` vrai). Jamais « rien à signaler ».
+ */
+function refusP0(unites: readonly string[], agentName: string, illisibleRefuse = true) {
+  if (RUN === undefined) return undefined;
+  const refus = (code: string, texte: string) => {
+    logRefusal(RUN_ID, agentName, texte);
+    return {
+      content: [{ type: "text" as const, text: texte }],
+      details: { run_guard: { outcome: "blocked" as const, code } },
+      isError: true,
+    };
+  };
+  const e = lireEtatP0();
+  if (!e.lisible && !illisibleRefuse) return undefined;
+  if (!e.lisible) {
+    return refus(
+      "ITE_ETAT_ILLISIBLE",
+      `[run: ${e.raison}] l'état terminal ne se juge pas sur un registre qu'on ne lit pas en entier. ` +
+        "Aucune délégation n'a été lancée.",
+    );
+  }
+  if (e.plan.etat === "rompu") {
+    return refus(
+      "ITE_PLAN_ROMPU",
+      `[run: plan gelé rompu] ${e.plan.raison}. Un plan attaché qui manque, diverge ou devient illisible ` +
+        "refuse toute délégation ; ce n'est jamais un plan non terminal. Aucune délégation n'a été lancée.",
+    );
+  }
+  if (e.terminal?.etat === "terminal") {
+    activerEtatTerminal();
+    return refus("ITE_PLAN_TERMINAL", `[run: plan terminal] ${TEXTE_PLAN_TERMINAL}`);
+  }
+  if (e.terminal?.etat === "indetermine") {
+    return refus(
+      "ITE_QUALIFICATION_INDETERMINEE",
+      `[run: qualification indéterminée] ${e.terminal.raison}. Toute délégation est refusée ; rien n'est ` +
+        "déclaré achevé ni appliqué. À signaler à l'opérateur.",
+    );
+  }
+  const terminales = unitesTerminales(e.events, unites);
+  if (terminales.length > 0) {
+    return refus(
+      "ITE_UNITE_TERMINALE",
+      `[run: unité terminale] ${terminales.join(", ")} ${terminales.length > 1 ? "sont intégrées" : "est intégrée"} : ` +
+        "aucune délégation ne la désigne plus, quel que soit le rôle (P0-A). L'appel entier est refusé ; " +
+        "rien n'a été réservé, ouvert ni lancé.",
+    );
+  }
+  return undefined;
+}
+
+/** L'état terminal après une délégation : la ligne à ajouter à son résultat, et la capacité retirée. */
+function signalerSiTerminal<R>(resultat: R): R {
+  if (RUN === undefined) return resultat;
+  const e = lireEtatP0();
+  if (!e.lisible || e.terminal?.etat !== "terminal") return resultat;
+  activerEtatTerminal();
+  const r = resultat as { content?: Array<{ type: string; text?: string }> };
+  if (Array.isArray(r?.content)) r.content = [...r.content, { type: "text", text: `\n${TEXTE_PLAN_TERMINAL}` }];
+  return resultat;
+}
+
+// ------------------------------------------------------------------ P0-B
+
+/** Les appels d'outil en vol : `task` est la primitive ; tout le reste est observé. */
+const EN_VOL = new Map<string, "primitive" | "observe">();
+/** Les appels `task` dont l'`execute` est bien celui de cette extension. */
+const PRIMITIVES_AUTHENTIQUES = new Set<string>();
+/** L'empreinte prise avant chaque appel observé, et ce qui en décide après. */
+const OBSERVATIONS_P0B = new Map<string, { avant: Empreinte; outil: string; planAvantAttache: boolean }>();
+
+const NOM_PRIMITIVE = "task";
+
+/** Le nom de la dernière preuve P0-B conservée, s'il y en a une. */
+function dernierePreuveP0B(): string | undefined {
+  try {
+    const noms = readdirSync(join(RUN_DIR, DOSSIER_PREUVES_P0B)).filter((n) => n.startsWith(`${RUN_ID}-`)).sort();
+    return noms[noms.length - 1];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Le chemin qu'un `write`/`edit` atteindrait vraiment : liens symboliques résolus. `null` si indécidable. */
+function cibleReelle(chemin: string): { reel: string; lienDur: boolean } | null {
+  const absolu = resolve(process.cwd(), cheminOutil(chemin));
+  let existant = absolu;
+  const reste: string[] = [];
+  for (;;) {
+    try {
+      const st = lstatSync(existant);
+      if (st.isSymbolicLink()) {
+        try {
+          realpathSync(existant);
+        } catch {
+          return null; // lien pendant : on ne sait pas où il écrirait
+        }
+      }
+      break;
+    } catch {
+      const parent = dirname(existant);
+      if (parent === existant) return null;
+      reste.unshift(basename(existant));
+      existant = parent;
+    }
+  }
+  let reel: string;
+  try {
+    reel = join(realpathSync(existant), ...reste);
+  } catch {
+    return null;
+  }
+  let lienDur = false;
+  try {
+    const st = statSync(reel);
+    lienDur = st.isFile() && st.nlink > 1;
+  } catch {
+    // Absent : un fichier nouveau n'a pas d'autre nom.
+  }
+  return { reel, lienDur };
+}
+
+/** `dedans` est-il `racine` ou sous elle ? */
+function sous(dedans: string, racine: string): boolean {
+  return dedans === racine || dedans.startsWith(racine.endsWith("/") ? racine : `${racine}/`);
+}
+
+/** Les racines protégées : le dépôt et chaque worktree que la dernière empreinte a listé. */
+function racinesProtegees(empreinte: Empreinte): string[] {
+  const racines = new Set<string>();
+  const ajouter = (p: string) => {
+    try {
+      racines.add(realpathSync(p));
+    } catch {
+      racines.add(resolve(p));
+    }
+  };
+  ajouter(process.cwd());
+  for (const l of empreinte.details.worktrees ?? []) if (l.startsWith("worktree ")) ajouter(l.slice(9));
+  return [...racines];
+}
+
+/** Le plan exact, tant qu'il n'est pas attaché : l'unique écriture admise (PLAN-LOT-ITE v2 § 4). */
+function estLePlanAvantAttache(reel: string): boolean {
+  let plan: string;
+  try {
+    plan = join(realpathSync(RUN_DIR), `${RUN_ID}-plan.json`);
+  } catch {
+    return false;
+  }
+  return reel === plan && lirePlanAttache(RUN_DIR).etat === "non-attache";
+}
+
+/**
+ * Avant l'appel. Rend un refus, ou `undefined` quand l'appel peut partir — son empreinte est alors
+ * prise et gardée pour l'après-appel.
+ */
+function avantAppelP0B(event: { toolName?: unknown; toolCallId?: unknown; input?: unknown }):
+  { block: true; reason: string } | undefined {
+  if (RUN === undefined) return undefined;
+  const nom = typeof event.toolName === "string" ? event.toolName : "";
+  const id = typeof event.toolCallId === "string" ? event.toolCallId : "";
+  if (outilLectureVerifie(nom)) return undefined;
+  const primitive = nom === NOM_PRIMITIVE;
+  /*
+   * Exclusion (Q-L) : pi prépare les appels frères un par un, puis les exécute ensemble. Une
+   * primitive et un appel observé qui s'exécuteraient en même temps rendraient l'empreinte fausse
+   * dans les deux sens — l'écriture d'un worker attribuée à l'orchestrateur, ou l'écriture de
+   * l'orchestrateur blanchie par la délégation. Le second arrivé est refusé, dans les deux ordres.
+   */
+  const conflit = [...EN_VOL.values()].some((k) => (primitive ? k === "observe" : k === "primitive"));
+  if (conflit) {
+    return {
+      block: true,
+      reason: primitive
+        ? "Refusé : un appel d'outil de l'orchestrateur est en cours ; une délégation ne part pas en même " +
+          "temps (P0-B). Relance-la seule, après."
+        : "Refusé : une délégation est en cours ; aucun autre outil ne s'exécute en même temps qu'elle " +
+          "(P0-B). Relance cet appel seul, après.",
+    };
+  }
+  if (!id) return { block: true, reason: "Refusé : appel d'outil sans identifiant, inobservable (P0-B)." };
+  let avant: Empreinte;
+  try {
+    avant = prendreEmpreinte(process.cwd(), RUN_DIR);
+  } catch (err) {
+    return {
+      block: true,
+      reason:
+        `Refusé : l'état du projet ne peut pas être relevé avant cet appel (P0-B) — ` +
+        `${err instanceof Error ? err.message : String(err)}. Sans relevé, aucun appel n'est admis.`,
+    };
+  }
+  const entree = (event.input ?? {}) as { path?: unknown };
+  let planAvantAttache = false;
+  if ((nom === "write" || nom === "edit") && typeof entree.path === "string") {
+    const cible = cibleReelle(entree.path);
+    if (cible === null) {
+      return { block: true, reason: `Refusé : destination indécidable « ${entree.path} » (P0-B).` };
+    }
+    planAvantAttache = estLePlanAvantAttache(cible.reel);
+    const protege = cible.lienDur || racinesProtegees(avant).some((r) => sous(cible.reel, r));
+    if (protege && !planAvantAttache) {
+      return {
+        block: true,
+        reason:
+          `Refusé : « ${entree.path} » est dans le dépôt ou une lane. Pendant un run, l'orchestrateur ne ` +
+          "modifie aucun fichier du projet (P0-B) : le changement se délègue. Seul le plan " +
+          `${RUNS_DIR}/${RUN_ID}-plan.json s'écrit, et seulement avant son attachement.`,
+      };
+    }
+  }
+  EN_VOL.set(id, primitive ? "primitive" : "observe");
+  OBSERVATIONS_P0B.set(id, { avant, outil: nom, planAvantAttache });
+  return undefined;
+}
+
+/** Conserver la preuve d'un écart, avant de bloquer. Une preuve qui ne s'écrit pas n'empêche pas le blocage. */
+function conserverPreuveP0B(outil: string, id: string, ecarts: readonly Ecart[] | string): string | undefined {
+  try {
+    const dir = join(RUN_DIR, DOSSIER_PREUVES_P0B);
+    mkdirSync(dir, { recursive: true });
+    const nom = `${RUN_ID}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}.json`;
+    writeFileSync(
+      join(dir, nom),
+      `${JSON.stringify({ at: new Date().toISOString(), outil, toolCallId: id, ecarts }, null, 2)}\n`,
+      { flag: "wx" },
+    );
+    return nom;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Après l'appel — même s'il a échoué. Rend le texte à ajouter à son résultat quand un écart est
+ * constaté, `undefined` sinon. Un écart pose le blocage durable ; rien n'est restauré.
+ */
+function apresAppelP0B(id: unknown): string | undefined {
+  if (typeof id !== "string") return undefined;
+  EN_VOL.delete(id);
+  const obs = OBSERVATIONS_P0B.get(id);
+  if (obs === undefined) return undefined;
+  OBSERVATIONS_P0B.delete(id);
+  // La primitive authentique a ses propres portes : gel, merge, intégration, violations.
+  if (obs.outil === NOM_PRIMITIVE && PRIMITIVES_AUTHENTIQUES.delete(id)) return undefined;
+  let ecarts: Ecart[] | string;
+  try {
+    ecarts = comparerEmpreintes(obs.avant, prendreEmpreinte(process.cwd(), RUN_DIR));
+  } catch (err) {
+    ecarts = `relevé après l'appel impossible : ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (Array.isArray(ecarts)) {
+    if (ecarts.length === 0) return undefined;
+    if (obs.planAvantAttache || lirePlanAttache(RUN_DIR).etat === "non-attache") {
+      if (seulementLePlan(ecarts, `${RUN_ID}-plan.json`)) return undefined;
+    }
+  }
+  const preuve = conserverPreuveP0B(obs.outil, id, ecarts);
+  bloquerContinuation();
+  const quoi = Array.isArray(ecarts) ? ecarts.map((e) => e.composante).join(", ") : ecarts;
+  return (
+    `[run: continuation bloquée — P0-B] l'appel ${obs.outil} a modifié l'état du projet hors des primitives ` +
+    `du runtime (${quoi}). Rien n'est restauré. Preuve : ${preuve ? `${RUNS_DIR}/${DOSSIER_PREUVES_P0B}/${preuve}` : "non écrite"}. ` +
+    "Aucune délégation ne part plus dans ce run ; la sortie est l'abandon explicite par l'opérateur."
+  );
 }
 
 /**
@@ -3379,6 +3762,7 @@ function releveDuRun(): { ok: true; texte: string } | { ok: false; raison: strin
 
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
+  PI_API = pi as unknown as typeof PI_API;
 
   pi.registerCommand("subagent-report", {
     description: "Relevé terminal du run : unités, résidus, ce qui est rangeable, coût du scan",
@@ -3397,6 +3781,11 @@ export default function (pi: ExtensionAPI) {
     // L'état du run est visible dès le chargement : une session qui découvre un
     // dépôt occupé doit le savoir sans avoir à provoquer un refus.
     publishRun();
+    // P0-C : un plan terminal l'est encore après un redémarrage — relu sur le registre.
+    if (RUN !== undefined) {
+      const e = lireEtatP0();
+      if (e.lisible && e.terminal?.etat === "terminal") activerEtatTerminal();
+    }
   });
 
   /**
@@ -3444,6 +3833,22 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event) => {
     /*
+     * P0-C, couche qui fait autorité : un plan terminal ne laisse passer que la lecture native
+     * vérifiée — même si la liste des outils actifs avait été rétablie, même pour un appel frère
+     * préparé avant le changement de liste.
+     */
+    if (RUN !== undefined) {
+      const nom = (event as { toolName?: unknown }).toolName;
+      const e = lireEtatP0();
+      if (e.lisible && e.terminal?.etat === "terminal") {
+        activerEtatTerminal();
+        if (typeof nom !== "string" || !outilLectureVerifie(nom)) {
+          return { block: true, reason: `Refusé : ${TEXTE_PLAN_TERMINAL}` };
+        }
+        return undefined;
+      }
+    }
+    /*
      * C6.4 d'abord : une destination détectable vers DESIGN.md est refusée avant l'appel ;
      * tout autre appel qui écrit est observé, pour que l'après-appel constate un
      * contournement.
@@ -3467,6 +3872,17 @@ export default function (pi: ExtensionAPI) {
       }
       const id = (event as { toolCallId?: unknown }).toolCallId;
       if (typeof id === "string") OBSERVATIONS_DESIGN.set(id, observerDesign());
+    }
+
+    /*
+     * P0-B : capacité pour `write`/`edit`, effet pour tout le reste. Après C6.4, dont le refus de
+     * DESIGN.md garde son motif propre.
+     */
+    const refusP0B = avantAppelP0B(event as { toolName?: unknown; toolCallId?: unknown; input?: unknown });
+    if (refusP0B) {
+      const id = (event as { toolCallId?: unknown }).toolCallId;
+      if (typeof id === "string") OBSERVATIONS_DESIGN.delete(id);
+      return refusP0B;
     }
 
     const path = ecrit && typeof entree?.path === "string" ? entree.path : undefined;
@@ -3513,10 +3929,27 @@ export default function (pi: ExtensionAPI) {
     const id = (event as { toolCallId?: unknown }).toolCallId;
     if (typeof id !== "string") return undefined;
     const obs = OBSERVATIONS_DESIGN.get(id);
-    if (obs === undefined) return undefined;
-    OBSERVATIONS_DESIGN.delete(id);
-    const avant = obs.etat;
-    if (etatDesign() !== avant) attribuerApresAppel(obs);
+    if (obs !== undefined) {
+      OBSERVATIONS_DESIGN.delete(id);
+      const avant = obs.etat;
+      if (etatDesign() !== avant) attribuerApresAppel(obs);
+    }
+    /*
+     * P0-B, après l'appel — même en échec. L'écart est dit dans le résultat même de l'appel qui l'a
+     * produit : le modèle l'apprend là où il agit.
+     */
+    const constat = apresAppelP0B(id);
+    if (constat === undefined) return undefined;
+    const contenu = (event as { content?: Array<{ type: string; text?: string }> }).content ?? [];
+    return { content: [...contenu, { type: "text" as const, text: constat }], isError: true };
+  });
+
+  /*
+   * Un appel préparé puis refusé par une autre extension n'a pas de `tool_result` : il en a
+   * toujours un `tool_execution_end`. Ce qui reste observé y est jugé et libéré.
+   */
+  pi.on("tool_execution_end", async (event) => {
+    apresAppelP0B((event as { toolCallId?: unknown }).toolCallId);
     return undefined;
   });
 
@@ -3678,7 +4111,7 @@ export default function (pi: ExtensionAPI) {
               `This repository is not ready for a run: ${RUNS_DIR}/ is not ignored by git, or files under it are tracked. Do not write anything under ${RUNS_DIR}/ — no plan, no scratch file. Delegation is refused until this is fixed. Add ${RUNS_DIR}/ to the repository's .gitignore, or to .git/info/exclude, then restart pi: this run's state was decided at load time and does not re-evaluate mid-session.`,
             ]),
         "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
-        "Do not delegate a one-line edit or a scratch file you could write inline. This never applies to a scout, nor to the code of an implementation deliverable — any code asked for as a result of the session, backlog item or not: both are delegated for what they are, not for how large they are.",
+        "During a run you cannot modify any file of the project yourself — not the repository, not a lane, not git state: the runtime refuses `write` and `edit` there and blocks the run if `bash` changes it. Every change, however small, is delegated. The only file you write is the plan, before the first delegation.",
         "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
       ],
       parameters,
@@ -3688,9 +4121,17 @@ export default function (pi: ExtensionAPI) {
          * C6.6 : un run bloqué refuse toute délégation, quel que soit le rôle, avant la
          * file, la reconstruction, la séquence et tout registre.
          */
+        // P0-B : cette exécution EST la primitive du runtime, par construction.
+        if (OBSERVATIONS_P0B.has(_id)) PRIMITIVES_AUTHENTIQUES.add(_id);
         reevaluerAttributions(false);
         const garde = refusDeGarde();
         if (garde) return garde;
+        /*
+         * P0-A et P0-C, prérefus : avant la file d'unités, sur les unités déclarées. Le refus qui
+         * fait autorité est rejugé dans la délégation, après l'attente dans la file.
+         */
+        const prerefus = refusP0(unitesDesignees(params), String(params.agent), false);
+        if (prerefus) return prerefus;
         /*
          * Deux délégations sur la même unité se suivent ; elles ne se croisent pas.
          *
@@ -3703,7 +4144,7 @@ export default function (pi: ExtensionAPI) {
         // Cette délégation, propriétaire de la transition qu'elle ouvrirait en ligne.
         const proprietaire = Symbol(`délégation ${_id}`);
         try {
-          return await delegation(_id, params, options);
+          return signalerSiTerminal(await delegation(_id, params, options));
         } finally {
           // Une transition ouverte par cette délégation ne lui survit pas, même sur exception.
           fermerTransition(proprietaire);
@@ -3923,6 +4364,18 @@ export default function (pi: ExtensionAPI) {
          * preuve exacte se reprend ici, et seulement alors le bail est pris. Ce qui ne se reprend
          * pas reste pour la porte, qui le nomme, et pour l'intégration, qui le refuse.
          */
+        /*
+         * P0-A et P0-C, refus qui fait autorité (PLAN-LOT-ITE v2 § 2) : après l'attente dans la
+         * file d'unités, sur toutes les unités effectivement désignées — chaque entrée d'un lot,
+         * l'unité résolue par `for_risks` —, avant la reprise, la reconstruction, l'admission, la
+         * séquence, la lane et tout lancement. Une seule unité terminale refuse l'appel entier.
+         */
+        const unitesP0 = hasBatch
+          ? ((params.batch as unknown as ReadonlyArray<{ work_unit: string }> | undefined) ?? [])
+            .map((b) => b.work_unit.trim()).filter(Boolean)
+          : unit ? [unit] : [];
+        const refusTete = refusP0(unitesP0, String(params.agent), false);
+        if (refusTete) return refusTete;
         reprendreEnTete();
         // Une attribution résolue par la reprise a pu poser le blocage (C6.6).
         const gardeApres = refusDeGarde();
@@ -4135,17 +4588,22 @@ export default function (pi: ExtensionAPI) {
          * des deux ouvrira une lane — jamais ouverte, ou génération suivant un ABANDONED —
          * et c'est exactement ce que `deciderLane` conclura : une unité ouverte au registre
          * sans worktree, ou l'inverse, est un conflit qui a déjà fermé le run plus haut.
-         * Une lane ouverte, ou la lane historique d'une unité intégrée, se rejoint sans
-         * admission (C1.5).
+         * Une lane ouverte se rejoint sans admission (C1.5). Une unité intégrée ne se rejoint
+         * plus : elle est terminale et a été refusée plus haut (lot ITE, P0-A, Q-G).
          */
         const unitesLiees = !isLaneBound(roleJoue)
           ? []
           : hasBatch
             ? (params.batch as unknown as ReadonlyArray<{ work_unit: string }>).map((b) => b.work_unit)
             : unit ? [unit] : [];
-        const jonctions: ReadonlySet<string> = new Set(
-          unitesLiees.filter((u) => OPEN_UNITS.has(u) || INTEGRATED.has(u)),
-        );
+        /*
+         * P0-A et P0-C, rejugés après la reprise et la reconstruction : une transition reprise
+         * ici a pu intégrer une unité désignée, ou achever le plan. Toujours avant l'admission,
+         * la séquence et la lane.
+         */
+        const refusApresReprise = refusP0(unitesP0, String(params.agent));
+        if (refusApresReprise) return refusApresReprise;
+        const jonctions: ReadonlySet<string> = new Set(unitesLiees.filter((u) => OPEN_UNITS.has(u)));
 
         /*
          * L'admission du chemin simple (C1.5, C-P1-F02), sur la décision commune.
@@ -5530,6 +5988,27 @@ export default function (pi: ExtensionAPI) {
    * Les unités qu'un appel fera avancer : celle du chemin simple, telle que `execute` la
    * résoudra (`targetWorkUnit`), ou celles du lot. Un rôle global n'en fait avancer aucune.
    */
+  /**
+   * Les unités qu'un appel désigne, pour P0-A — tous rôles confondus, scout compris : un lot
+   * désigne chacune de ses entrées, un appel simple son unité déclarée ou celle de ses risques.
+   */
+  function unitesDesignees(params: Static<typeof parameters>): string[] {
+    const p = params as unknown as {
+      work_unit?: string;
+      for_risks?: string[];
+      batch?: ReadonlyArray<{ work_unit?: string }>;
+    };
+    if (p.batch !== undefined) return p.batch.map((b) => b.work_unit?.trim() ?? "").filter(Boolean);
+    const declaree = p.work_unit?.trim();
+    try {
+      const cible = cibleDesRisques(p.work_unit, p.for_risks ?? []).cible;
+      if (cible.kind === "unit") return [cible.workUnitId];
+    } catch {
+      // Une provenance illisible se refuse plus loin, par la porte qui la lit.
+    }
+    return declaree ? [declaree] : [];
+  }
+
   function unitesDeLAppel(params: Static<typeof parameters>): string[] {
     // Les champs lus ici, sous leur forme de schéma ; rien d'autre de l'appel n'est consulté.
     const p = params as unknown as {
