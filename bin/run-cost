@@ -3,7 +3,7 @@
 run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée au plan terminal, et sa décomposition.
 
   bin/run-cost <runs> <sessions> [--run <runId>] [--session <fichier>]… [--coupure auto|aucune|<ISO>]
-               [--json <fichier>]
+               [--json <fichier>] [--tours]
 
   <runs>      le `.pi-subagent-runs` du dépôt, ou sa copie relevée
   <sessions>  le dossier des sessions pi de l'orchestrateur pour ce dépôt (*.jsonl)
@@ -13,6 +13,11 @@ run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée
   --coupure   auto (défaut) : l'instant où le plan gelé devient terminal, relu sur le registre des lanes
               avec le prédicat de subagent-only/terminal.ts ; aucune : pas de coupure ; ou un instant ISO
   --json      écrit aussi la grille en JSON
+  --tours     ajoute la décomposition tour par tour de chaque délégation (lot ITE, P1 ; adjudication
+              Q4 du plan P1) : contexte relevé à chaque tour, appels par tour, et, marquée [estimé],
+              la résidence des résultats d'outils par nature. La transcription d'un enfant sert alors
+              aux totaux : elle est lue sans omission (une ligne illisible refuse, fichier et ligne
+              nommés), et la somme de ses tours doit ÉGALER le total de l'artefact, sinon refus nommé.
 
 Entrées sans ambiguïté (adjudication ITE-1, P1-0). Sans sélection explicite : exactement un run dans
 <runs>, son plan `<runId>-plan.json`, et des sessions qui mentionnent toutes ce run et lui seul ;
@@ -318,6 +323,7 @@ def delegations(runs, run_id):
                         lectures[c] = lectures.get(c, 0) + 1
         lignes.append({
             "seq": d.get("seq"), "at": d.get("at"), "role": d.get("role"), "unite": d.get("work_unit"),
+            "artifact_nom": nom,
             "tours": j.get("turns") or 0, "injecte": j.get("injectedTokens"), "duree_s": round((j.get("durationMs") or 0) / 1000),
             "usage": {k: u.get(k) or 0 for k in ("input", "cacheRead", "cacheWrite", "output")}, "total": tot(u),
             "part_cache": round((u.get("cacheRead") or 0) / tot(u), 3) if tot(u) else 0,
@@ -327,6 +333,71 @@ def delegations(runs, run_id):
             "echec": d.get("failure"),
         })
     return lignes
+
+
+# ------------------------------------------------------------------ tours (--tours)
+
+def tours_de(transcription, total_artefact, etiquette):
+    """
+    La décomposition tour par tour d'une délégation, depuis sa transcription.
+
+    RELEVÉ : l'`usage` de chaque message assistant (événement `message_end`), dans l'ordre ; sa
+    somme doit égaler le total de l'artefact, qui est ce que la grille compte — sinon refus nommé.
+    ESTIMÉ : la taille des résultats d'outils (caractères / 4) et leur résidence, c'est-à-dire le
+    nombre de tours qui les relisent ensuite.
+    """
+    if not os.path.isfile(transcription):
+        raise Refus(f"{etiquette} : transcription absente ({transcription}) — --tours ne compte pas sans elle")
+    evenements = jsonl(transcription)
+    tours, items, appels_par_id = [], [], {}
+    for e in evenements:
+        if e.get("type") != "message_end":
+            continue
+        m = e.get("message") or {}
+        role = m.get("role")
+        if role == "assistant":
+            u = m.get("usage") or {}
+            appels = [x for x in m.get("content") or [] if isinstance(x, dict) and x.get("type") == "toolCall"]
+            tours.append({"contexte": ctx(u), "sortie": u.get("output") or 0, "total": tot(u),
+                          "appels": [x.get("name") for x in appels]})
+            for x in appels:
+                appels_par_id[x.get("id")] = (x.get("name"), x.get("arguments") or {})
+        elif role == "toolResult":
+            nom, args = appels_par_id.get(m.get("toolCallId"), (m.get("toolName"), {}))
+            items.append((len(tours), classer(nom, args), len(texte(m.get("content"))) // 4))
+    releve = sum(t["total"] for t in tours)
+    if releve != total_artefact:
+        raise Refus(f"{etiquette} : la somme des tours de {os.path.basename(transcription)} ({releve}) "
+                    f"n'égale pas le total de l'artefact ({total_artefact})")
+    natures = {}
+    for (apparu, nature, tokens) in items:
+        relu = sum(1 for i in range(apparu, len(tours)))
+        x = natures.setdefault(nature, {"n": 0, "tokens": 0, "relus": 0})
+        x["n"] += 1; x["tokens"] += tokens; x["relus"] += tokens * relu
+    un_seul = sum(1 for t in tours[1:] if len(t["appels"]) == 1)
+    return {"tours": len(tours), "releve": releve, "contextes": [t["contexte"] for t in tours],
+            "appels_par_tour": [len(t["appels"]) for t in tours], "tours_a_un_seul_appel": un_seul,
+            "natures_estime": natures}
+
+
+def imprimer_tours(runs, dl, avant):
+    print("\n== TOURS PAR DÉLÉGATION — RELEVÉ (usage par tour, rapproché de l'artefact) ; [estimé] marqué")
+    sortie = []
+    for d in dl:
+        art = os.path.join(runs, os.path.basename(d.get("artifact_nom") or ""))
+        etiquette = f"délégation #{d['seq']} ({d['role']})"
+        t = tours_de(art[:-5] + ".jsonl", d["total"], etiquette)
+        cote = "avant" if avant(ts(d["at"])) else "APRÈS"
+        print(f"  #{d['seq']:<3} {cote:5} {d['role']:18} {str(d['unite']):5} tours {t['tours']:>3} · relevé {t['releve']:>8}"
+              f" = artefact {d['total']} (rapproché) · tours à un seul appel après le premier {t['tours_a_un_seul_appel']}")
+        print(f"        contexte par tour [relevé] : {' '.join(str(c) for c in t['contextes'])}")
+        print(f"        appels par tour [relevé] : {' '.join(str(n) for n in t['appels_par_tour'])}")
+        nat = sorted(t["natures_estime"].items(), key=lambda kv: -kv[1]["relus"])
+        if nat:
+            print("        résultats d'outils [estimé, caractères / 4] : " +
+                  " · ".join(f"{k} {v['n']}× {v['tokens']} (relus {v['relus']})" for k, v in nat[:6]))
+        sortie.append({"seq": d["seq"], **t})
+    return sortie
 
 
 # ------------------------------------------------------------------ grille
@@ -345,8 +416,13 @@ def analyser(argv):
         return 2
     runs, sessions = argv[1], argv[2]
     coupure_arg, sortie_json, run_explicite, sessions_explicites = "auto", None, None, []
+    avec_tours = False
     i = 3
     while i < len(argv):
+        if argv[i] == "--tours":
+            avec_tours = True
+            i += 1
+            continue
         if argv[i] in ("--coupure", "--json", "--run", "--session") and i + 1 < len(argv):
             cle, valeur = argv[i], argv[i + 1]
             if cle == "--coupure":
@@ -474,6 +550,9 @@ def analyser(argv):
         workers = sum(1 for d in ds if d["role"] == "worker")
         print(f"  {u} : {suite} · workers {workers} · reprises {max(0, workers - 1)}")
     grille["par_unite"] = {u: [d["seq"] for d in ds] for u, ds in par_unite.items()}
+
+    if avec_tours:
+        grille["tours"] = imprimer_tours(runs, dl, avant)
 
     if sortie_json:
         with open(sortie_json, "w", encoding="utf-8") as f:

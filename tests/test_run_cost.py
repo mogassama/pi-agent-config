@@ -8,7 +8,8 @@ de l'opérateur, là où le relevé vit. Ici, les cas qui mordraient sans faire 
 posée alors que le plan n'est pas terminal, un INTEGRATED sans status compté comme final sous un
 design_update, une relecture comptée quand le contenu a changé ; et, depuis l'adjudication ITE-1,
 les entrées ambiguës : deux runs dans le dossier, une session étrangère, une ligne JSONL illisible,
-un plan qui ne correspond plus à son planHash.
+un plan qui ne correspond plus à son planHash. Depuis le plan P1 (Q4) : --tours, qui lit la
+transcription d'un enfant sans omission et rapproche la somme de ses tours du total de l'artefact.
 
     python3 tests/test_run_cost.py
     bin/test-guards                # le lance aussi
@@ -188,6 +189,80 @@ class EntreesAmbigues(unittest.TestCase):
             code, sortie = lancer(runs, sessions)
             self.assertEqual(code, 2)
             self.assertIn("planHash", sortie)
+
+
+def delegation_avec_transcription(runs, lignes_transcription, total_artefact, seq=1, role="worker"):
+    """Une délégation au journal, son artefact (usage total) et sa transcription."""
+    nom = f"{RUN}-{seq:02d}-{role}"
+    (runs / f"{nom}.json").write_text(json.dumps({
+        "usage": {"input": total_artefact, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "turns": 2,
+        "envelope": {"status": "ok"}}), encoding="utf-8")
+    (runs / f"{nom}.jsonl").write_text("".join(
+        (x if isinstance(x, str) else json.dumps(x)) + "\n" for x in lignes_transcription), encoding="utf-8")
+    ecrire_jsonl(runs / f"{RUN}-delegations.jsonl", [
+        {"at": "2026-01-01T00:00:05Z", "seq": seq, "role": role, "work_unit": "W01", "artifact": f"/x/{nom}.json"}])
+
+
+def tour_assistant(total, appels=()):
+    return {"type": "message_end", "message": {"role": "assistant", "usage": {"input": total, "output": 0},
+            "content": [{"type": "toolCall", "id": i, "name": "read", "arguments": {"path": p}} for i, p in appels]}}
+
+
+def resultat(id_, texte_):
+    return {"type": "message_end", "message": {"role": "toolResult", "toolCallId": id_, "toolName": "read",
+            "content": [{"type": "text", "text": texte_}]}}
+
+
+class Tours(unittest.TestCase):
+    """Adjudication P1, Q4 : --tours lit la transcription sans omission, rapproche ses totaux, distingue relevé et estimé."""
+
+    def test_tours_rapproche_et_distingue_releve_et_estime(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            session_du_run(sessions)
+            delegation_avec_transcription(runs, [
+                {"type": "session"}, tour_assistant(100, [("c1", "src/a.py")]), resultat("c1", "A" * 400),
+                tour_assistant(150)], 250)
+            code, sortie = lancer(runs, sessions, "--tours", "--json", Path(t) / "g.json")
+            self.assertEqual(code, 0, sortie)
+            self.assertIn("relevé      250 = artefact 250 (rapproché)", sortie)
+            self.assertIn("contexte par tour [relevé] : 100 150", sortie)
+            self.assertIn("[estimé, caractères / 4] : read · dépôt 1× 100 (relus 100)", sortie)
+            g = json.loads((Path(t) / "g.json").read_text(encoding="utf-8"))
+            self.assertEqual(g["tours"][0]["releve"], 250)
+
+    def test_ligne_illisible_de_la_transcription_refuse_avec_fichier_et_ligne(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            session_du_run(sessions)
+            delegation_avec_transcription(runs, [tour_assistant(100), "{tronquée", tour_assistant(150)], 250)
+            code, sortie = lancer(runs, sessions, "--tours")
+            self.assertEqual(code, 2, sortie)
+            self.assertIn(f"{RUN}-01-worker.jsonl:2", sortie)
+            # Sans --tours, la grille ne compte pas sur la transcription : elle n'y est lue que pour
+            # les estimations, et une ligne illisible y est comptée, pas refusée.
+            code, sortie = lancer(runs, sessions)
+            self.assertEqual(code, 0, sortie)
+
+    def test_somme_des_tours_differente_de_l_artefact_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            session_du_run(sessions)
+            delegation_avec_transcription(runs, [tour_assistant(100), tour_assistant(100)], 250)
+            code, sortie = lancer(runs, sessions, "--tours")
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("délégation #1 (worker)", sortie)
+            self.assertIn("(200) n'égale pas le total de l'artefact (250)", sortie)
+
+    def test_transcription_absente_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            session_du_run(sessions)
+            delegation_avec_transcription(runs, [tour_assistant(250)], 250)
+            (runs / f"{RUN}-01-worker.jsonl").unlink()
+            code, sortie = lancer(runs, sessions, "--tours")
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("transcription absente", sortie)
 
 
 if __name__ == "__main__":
