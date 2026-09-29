@@ -187,24 +187,27 @@ def plan_verifie(runs, run_id):
 
 
 def choisir_sessions(sessions, run_id, autres_runs, explicites):
-    if explicites:
-        for f in explicites:
-            if not os.path.isfile(f):
-                raise Refus(f"session désignée introuvable : {f}")
-        return sorted(explicites), "explicites (--session)"
-    fichiers = sorted(glob.glob(os.path.join(sessions, "*.jsonl")))
+    fichiers = sorted(explicites) if explicites else sorted(
+        glob.glob(os.path.join(sessions, "*.jsonl")))
     if not fichiers:
         raise Refus(f"aucune session dans {sessions}")
     etrangeres = []
     for f in fichiers:
-        corps = lire_octets(f).decode("utf-8", errors="replace")
-        if run_id not in corps or any(r in corps for r in autres_runs):
+        if not os.path.isfile(f):
+            raise Refus(f"session désignée introuvable : {f}")
+        vu_run, vu_autre = False, False
+        with open(f, encoding="utf-8", errors="replace") as contenu:
+            for ligne in contenu:
+                vu_run = vu_run or run_id in ligne
+                vu_autre = vu_autre or any(r in ligne for r in autres_runs)
+        if not vu_run or vu_autre:
             etrangeres.append(os.path.basename(f))
     if etrangeres:
         raise Refus(
-            f"session(s) étrangère(s) au run {run_id} dans {sessions} : {', '.join(etrangeres)} — "
-            "désigner les sessions du run avec --session")
-    return fichiers, "toutes les sessions du dossier, chacune attribuée au run"
+            f"session(s) étrangère(s) au run {run_id} : {', '.join(etrangeres)}")
+    mode = "explicites (--session)" if explicites else \
+        "toutes les sessions du dossier, chacune attribuée au run"
+    return fichiers, mode
 
 
 # ------------------------------------------------------------------ registre, coupure

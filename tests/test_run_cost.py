@@ -159,6 +159,10 @@ class EntreesAmbigues(unittest.TestCase):
             code, sortie = lancer(runs, sessions, "--session", sessions / "s.jsonl")
             self.assertEqual(code, 0, sortie)
             self.assertIn("s.jsonl", sortie.split("\n")[2])
+            code, sortie = lancer(
+                runs, sessions, "--session", sessions / "autre.jsonl")
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("autre.jsonl", sortie)
 
     def test_ligne_jsonl_illisible_refuse_avec_fichier_et_ligne(self):
         with tempfile.TemporaryDirectory() as t:
