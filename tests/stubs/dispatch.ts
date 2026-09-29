@@ -15,6 +15,8 @@ export interface AppelDispatch {
   task: string;
   seq?: number;
   cwd?: string;
+  /** P1-A : la commande de test que le runtime a portée à cet enfant, telle que reçue. */
+  testCommand?: string | null;
 }
 
 /** Les appels reçus, dans l'ordre. Le harnais le vide entre deux scénarios. */
@@ -35,13 +37,14 @@ export function reinitialiser(): void {
 export async function dispatch(
   agent: { name?: string },
   task: string,
-  opts: { ctx?: { cwd?: string }; seq?: number },
+  opts: { ctx?: { cwd?: string; testCommand?: string | null }; seq?: number },
 ): Promise<RunResult> {
   const appel: AppelDispatch = {
     agent: agent?.name ?? "?",
     task,
     seq: opts?.seq,
     cwd: opts?.ctx?.cwd,
+    testCommand: opts?.ctx?.testCommand,
   };
   APPELS.push(appel);
   /*

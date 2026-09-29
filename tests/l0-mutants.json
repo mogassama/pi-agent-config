@@ -1138,5 +1138,101 @@
     "file": "extensions/subagent/index.ts",
     "find": "  if (e.terminal?.etat === \"terminal\") {\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\"",
     "replace": "  if (false) { // mutant ITE-C-reprise-compaction (b) : la délégation du tour repris n'est plus refusée par P0-C\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\""
+  },
+  {
+    "test": "L0 REG ITE-P1A-extraction — la commande retenue est celle d'une exécution observée et réussie, appariée par son identifiant",
+    "file": "subagent-only/test-command.ts",
+    "find": "    if (succesReel(executeur, sortie)) retenue = meilleure(retenue, { commande: cmd, portee });",
+    "replace": "    if (succesReel(executeur, sortie)) retenue = { commande: cmd, portee }; // mutant ITE-P1A-extraction : une partielle remplace la complète"
+  },
+  {
+    "test": "L0 REG ITE-P1A-extraction — la commande retenue est celle d'une exécution observée et réussie, appariée par son identifiant",
+    "file": "subagent-only/test-command.ts",
+    "find": "    const cmd = commandes.get(e.toolCallId);\n    if (cmd === undefined || e.isError !== false) continue;",
+    "replace": "    const cmd = commandes.get(e.toolCallId) ?? [...commandes.values()].pop() ?? \"uv run pytest\"; // mutant ITE-P1A-extraction (b) : fin non appariée\n    if (e.isError !== false) continue;"
+  },
+  {
+    "test": "L0 REG ITE-P1A-succes-reel — un appel sans erreur dont la sortie ne montre pas un succès réel des tests ne porte rien",
+    "file": "subagent-only/test-command.ts",
+    "find": "    return /\\b\\d+ passed\\b/.test(resume) && !e.echec.test(resume);",
+    "replace": "    return /\\b\\d+ passed\\b/.test(resume); // mutant ITE-P1A-succes-reel : les échecs comptés n'annulent plus"
+  },
+  {
+    "test": "L0 REG ITE-P1A-masquage — une commande dont un enchaînement shell peut masquer l'échec n'est jamais portée",
+    "file": "subagent-only/test-command.ts",
+    "find": "    if (c === \"(\" || c === \")\" || c === \";\" || c === \"\\n\" || c === \"\\r\") return null;",
+    "replace": "    if (c === \"(\" || c === \")\") return null; // mutant ITE-P1A-masquage : `;` et saut de ligne acceptés"
+  },
+  {
+    "test": "L0 REG ITE-P1A-lane — une commande qui nomme un chemin de lane ou de contexte d'intégration n'est jamais portée",
+    "file": "subagent-only/test-command.ts",
+    "find": "  if (/pi-lanes|pi-integrations/.test(cmd)) return null;",
+    "replace": "  // mutant ITE-P1A-lane : chemin de lane accepté"
+  },
+  {
+    "test": "L0 REG ITE-P1A-illisible — une transcription ou un journal dont une ligne ne se lit pas ne porte rien, sans erreur",
+    "file": "subagent-only/test-command.ts",
+    "find": "    try {\n      e = JSON.parse(ligne) as Record<string, unknown>;\n    } catch {\n      return null;\n    }",
+    "replace": "    try {\n      e = JSON.parse(ligne) as Record<string, unknown>;\n    } catch {\n      continue; // mutant ITE-P1A-illisible : ligne illisible sautée\n    }"
+  },
+  {
+    "test": "L0 REG ITE-P1A-note — la note est portée aux seuls rôles qui écrivent, et absente sans commande",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "  const noteTest = !readOnly && ctx.testCommand ?",
+    "replace": "  const noteTest = ctx.testCommand ? // mutant ITE-P1A-note : portée aussi aux rôles en lecture\n   "
+  },
+  {
+    "test": "L0 REG ITE-P1A-transport — la commande observée chez un worker est inscrite au journal et portée au writer suivant du même run, jamais à un lecteur",
+    "file": "extensions/subagent/index.ts",
+    "find": "          const observee = commandeObservee(r.read_only, r.artifact);",
+    "replace": "          const observee = null; // mutant ITE-P1A-transport (a) : rien d'inscrit au journal"
+  },
+  {
+    "test": "L0 REG ITE-P1A-transport — la commande observée chez un worker est inscrite au journal et portée au writer suivant du même run, jamais à un lecteur",
+    "file": "extensions/subagent/index.ts",
+    "find": "                  testCommand: testCommandDuRun,",
+    "replace": "                  testCommand: null, // mutant ITE-P1A-transport (b) : rien de porté au writer suivant"
+  },
+  {
+    "test": "L0 REG ITE-P1A-lancement — l'exécuteur doit être réellement lancé par le dernier segment : un résumé affiché ou un mot de la ligne ne prouve rien",
+    "file": "subagent-only/test-command.ts",
+    "find": "  const lance = executeurLance(segments[segments.length - 1]);",
+    "replace": "  const lance = /pytest/.test(segments[segments.length - 1]) ? { executeur: EXECUTEURS[0], args: [] as string[] } : null; // mutant ITE-P1A-lancement (a) : un mot de la ligne suffit"
+  },
+  {
+    "test": "L0 REG ITE-P1A-portee — sélecteurs et cibles sont partiels, une portée inconnue est indéterminée, et aucune des deux ne supplante une suite complète établie",
+    "file": "subagent-only/test-command.ts",
+    "find": "  if (actuelle !== null && RANG[candidate.portee] < RANG[actuelle.portee]) return actuelle;",
+    "replace": "  if (false) return actuelle; // mutant ITE-P1A-portee (a) : la plus récente l'emporte toujours"
+  },
+  {
+    "test": "L0 REG ITE-P1A-portee — sélecteurs et cibles sont partiels, une portée inconnue est indéterminée, et aucune des deux ne supplante une suite complète établie",
+    "file": "subagent-only/test-command.ts",
+    "find": "      if (PYTEST_SELECTEURS.test(a)) return \"partielle\";",
+    "replace": "      // mutant ITE-P1A-portee (b) : les sélecteurs ne sont plus partiels"
+  },
+  {
+    "test": "L0 REG ITE-P1A-portee — sélecteurs et cibles sont partiels, une portée inconnue est indéterminée, et aucune des deux ne supplante une suite complète établie",
+    "file": "subagent-only/test-command.ts",
+    "find": "/\\bdeselected\\b/.test(PYTEST_RESUME",
+    "replace": "/\\bJAMAIS_mutant_ITE_P1A_portee_c\\b/.test(PYTEST_RESUME"
+  },
+  {
+    "test": "L0 REG ITE-P1A-portee — sélecteurs et cibles sont partiels, une portée inconnue est indéterminée, et aucune des deux ne supplante une suite complète établie",
+    "file": "subagent-only/test-command.ts",
+    "find": "RANG[inscrite as Portee] < RANG[a.portee]",
+    "replace": "false /* mutant ITE-P1A-portee (d) : la portée inscrite est ignorée */"
+  },
+  {
+    "test": "L0 REG ITE-P1A-lancement — l'exécuteur doit être réellement lancé par le dernier segment : un résumé affiché ou un mot de la ligne ne prouve rien",
+    "file": "subagent-only/test-command.ts",
+    "find": "    if (c === \"#\" && (courant === \"\" || /\\s$/.test(courant))) {\n      if (/[\\r\\n]/.test(cmd.slice(i + 1))) return null;\n      break;\n    }\n",
+    "replace": "    // mutant ITE-P1A-lancement (b) : le commentaire est lu comme exécuté\n"
+  },
+  {
+    "test": "L0 REG ITE-P1A-commentaire-saut — un commentaire suivi d'un saut de ligne ne masque pas la commande qui suit : rien n'est porté",
+    "file": "subagent-only/test-command.ts",
+    "find": "      if (/[\\r\\n]/.test(cmd.slice(i + 1))) return null;\n",
+    "replace": "      // mutant ITE-P1A-commentaire-saut : la suite après le saut de ligne est ignorée\n"
   }
 ]

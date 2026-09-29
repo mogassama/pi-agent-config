@@ -19,6 +19,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
+import { commandeDeTestDuFichierDetail, commandeEtablie, type CommandeRetenue } from "../../subagent-only/test-command.js";
 import { actionLines, countsLine, reviewRisks, riskLines } from "../../subagent-only/counts.js";
 import {
   continuationReturned,
@@ -3145,6 +3146,26 @@ interface DelegationRecord {
   changed_files: string[];
   artifact: string;
   failure: string | null;
+  /**
+   * P1-A : la commande de test que CETTE délégation a vue réussir, lue dans sa transcription par
+   * `commandeDeTestDuFichier` — jamais déclarée par l'enfant. `null` pour un rôle en lecture, sans
+   * transcription, ou sans succès réel établi. Calculée par `logDelegations` au moment d'écrire la
+   * ligne, depuis `read_only` et `artifact` : les appelants ne la fournissent pas.
+   */
+  test_command?: string | null;
+  /** P1-A : sa portée — complète, partielle ou indéterminée —, lue dans ses arguments et sa sortie. */
+  test_command_portee?: string | null;
+}
+
+/** P1-A : la commande observée dans la transcription d'un writer, rien pour un rôle en lecture. */
+function commandeObservee(readOnly: boolean, artifact: string | undefined): CommandeRetenue | null {
+  if (readOnly || !artifact || !artifact.endsWith(".json")) return null;
+  return commandeDeTestDuFichierDetail(artifact.replace(/\.json$/, ".jsonl"));
+}
+
+/** P1-A : la commande à porter au prochain writer de ce run, relue au journal durable. */
+function commandeDuRun(runId: string): string | null {
+  return commandeEtablie(join(process.cwd(), RUNS_DIR, `${runId}-delegations.jsonl`));
 }
 
 function logDelegations(runId: string, rows: readonly DelegationRecord[]): void {
@@ -3153,7 +3174,17 @@ function logDelegations(runId: string, rows: readonly DelegationRecord[]): void 
     mkdirSync(join(process.cwd(), RUNS_DIR), { recursive: true });
     appendFileSync(
       join(process.cwd(), RUNS_DIR, `${runId}-delegations.jsonl`),
-      rows.map((r) => JSON.stringify({ at: new Date().toISOString(), ...r })).join("\n") + "\n",
+      rows
+        .map((r) => {
+          const observee = commandeObservee(r.read_only, r.artifact);
+          return JSON.stringify({
+            at: new Date().toISOString(),
+            ...r,
+            test_command: observee?.commande ?? null,
+            test_command_portee: observee?.portee ?? null,
+          });
+        })
+        .join("\n") + "\n",
       "utf-8",
     );
   } catch {
@@ -4994,7 +5025,10 @@ export default function (pi: ExtensionAPI) {
                 const lane = ouverture.lane;
                 const tlAvant = arbreAvant(lane.cwd);
                 const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
-                  ctx: { agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd },
+                  ctx: {
+                    agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd,
+                    testCommand: isReadOnly(agent.tools) ? null : commandeDuRun(RUN_ID),
+                  },
                   seq,
                   signal: bothSignals(signal),
                   onProgress: publish,
@@ -5180,6 +5214,8 @@ export default function (pi: ExtensionAPI) {
             throw err;
           }
         }
+        // P1-A : lue au journal durable juste avant le départ, pour un writer seulement.
+        const testCommandDuRun = isReadOnly(agent.tools) ? null : commandeDuRun(RUN_ID);
         let results: RunResult[];
         try {
           const settled = await Promise.allSettled(
@@ -5199,6 +5235,7 @@ export default function (pi: ExtensionAPI) {
                    * un scout tourne, et rien ne pouvait l'affirmer.
                    */
                   cwd: cwdEnfant,
+                  testCommand: testCommandDuRun,
                 },
                 seq: seqs[i],
                 signal: bothSignals(signal),

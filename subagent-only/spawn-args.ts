@@ -23,6 +23,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { sliceSkillFile } from "./slicer.js";
+import { NOTE_COMMANDE_DE_TEST } from "./test-command.js";
 
 export interface BuildContext {
   /** ~/.pi/agent */
@@ -42,6 +43,11 @@ export interface BuildContext {
    * le fil ne l'était pas.
    */
   cwd?: string;
+  /**
+   * La commande de test établie dans ce run (lot ITE, P1-A), lue au journal des délégations par
+   * l'appelant. Portée aux seuls rôles qui écrivent ; absente, rien n'est ajouté.
+   */
+  testCommand?: string | null;
 }
 
 export interface SpawnPlan {
@@ -407,12 +413,15 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // model answers in prose. One run cost 5102 output tokens that way.
   // The note sits between the task and the closing instruction: after the work
   // it qualifies, before the line that must stay last.
-  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${CLOSING_INSTRUCTION}`);
-
   // Derived from the tool list, exactly like `isReadOnly` in the subagent
   // extension: a role added later is classified by what it can do, not by
   // having been remembered in a second place that can drift from the first.
   const readOnly = !agent.tools.includes("edit") && !agent.tools.includes("write");
+
+  // P1-A : la commande que le run a déjà vue réussir, pour un writer seulement — un rôle en lecture
+  // ne lance pas les tests, et lui la donner serait l'inviter à le faire.
+  const noteTest = !readOnly && ctx.testCommand ? `${NOTE_COMMANDE_DE_TEST}\`${ctx.testCommand}\`\n\n` : "";
+  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${CLOSING_INSTRUCTION}`);
 
   return {
     args,
