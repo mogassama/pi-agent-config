@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""
+run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée au plan terminal, et sa décomposition.
+
+  bin/run-cost <runs> <sessions> [--coupure auto|aucune|<ISO>] [--json <fichier>]
+
+  <runs>      le `.pi-subagent-runs` du dépôt, ou sa copie relevée
+  <sessions>  le dossier des sessions pi de l'orchestrateur pour ce dépôt (*.jsonl)
+  --coupure   auto (défaut) : l'instant où le plan gelé devient terminal, relu sur le registre des lanes
+              avec le prédicat de subagent-only/terminal.ts ; aucune : pas de coupure ; ou un instant ISO
+  --json      écrit aussi la grille en JSON
+
+Lot ITE, P1-0 (adjudication ITE Q-F, Q-N). Deux familles de nombres, et elles ne se mélangent jamais :
+
+  RELEVÉS     les tokens facturés, tels que pi les écrit : `usage` de chaque message assistant de
+              l'orchestrateur, `usage` de chaque artefact de délégation. Même méthode que la baseline
+              fonctionnelle (analyse-qd.py) : total = entrée + cache relu + cache écrit + sortie.
+              Coupés au plan terminal : AVANT (le coût d'obtenir le travail) et APRÈS (la dérive).
+  ESTIMATIONS marquées [estimé] : la part de chaque nature de résultat d'outil dans le contexte de
+              l'orchestrateur, en tokens ≈ caractères / 4, et sa résidence — chaque résultat est relu
+              à chaque appel suivant jusqu'à la prochaine compaction. Elles disent OÙ chercher ; elles
+              ne remplacent jamais un relevé.
+
+Une délégation compte AVANT si elle a commencé avant la coupure ; un appel de l'orchestrateur, si son
+horodatage la précède. Rien ici n'écrit, rien ne lance git. Code 0 ; 2 sur une précondition.
+"""
+import glob
+import hashlib
+import json
+import os
+import re
+import statistics as st
+import sys
+from datetime import datetime
+
+BUNDLE = {"INSTRUCTIONS.md", "ARCHITECTURE.md", "DESIGN.md", "CONVENTIONS.md"}
+
+
+def precondition(m):
+    print(f"PRÉCONDITION — {m}")
+    sys.exit(2)
+
+
+def jsonl(p):
+    out = []
+    with open(p, encoding="utf-8") as f:
+        for ligne in f:
+            ligne = ligne.strip()
+            if not ligne:
+                continue
+            try:
+                out.append(json.loads(ligne))
+            except ValueError:
+                out.append({"illisible": ligne[:200]})
+    return out
+
+
+def ts(x):
+    if isinstance(x, (int, float)):
+        return x / 1000.0
+    return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+
+
+def ctx(u):
+    return (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
+
+
+def tot(u):
+    return ctx(u) + (u.get("output") or 0)
+
+
+def med(v):
+    return int(st.median(v)) if v else 0
+
+
+def texte(contenu):
+    if isinstance(contenu, str):
+        return contenu
+    return "".join(x.get("text", "") for x in (contenu or []) if isinstance(x, dict))
+
+
+# ------------------------------------------------------------------ plan, registre, coupure
+
+def plan_gele(runs):
+    plans = sorted(glob.glob(os.path.join(runs, "*-plan.json")))
+    if not plans:
+        return None, [], False
+    doc = json.load(open(plans[-1], encoding="utf-8"))
+    unites = [str(u.get("id", "")).strip() for u in doc.get("work_units", []) if isinstance(u, dict)]
+    avec_du = any(isinstance(u, dict) and "design_update" in u for u in doc.get("work_units", []))
+    return os.path.basename(plans[-1])[: -len("-plan.json")], unites, avec_du
+
+
+def instant_terminal(runs, unites, avec_du):
+    """Le premier préfixe du registre où chaque unité porte un INTEGRATED final sur sa lane courante."""
+    evenements = []
+    for p in sorted(glob.glob(os.path.join(runs, "*-lanes.jsonl"))):
+        evenements += [e for e in jsonl(p) if "event" in e]
+    etats = {}
+    for e in evenements:
+        u, lane = e.get("work_unit"), e.get("lane") or f"v1:{e.get('work_unit')}"
+        cour = etats.get(u)
+        if e.get("event") == "OPENED":
+            etats[u] = {"lane": lane, "etat": "ouverte", "status": False}
+        elif e.get("event") == "INTEGRATED" and (cour is None or cour["lane"] == lane):
+            etats[u] = {"lane": lane, "etat": "integree" if not cour or cour["etat"] != "abandonnee" else "abandonnee",
+                        "status": e.get("status") is not None}
+        elif e.get("event") == "ABANDONED" and (cour is None or cour["lane"] == lane):
+            etats[u] = {"lane": lane, "etat": "abandonnee", "status": False}
+        if unites and all(etats.get(x, {}).get("etat") == "integree" and (etats[x]["status"] or not avec_du)
+                          for x in unites):
+            return e.get("at")
+    return None
+
+
+# ------------------------------------------------------------------ orchestrateur
+
+def classer(outil, args, racine_lanes=".git/pi-lanes"):
+    """La nature d'un résultat d'outil de l'orchestrateur."""
+    if outil == "task":
+        return "retour de délégation"
+    if outil == "bash":
+        return "bash"
+    if outil in ("read", "grep", "find", "ls"):
+        chemin = str((args or {}).get("path") or "")
+        if racine_lanes in chemin:
+            return f"{outil} · lane"
+        if ".pi-subagent-runs" in chemin:
+            return f"{outil} · registres/artefacts"
+        if os.path.basename(chemin) in BUNDLE:
+            return f"{outil} · bundle"
+        return f"{outil} · dépôt"
+    return outil or "?"
+
+
+def orchestrateur(sessions):
+    fichiers = sorted(glob.glob(os.path.join(sessions, "*.jsonl")))
+    if not fichiers:
+        precondition(f"aucune session dans {sessions}")
+    appels, resultats, compactions, args_par_id = [], [], [], {}
+    for p in fichiers:
+        for e in jsonl(p):
+            t = e.get("type")
+            if t == "compaction":
+                compactions.append(ts(e.get("timestamp")))
+            if t != "message":
+                continue
+            m = e.get("message") or {}
+            if m.get("role") == "assistant":
+                u = m.get("usage") or {}
+                if tot(u) > 0:
+                    sortie_texte = sum(len(x.get("text", "")) for x in m.get("content") or [] if isinstance(x, dict) and x.get("type") == "text")
+                    appels.append({"t": ts(e.get("timestamp")), "u": u, "texte": sortie_texte})
+                for x in m.get("content") or []:
+                    if isinstance(x, dict) and x.get("type") == "toolCall":
+                        args_par_id[x.get("id")] = (x.get("name"), x.get("arguments") or {})
+            elif m.get("role") == "toolResult":
+                nom, args = args_par_id.get(m.get("toolCallId"), (m.get("toolName"), {}))
+                corps = texte(m.get("content"))
+                resultats.append({
+                    "t": ts(e.get("timestamp")), "outil": nom or m.get("toolName"), "args": args,
+                    "chars": len(corps), "empreinte": hashlib.sha256(corps.encode("utf-8")).hexdigest()[:16],
+                    "chemin": str((args or {}).get("path") or ""),
+                })
+    return appels, resultats, sorted(compactions)
+
+
+def residence(r, appels, compactions):
+    """Combien d'appels suivants relisent ce résultat avant la prochaine compaction."""
+    fin = next((c for c in compactions if c > r["t"]), float("inf"))
+    return sum(1 for a in appels if r["t"] < a["t"] < fin)
+
+
+# ------------------------------------------------------------------ délégations
+
+def delegations(runs):
+    journal = []
+    for p in sorted(glob.glob(os.path.join(runs, "*-delegations.jsonl"))):
+        journal += [d for d in jsonl(p) if "seq" in d]
+    lignes = []
+    for d in journal:
+        art = os.path.join(runs, os.path.basename(d.get("artifact") or ""))
+        j = {}
+        if os.path.isfile(art):
+            try:
+                j = json.load(open(art, encoding="utf-8"))
+            except ValueError:
+                j = {}
+        u = j.get("usage") or {}
+        env = j.get("envelope") or {}
+        payload = env.get("payload") or {}
+        outils, lectures = {}, {}
+        tr = art[:-5] + ".jsonl" if art.endswith(".json") else ""
+        if tr and os.path.isfile(tr):
+            for e in jsonl(tr):
+                if e.get("type") == "tool_execution_start":
+                    outils[e.get("toolName")] = outils.get(e.get("toolName"), 0) + 1
+                    if e.get("toolName") == "read":
+                        c = str((e.get("args") or {}).get("path") or "")
+                        lectures[c] = lectures.get(c, 0) + 1
+        lignes.append({
+            "seq": d.get("seq"), "at": d.get("at"), "role": d.get("role"), "unite": d.get("work_unit"),
+            "tours": j.get("turns") or 0, "injecte": j.get("injectedTokens"), "duree_s": round((j.get("durationMs") or 0) / 1000),
+            "usage": {k: u.get(k) or 0 for k in ("input", "cacheRead", "cacheWrite", "output")}, "total": tot(u),
+            "part_cache": round((u.get("cacheRead") or 0) / tot(u), 3) if tot(u) else 0,
+            "verdict": (payload.get("verdict") or env.get("status")) if d.get("role") == "reviewer" else env.get("status"),
+            "constats": [f.get("severity") for f in payload.get("findings") or [] if isinstance(f, dict)],
+            "outils": outils, "relectures": {c: n for c, n in lectures.items() if n > 1},
+            "echec": d.get("failure"),
+        })
+    return lignes
+
+
+# ------------------------------------------------------------------ grille
+
+def main(argv):
+    if len(argv) < 3:
+        print(__doc__)
+        return 2
+    runs, sessions = argv[1], argv[2]
+    coupure_arg, sortie_json = "auto", None
+    if "--coupure" in argv:
+        coupure_arg = argv[argv.index("--coupure") + 1]
+    if "--json" in argv:
+        sortie_json = argv[argv.index("--json") + 1]
+    if not os.path.isdir(runs):
+        precondition(f"{runs} n'est pas un dossier")
+
+    run_id, unites, avec_du = plan_gele(runs)
+    if coupure_arg == "auto":
+        at = instant_terminal(runs, unites, avec_du)
+        coupure = ts(at) if at else None
+        source = f"plan terminal au registre ({at})" if at else "plan jamais terminal : pas de coupure"
+    elif coupure_arg == "aucune":
+        coupure, source = None, "aucune coupure demandée"
+    else:
+        coupure, source = ts(coupure_arg), f"coupure imposée {coupure_arg}"
+    avant = (lambda t: coupure is None or t < coupure)
+
+    appels, resultats, compactions = orchestrateur(sessions)
+    dl = delegations(runs)
+    grille = {"run": run_id, "unites": unites, "coupure": source}
+
+    print(f"run {run_id} · unités {' '.join(unites) or '—'} · design_update {'oui' if avec_du else 'non'}")
+    print(f"coupure : {source}")
+
+    # ---- relevés
+    def somme(lignes, cle):
+        return sum((x["u"].get(cle) or 0) for x in lignes)
+    o_av = [a for a in appels if avant(a["t"])]
+    o_ap = [a for a in appels if not avant(a["t"])]
+    d_av = [d for d in dl if avant(ts(d["at"]))]
+    d_ap = [d for d in dl if not avant(ts(d["at"]))]
+    o = lambda xs: sum(tot(a["u"]) for a in xs)
+    s = lambda xs: sum(d["total"] for d in xs)
+    print("\n== RELEVÉS — tokens facturés (entrée + cache relu + cache écrit + sortie)")
+    print(f"  {'':22} {'avant coupure':>14} {'après':>12} {'run entier':>12}")
+    print(f"  {'orchestrateur':22} {o(o_av):>14} {o(o_ap):>12} {o(appels):>12}")
+    roles = sorted({d["role"] for d in dl})
+    for r in roles:
+        fa = [d for d in d_av if d["role"] == r]; fp = [d for d in d_ap if d["role"] == r]
+        print(f"  {r + f' ({len(fa)}+{len(fp)})':22} {s(fa):>14} {s(fp):>12} {s(fa) + s(fp):>12}")
+    print(f"  {'sous-agents':22} {s(d_av):>14} {s(d_ap):>12} {s(dl):>12}")
+    print(f"  {'TOTAL':22} {o(o_av) + s(d_av):>14} {o(o_ap) + s(d_ap):>12} {o(appels) + s(dl):>12}")
+    grille["releves"] = {
+        "orchestrateur": {"avant": o(o_av), "apres": o(o_ap)},
+        "sous_agents": {"avant": s(d_av), "apres": s(d_ap)},
+        "par_role": {r: {"avant": s([d for d in d_av if d["role"] == r]), "apres": s([d for d in d_ap if d["role"] == r])} for r in roles},
+        "total": {"avant": o(o_av) + s(d_av), "apres": o(o_ap) + s(d_ap)},
+    }
+    print(f"\n  orchestrateur avant coupure : {len(o_av)} appels · entrée {somme(o_av, 'input')} · cache relu "
+          f"{somme(o_av, 'cacheRead')} · sortie {somme(o_av, 'output')} · contexte médian {med([ctx(a['u']) for a in o_av])}"
+          f" · pic {max([ctx(a['u']) for a in o_av] or [0])}")
+
+    # ---- orchestrateur : décomposition estimée
+    print("\n== ORCHESTRATEUR — décomposition du contexte [estimé : caractères / 4, avant coupure]")
+    natures = {}
+    for r in resultats:
+        if not avant(r["t"]):
+            continue
+        n = classer(r["outil"], r["args"])
+        est = r["chars"] // 4
+        rel = residence(r, [a for a in appels if avant(a["t"])], compactions)
+        x = natures.setdefault(n, {"n": 0, "tokens": 0, "residence": 0})
+        x["n"] += 1; x["tokens"] += est; x["residence"] += est * rel
+    total_res = sum(x["residence"] for x in natures.values()) or 1
+    print(f"  {'nature':28} {'n':>4} {'tokens':>9} {'relus ensuite':>14} {'part':>6}")
+    for n, x in sorted(natures.items(), key=lambda kv: -kv[1]["residence"]):
+        print(f"  {n:28} {x['n']:>4} {x['tokens']:>9} {x['residence']:>14} {100 * x['residence'] / total_res:>5.1f}%")
+    grille["orchestrateur_natures_estime"] = natures
+
+    lus = {}
+    for r in resultats:
+        if avant(r["t"]) and r["outil"] == "read":
+            lus.setdefault((r["chemin"], r["empreinte"]), []).append(r["chars"] // 4)
+    relus = {f"{c}": {"fois": len(v), "tokens_chaque": v[0]} for (c, _), v in lus.items() if len(v) > 1}
+    print(f"\n  relectures d'un contenu identique [estimé] : {len(relus)} chemin(s), "
+          f"{sum((v['fois'] - 1) * v['tokens_chaque'] for v in relus.values())} tokens relus pour rien à la lecture")
+    for c, v in sorted(relus.items(), key=lambda kv: -kv[1]["fois"] * kv[1]["tokens_chaque"])[:8]:
+        print(f"    {v['fois']}× {v['tokens_chaque']:>6}  {c}")
+    grille["relectures_estime"] = relus
+
+    sorties = sorted((a["u"].get("output") or 0 for a in o_av), reverse=True)
+    print(f"\n  verbosité : sortie totale {sum(sorties)} · médiane {med(sorties)} · 5 plus longues {sorties[:5]}"
+          f" · texte visible {sum(a['texte'] for a in o_av) // 4} [estimé]")
+
+    # ---- délégations
+    print("\n== DÉLÉGATIONS")
+    for d in dl:
+        cote = "avant" if avant(ts(d["at"])) else "APRÈS"
+        print(f"  #{d['seq']:<3} {cote:5} {d['role']:18} {str(d['unite']):5} tours {d['tours']:>3} · total {d['total']:>8}"
+              f" · cache relu {100 * d['part_cache']:>5.1f}% · injecté {d['injecte']} · {d['duree_s']} s"
+              f"{' · verdict ' + str(d['verdict']) if d['role'] == 'reviewer' else ''}"
+              f"{' · constats ' + ','.join(x for x in d['constats'] if x) if d['constats'] else ''}"
+              f"{' · ÉCHEC ' + str(d['echec']) if d['echec'] else ''}")
+        if d["outils"]:
+            print(f"        outils {d['outils']}" + (f" · relectures {d['relectures']}" if d["relectures"] else ""))
+    grille["delegations"] = dl
+
+    # ---- allers-retours par unité
+    print("\n== ALLERS-RETOURS PAR UNITÉ (avant coupure)")
+    par_unite = {}
+    for d in d_av:
+        if d["unite"]:
+            par_unite.setdefault(d["unite"], []).append(d)
+    for u, ds in sorted(par_unite.items()):
+        suite = " → ".join(f"{d['role'][0].upper()}#{d['seq']}" + (f"({d['verdict']})" if d["role"] == "reviewer" else "") for d in ds)
+        workers = sum(1 for d in ds if d["role"] == "worker")
+        print(f"  {u} : {suite} · workers {workers} · reprises {max(0, workers - 1)}")
+    grille["par_unite"] = {u: [d["seq"] for d in ds] for u, ds in par_unite.items()}
+
+    if sortie_json:
+        with open(sortie_json, "w", encoding="utf-8") as f:
+            json.dump(grille, f, ensure_ascii=False, indent=2)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

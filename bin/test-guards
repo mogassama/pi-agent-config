@@ -79,6 +79,9 @@ echo
 if command -v python3 >/dev/null 2>&1; then
   shadow_out="$(python3 tests/test_shadow.py 2>&1)" || status=1
   echo "$shadow_out" | tail -3
+  # bin/run-cost (lot ITE, P1-0) : la grille de coût coupée au plan terminal.
+  cout_out="$(python3 tests/test_run_cost.py 2>&1)" || status=1
+  echo "$cout_out" | tail -3
 else
   echo "python3 absent — tests/test_shadow.py has not run, and the shadow reading" >&2
   echo "is the one component of this repository that fails by looking right" >&2
