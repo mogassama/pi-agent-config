@@ -628,3 +628,59 @@ export function decideRoleGuard(
 
   return null;
 }
+
+// ------------------------------------------------------------------ regroupement (lot ITE, P1-B)
+
+/**
+ * Ce qu'un tour d'enfant a appelé, tel que role-guard l'a vu passer (`tool_call`), et si un de ses
+ * `edit` est revenu avec un retour ruff de `pi-lint-gate` — la chaîne des `tool_result` de pi 0.86
+ * transmet le contenu modifié d'extension en extension, et role-guard, ajouté en dernier par
+ * `buildSpawnPlan`, voit la note.
+ */
+export interface TourObserve {
+  appels: Array<{ outil: string; chemin?: string }>;
+  ruff?: boolean;
+}
+
+/**
+ * La note de regroupement à ajouter au résultat de `appel`, ou `null` (plan P1 v2 gelé, `fbf65045`).
+ *
+ * Le constat : sur QD-P0 et QD, un worker a enchaîné jusqu'à huit tours à un seul `edit` ; chaque
+ * tour relit tout le contexte accumulé.
+ * La consigne est dans le prompt du rôle ; ceci la rappelle là où l'écart se voit. Jamais un refus :
+ * refuser coûterait lui-même un tour.
+ *
+ *   P1-B, rôle qui écrit : au deuxième tour consécutif qui ne porte qu'un `edit` sur le même fichier.
+ *        Un tour qui suit un retour ruff ne compte pas : corriger ce que le plancher de vérification a
+ *        signalé prime, et c'est un tour qu'on ne pouvait pas grouper d'avance.
+ *
+ * `historique` : les tours clos, dans l'ordre ; `courant` : les appels du tour en cours, tous
+ * pré-examinés avant la première exécution (pi 0.86 exécute les appels d'un tour après leur
+ * `tool_call`). `dejaNote` : une note a déjà été ajoutée dans ce tour.
+ */
+export function noteDeRegroupement(
+  ctx: { role: string; readOnly: boolean },
+  historique: readonly TourObserve[],
+  courant: TourObserve,
+  appel: { outil: string; chemin?: string },
+  dejaNote: boolean,
+): string | null {
+  if (dejaNote) return null;
+  const unSeulEdit = (t: TourObserve, chemin: string) =>
+    t.appels.length === 1 && t.appels[0].outil === "edit" && t.appels[0].chemin === chemin;
+
+  if (!ctx.readOnly && appel.outil === "edit" && appel.chemin) {
+    if (!unSeulEdit(courant, appel.chemin)) return null;
+    let n = 1;
+    for (let i = historique.length - 1; i >= 0; i--) {
+      const t = historique[i];
+      if (!unSeulEdit(t, appel.chemin) || t.ruff) break;
+      n++;
+    }
+    return n >= 2
+      ? `${n} modifications de ${appel.chemin} en ${n} tours : grouper les suivantes en un seul appel`
+      : null;
+  }
+
+  return null;
+}

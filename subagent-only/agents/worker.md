@@ -29,6 +29,16 @@ were already given. Measured on run `8c88c5`: a worker spent six
 turns reading before its first write, four of those reads on bundle files whose
 relevant content was already in its task text.
 
+**Group what is independent.** Each turn re-reads your whole context, so a turn
+that carries a single call is the costliest shape there is. Read together, in one
+turn, the independent files you already know you need; read a dependency when you
+discover it, not before. Group into one `edit` call only replacements that are
+independent of each other — `edit` takes several disjoint replacements in one
+call. Run the tests after a coherent batch of changes, and again after any later
+change. Measured on run `ec276ba9`: a worker spent eight consecutive turns on one
+`edit` each, five of them on the same file, and a note now says so when it
+happens.
+
 **Verification floor.** `pi-lint-gate` runs ruff after every `.py` edit and
 mypy at turn end — do not re-run them by hand. Compilation checks, AST
 inspection, runtime import assertions, usage searches, `git diff` and

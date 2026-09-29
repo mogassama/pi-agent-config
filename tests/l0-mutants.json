@@ -1234,5 +1234,47 @@
     "file": "subagent-only/test-command.ts",
     "find": "      if (/[\\r\\n]/.test(cmd.slice(i + 1))) return null;\n",
     "replace": "      // mutant ITE-P1A-commentaire-saut : la suite après le saut de ligne est ignorée\n"
+  },
+  {
+    "test": "L0 REG ITE-P1B-note — un rôle qui écrit reçoit la note au deuxième tour consécutif à un seul edit du même fichier",
+    "file": "subagent-only/role-rules.ts",
+    "find": "      ? `${n} modifications de ${appel.chemin} en ${n} tours : grouper les suivantes en un seul appel`",
+    "replace": "      ? (n >= 3 ? `${n} modifications de ${appel.chemin} en ${n} tours : grouper les suivantes en un seul appel` : null) // mutant ITE-P1B-note : seulement à partir du troisième tour"
+  },
+  {
+    "test": "L0 REG ITE-P1B-note — un rôle qui écrit reçoit la note au deuxième tour consécutif à un seul edit du même fichier",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (!ctx.readOnly && appel.outil === \"edit\" && appel.chemin) {",
+    "replace": "  if (appel.outil === \"edit\" && appel.chemin) { // mutant ITE-P1B-note (b) : aussi pour un rôle en lecture"
+  },
+  {
+    "test": "L0 REG ITE-P1B-ruff — un edit qui suit un retour ruff ne déclenche pas la note : le plancher de vérification prime",
+    "file": "subagent-only/role-rules.ts",
+    "find": "      if (!unSeulEdit(t, appel.chemin) || t.ruff) break;",
+    "replace": "      if (!unSeulEdit(t, appel.chemin)) break; // mutant ITE-P1B-ruff : le retour ruff est ignoré"
+  },
+  {
+    "test": "L0 REG ITE-P1B-branchement — role-guard ajoute la note P1-B au résultat de l'edit, après le contenu déjà présent, sans refus, et pas après un retour ruff",
+    "file": "subagent-only/role-guard.ts",
+    "find": "    return { content: [...contenu, { type: \"text\" as const, text: `\\n\\n${note}` }] };",
+    "replace": "    return undefined; // mutant ITE-P1B-branchement (a) : la note n'est pas ajoutée"
+  },
+  {
+    "test": "L0 REG ITE-P1B-branchement — role-guard ajoute la note P1-B au résultat de l'edit, après le contenu déjà présent, sans refus, et pas après un retour ruff",
+    "file": "subagent-only/role-guard.ts",
+    "find": "    historique.push(courant);\n",
+    "replace": "    // mutant ITE-P1B-branchement (b) : les tours ne sont pas retenus\n"
+  },
+  {
+    "test": "L0 REG ITE-P1B-branchement — role-guard ajoute la note P1-B au résultat de l'edit, après le contenu déjà présent, sans refus, et pas après un retour ruff",
+    "file": "subagent-only/role-guard.ts",
+    "find": "      courant.ruff = true;",
+    "replace": "      void 0; // mutant ITE-P1B-branchement (c) : le retour ruff n'est pas vu"
+  },
+  {
+    "test": "L0 REG ITE-P1B-une-par-tour — une seule note P1-B par tour",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (dejaNote) return null;\n",
+    "replace": "  // mutant ITE-P1B-une-par-tour : plusieurs notes par tour\n"
   }
 ]

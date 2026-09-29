@@ -28,17 +28,28 @@
  * a judgement call — whether a search is worth delegating, whether a fork is
  * durable — stays in the prompts.
  *
+ * One reminder, and only a reminder (lot ITE, P1-B): grouping independent edits IS
+ * a judgement call, so it lives in the worker prompt. What is detectable is the
+ * shape that contradicts it — the same file edited alone turn after turn — and
+ * there a note is appended to the call's result. Never a block: a refusal costs a
+ * turn.
+ *
  * The predicates themselves are in `role-rules.ts`, which imports nothing from
  * pi and is therefore unit-testable. This file is the wiring.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { bundleRoot, decideRoleGuard } from "./role-rules.ts";
+import { bundleRoot, decideRoleGuard, noteDeRegroupement, type TourObserve } from "./role-rules.ts";
 
 export default function (pi: ExtensionAPI): void {
   const role = process.env.PI_SUBAGENT_ROLE ?? "";
   const readOnly = process.env.PI_SUBAGENT_READONLY === "1";
   const root = bundleRoot(process.cwd());
+  // P1-B : les tours clos, le tour en cours, et une note au plus par tour.
+  const historique: TourObserve[] = [];
+  let courant: TourObserve = { appels: [] };
+  let noteDonnee = false;
+  const appelsParId = new Map<string, { outil: string; chemin?: string }>();
 
   pi.on("tool_call", async (event) => {
     /*
@@ -62,12 +73,41 @@ export default function (pi: ExtensionAPI): void {
     // `cwd` is read here, at each event, never frozen at load: it is the directory a
     // relative destination is written from, and the only value that says so is the
     // process's own.
-    const reason = decideRoleGuard(kind, (event.input ?? {}) as Record<string, string>, {
+    const input = (event.input ?? {}) as Record<string, string>;
+    const vu = {
+      outil: typeof (event as { toolName?: unknown }).toolName === "string" ? (event as { toolName: string }).toolName : kind,
+      chemin: typeof input.path === "string" ? input.path : undefined,
+    };
+    courant.appels.push(vu);
+    const id = (event as { toolCallId?: unknown }).toolCallId;
+    if (typeof id === "string") appelsParId.set(id, vu);
+    const reason = decideRoleGuard(kind, input, {
       root,
       cwd: process.cwd(),
       readOnly,
       role,
     });
     return reason ? { block: true, reason } : undefined;
+  });
+
+  pi.on("tool_result", async (event) => {
+    const e = event as { toolCallId?: unknown; content?: Array<{ type: string; text?: string }> };
+    const vu = typeof e.toolCallId === "string" ? appelsParId.get(e.toolCallId) : undefined;
+    if (!vu) return undefined;
+    const contenu = e.content ?? [];
+    if (vu.outil === "edit" && contenu.some((c) => typeof c.text === "string" && c.text.includes("--- ruff ("))) {
+      courant.ruff = true;
+    }
+    const note = noteDeRegroupement({ role, readOnly }, historique, courant, vu, noteDonnee);
+    if (!note) return undefined;
+    noteDonnee = true;
+    return { content: [...contenu, { type: "text" as const, text: `\n\n${note}` }] };
+  });
+
+  pi.on("turn_end", async () => {
+    historique.push(courant);
+    courant = { appels: [] };
+    noteDonnee = false;
+    appelsParId.clear();
   });
 }

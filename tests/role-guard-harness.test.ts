@@ -29,8 +29,10 @@ function brancher(env: { role?: string; readOnly?: boolean }) {
 
   let handler: ((event: unknown) => Promise<Decision>) | undefined;
   const pi = {
-    on(_event: string, h: (...args: unknown[]) => unknown) {
-      handler = h as (event: unknown) => Promise<Decision>;
+    // Le hook qui décide est `tool_call`. role-guard s'abonne aussi à `tool_result` et `turn_end`
+    // (lot ITE, P1-B et P1-C) : garder le dernier abonnement aurait éprouvé le mauvais handler.
+    on(event: string, h: (...args: unknown[]) => unknown) {
+      if (event === "tool_call") handler = h as (event: unknown) => Promise<Decision>;
     },
     registerTool() {},
   };
