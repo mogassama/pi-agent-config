@@ -2,13 +2,25 @@
 """
 run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée au plan terminal, et sa décomposition.
 
-  bin/run-cost <runs> <sessions> [--coupure auto|aucune|<ISO>] [--json <fichier>]
+  bin/run-cost <runs> <sessions> [--run <runId>] [--session <fichier>]… [--coupure auto|aucune|<ISO>]
+               [--json <fichier>]
 
   <runs>      le `.pi-subagent-runs` du dépôt, ou sa copie relevée
   <sessions>  le dossier des sessions pi de l'orchestrateur pour ce dépôt (*.jsonl)
+  --run       le run retenu, quand le dossier en contient plusieurs
+  --session   une session retenue (répétable) ; sinon toutes celles du dossier, qui doivent toutes
+              appartenir au run
   --coupure   auto (défaut) : l'instant où le plan gelé devient terminal, relu sur le registre des lanes
               avec le prédicat de subagent-only/terminal.ts ; aucune : pas de coupure ; ou un instant ISO
   --json      écrit aussi la grille en JSON
+
+Entrées sans ambiguïté (adjudication ITE-1, P1-0). Sans sélection explicite : exactement un run dans
+<runs>, son plan `<runId>-plan.json`, et des sessions qui mentionnent toutes ce run et lui seul ;
+sinon PRÉCONDITION nommée. Jamais « le dernier plan », jamais l'agrégat des registres de plusieurs
+runs ni de toutes les sessions d'un dossier. L'empreinte du plan est vérifiée contre le `planHash`
+du manifeste actif ou archivé du run. Une ligne JSONL illisible dans un registre ou une session qui
+sert aux totaux refuse, fichier et ligne nommés — elle n'est jamais omise. La sortie dit le run, le
+plan et les sessions retenus, et comment ils l'ont été.
 
 Lot ITE, P1-0 (adjudication ITE Q-F, Q-N). Deux familles de nombres, et elles ne se mélangent jamais :
 
@@ -36,13 +48,41 @@ from datetime import datetime
 BUNDLE = {"INSTRUCTIONS.md", "ARCHITECTURE.md", "DESIGN.md", "CONVENTIONS.md"}
 
 
-def precondition(m):
-    print(f"PRÉCONDITION — {m}")
-    sys.exit(2)
+RUN_ID = re.compile(r"^([0-9a-f]{16})-")
+
+
+def lire_json(p):
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def lire_octets(p):
+    with open(p, "rb") as f:
+        return f.read()
+
+
+class Refus(Exception):
+    """Une précondition : le relevé ne se fait pas, et la raison est nommée."""
 
 
 def jsonl(p):
+    """Un JSONL qui sert aux totaux : une ligne illisible refuse, fichier et ligne nommés."""
     out = []
+    with open(p, encoding="utf-8") as f:
+        for n, ligne in enumerate(f, 1):
+            ligne = ligne.strip()
+            if not ligne:
+                continue
+            try:
+                out.append(json.loads(ligne))
+            except ValueError:
+                raise Refus(f"ligne JSONL illisible : {p}:{n}")
+    return out
+
+
+def jsonl_estime(p):
+    """Un transcript d'enfant, lu pour les seules estimations : une ligne illisible y est comptée, pas refusée."""
+    out, illisibles = [], 0
     with open(p, encoding="utf-8") as f:
         for ligne in f:
             ligne = ligne.strip()
@@ -51,8 +91,8 @@ def jsonl(p):
             try:
                 out.append(json.loads(ligne))
             except ValueError:
-                out.append({"illisible": ligne[:200]})
-    return out
+                illisibles += 1
+    return out, illisibles
 
 
 def ts(x):
@@ -79,23 +119,98 @@ def texte(contenu):
     return "".join(x.get("text", "") for x in (contenu or []) if isinstance(x, dict))
 
 
-# ------------------------------------------------------------------ plan, registre, coupure
+# ------------------------------------------------------------------ sélection : run, plan, sessions
 
-def plan_gele(runs):
-    plans = sorted(glob.glob(os.path.join(runs, "*-plan.json")))
-    if not plans:
-        return None, [], False
-    doc = json.load(open(plans[-1], encoding="utf-8"))
+def runs_du_dossier(runs):
+    """Les runs dont le dossier porte une trace : fichiers préfixés, manifeste actif."""
+    ids = set()
+    for nom in os.listdir(runs):
+        m = RUN_ID.match(nom)
+        if m:
+            ids.add(m.group(1))
+    actif = os.path.join(runs, "active-run.json")
+    if os.path.isfile(actif):
+        try:
+            rid = lire_json(actif).get("runId")
+        except ValueError:
+            raise Refus(f"manifeste illisible : {actif}")
+        if isinstance(rid, str) and re.fullmatch(r"[0-9a-f]{16}", rid):
+            ids.add(rid)
+    return sorted(ids)
+
+
+def choisir_run(runs, explicite):
+    ids = runs_du_dossier(runs)
+    if explicite:
+        if explicite not in ids:
+            raise Refus(f"le run {explicite} n'a aucune trace dans {runs} (runs présents : {', '.join(ids) or 'aucun'})")
+        return explicite, "explicite (--run)"
+    if len(ids) != 1:
+        raise Refus(f"{len(ids)} runs dans {runs} ({', '.join(ids) or 'aucun'}) : en désigner un avec --run")
+    return ids[0], "seul run du dossier"
+
+
+def manifeste_du_run(runs, run_id):
+    actif = os.path.join(runs, "active-run.json")
+    archive = os.path.join(runs, f"{run_id}-run.json")
+    for chemin, nature in ((actif, "actif"), (archive, "archivé")):
+        if os.path.isfile(chemin):
+            try:
+                m = lire_json(chemin)
+            except ValueError:
+                raise Refus(f"manifeste illisible : {chemin}")
+            if m.get("runId") == run_id:
+                return m, nature
+    raise Refus(f"aucun manifeste, actif ou archivé, pour {run_id} dans {runs}")
+
+
+def plan_verifie(runs, run_id):
+    """Le plan gelé du run, empreinte vérifiée contre le planHash de son manifeste."""
+    manifeste, nature = manifeste_du_run(runs, run_id)
+    chemin = os.path.join(runs, f"{run_id}-plan.json")
+    if not os.path.isfile(chemin):
+        raise Refus(f"plan gelé absent : {chemin}")
+    brut = lire_octets(chemin)
+    empreinte = hashlib.sha256(brut).hexdigest()[:16]
+    attendu = manifeste.get("planHash")
+    if not attendu:
+        raise Refus(f"le manifeste {nature} de {run_id} n'attache aucun plan (planHash absent)")
+    if empreinte != attendu:
+        raise Refus(f"plan {chemin} : empreinte {empreinte} ≠ planHash {attendu} du manifeste {nature}")
+    try:
+        doc = json.loads(brut.decode("utf-8"))
+    except ValueError:
+        raise Refus(f"plan illisible : {chemin}")
     unites = [str(u.get("id", "")).strip() for u in doc.get("work_units", []) if isinstance(u, dict)]
     avec_du = any(isinstance(u, dict) and "design_update" in u for u in doc.get("work_units", []))
-    return os.path.basename(plans[-1])[: -len("-plan.json")], unites, avec_du
+    return unites, avec_du, f"{os.path.basename(chemin)} · planHash {attendu} vérifié (manifeste {nature})"
 
 
-def instant_terminal(runs, unites, avec_du):
+def choisir_sessions(sessions, run_id, autres_runs, explicites):
+    if explicites:
+        for f in explicites:
+            if not os.path.isfile(f):
+                raise Refus(f"session désignée introuvable : {f}")
+        return sorted(explicites), "explicites (--session)"
+    fichiers = sorted(glob.glob(os.path.join(sessions, "*.jsonl")))
+    if not fichiers:
+        raise Refus(f"aucune session dans {sessions}")
+    etrangeres = []
+    for f in fichiers:
+        corps = lire_octets(f).decode("utf-8", errors="replace")
+        if run_id not in corps or any(r in corps for r in autres_runs):
+            etrangeres.append(os.path.basename(f))
+    if etrangeres:
+        raise Refus(
+            f"session(s) étrangère(s) au run {run_id} dans {sessions} : {', '.join(etrangeres)} — "
+            "désigner les sessions du run avec --session")
+    return fichiers, "toutes les sessions du dossier, chacune attribuée au run"
+
+
+# ------------------------------------------------------------------ registre, coupure
+
+def instant_terminal(evenements, unites, avec_du):
     """Le premier préfixe du registre où chaque unité porte un INTEGRATED final sur sa lane courante."""
-    evenements = []
-    for p in sorted(glob.glob(os.path.join(runs, "*-lanes.jsonl"))):
-        evenements += [e for e in jsonl(p) if "event" in e]
     etats = {}
     for e in evenements:
         u, lane = e.get("work_unit"), e.get("lane") or f"v1:{e.get('work_unit')}"
@@ -133,10 +248,7 @@ def classer(outil, args, racine_lanes=".git/pi-lanes"):
     return outil or "?"
 
 
-def orchestrateur(sessions):
-    fichiers = sorted(glob.glob(os.path.join(sessions, "*.jsonl")))
-    if not fichiers:
-        precondition(f"aucune session dans {sessions}")
+def orchestrateur(fichiers):
     appels, resultats, compactions, args_par_id = [], [], [], {}
     for p in fichiers:
         for e in jsonl(p):
@@ -173,26 +285,29 @@ def residence(r, appels, compactions):
 
 # ------------------------------------------------------------------ délégations
 
-def delegations(runs):
-    journal = []
-    for p in sorted(glob.glob(os.path.join(runs, "*-delegations.jsonl"))):
-        journal += [d for d in jsonl(p) if "seq" in d]
+def delegations(runs, run_id):
+    chemin = os.path.join(runs, f"{run_id}-delegations.jsonl")
+    journal = [d for d in jsonl(chemin) if "seq" in d] if os.path.isfile(chemin) else []
     lignes = []
     for d in journal:
-        art = os.path.join(runs, os.path.basename(d.get("artifact") or ""))
-        j = {}
-        if os.path.isfile(art):
-            try:
-                j = json.load(open(art, encoding="utf-8"))
-            except ValueError:
-                j = {}
+        nom = os.path.basename(d.get("artifact") or "")
+        if not nom.startswith(f"{run_id}-"):
+            raise Refus(f"{chemin} : délégation #{d.get('seq')} pointe un artefact d'un autre run ({nom})")
+        art = os.path.join(runs, nom)
+        if not os.path.isfile(art):
+            raise Refus(f"artefact absent : {art} (délégation #{d.get('seq')})")
+        try:
+            j = lire_json(art)
+        except ValueError:
+            raise Refus(f"artefact illisible : {art}")
         u = j.get("usage") or {}
         env = j.get("envelope") or {}
         payload = env.get("payload") or {}
         outils, lectures = {}, {}
         tr = art[:-5] + ".jsonl" if art.endswith(".json") else ""
         if tr and os.path.isfile(tr):
-            for e in jsonl(tr):
+            evenements, _ = jsonl_estime(tr)
+            for e in evenements:
                 if e.get("type") == "tool_execution_start":
                     outils[e.get("toolName")] = outils.get(e.get("toolName"), 0) + 1
                     if e.get("toolName") == "read":
@@ -214,21 +329,45 @@ def delegations(runs):
 # ------------------------------------------------------------------ grille
 
 def main(argv):
+    try:
+        return analyser(argv)
+    except Refus as r:
+        print(f"PRÉCONDITION — {r}")
+        return 2
+
+
+def analyser(argv):
     if len(argv) < 3:
         print(__doc__)
         return 2
     runs, sessions = argv[1], argv[2]
-    coupure_arg, sortie_json = "auto", None
-    if "--coupure" in argv:
-        coupure_arg = argv[argv.index("--coupure") + 1]
-    if "--json" in argv:
-        sortie_json = argv[argv.index("--json") + 1]
+    coupure_arg, sortie_json, run_explicite, sessions_explicites = "auto", None, None, []
+    i = 3
+    while i < len(argv):
+        if argv[i] in ("--coupure", "--json", "--run", "--session") and i + 1 < len(argv):
+            cle, valeur = argv[i], argv[i + 1]
+            if cle == "--coupure":
+                coupure_arg = valeur
+            elif cle == "--json":
+                sortie_json = valeur
+            elif cle == "--run":
+                run_explicite = valeur
+            else:
+                sessions_explicites.append(valeur)
+            i += 2
+        else:
+            raise Refus(f"argument inconnu ou incomplet : {argv[i]}")
     if not os.path.isdir(runs):
-        precondition(f"{runs} n'est pas un dossier")
+        raise Refus(f"{runs} n'est pas un dossier")
 
-    run_id, unites, avec_du = plan_gele(runs)
+    run_id, comment_run = choisir_run(runs, run_explicite)
+    unites, avec_du, plan_dit = plan_verifie(runs, run_id)
+    autres = [r for r in runs_du_dossier(runs) if r != run_id]
+    fichiers_sessions, comment_sessions = choisir_sessions(sessions, run_id, autres, sessions_explicites)
+    lanes = os.path.join(runs, f"{run_id}-lanes.jsonl")
+    evenements = [e for e in jsonl(lanes) if "event" in e] if os.path.isfile(lanes) else []
     if coupure_arg == "auto":
-        at = instant_terminal(runs, unites, avec_du)
+        at = instant_terminal(evenements, unites, avec_du)
         coupure = ts(at) if at else None
         source = f"plan terminal au registre ({at})" if at else "plan jamais terminal : pas de coupure"
     elif coupure_arg == "aucune":
@@ -237,11 +376,15 @@ def main(argv):
         coupure, source = ts(coupure_arg), f"coupure imposée {coupure_arg}"
     avant = (lambda t: coupure is None or t < coupure)
 
-    appels, resultats, compactions = orchestrateur(sessions)
-    dl = delegations(runs)
-    grille = {"run": run_id, "unites": unites, "coupure": source}
+    appels, resultats, compactions = orchestrateur(fichiers_sessions)
+    dl = delegations(runs, run_id)
+    grille = {"run": run_id, "selection_run": comment_run, "plan": plan_dit,
+              "sessions": [os.path.basename(f) for f in fichiers_sessions], "selection_sessions": comment_sessions,
+              "unites": unites, "coupure": source}
 
-    print(f"run {run_id} · unités {' '.join(unites) or '—'} · design_update {'oui' if avec_du else 'non'}")
+    print(f"run {run_id} ({comment_run}) · unités {' '.join(unites) or '—'} · design_update {'oui' if avec_du else 'non'}")
+    print(f"plan : {plan_dit}")
+    print(f"sessions ({comment_sessions}) : {', '.join(os.path.basename(f) for f in fichiers_sessions)}")
     print(f"coupure : {source}")
 
     # ---- relevés

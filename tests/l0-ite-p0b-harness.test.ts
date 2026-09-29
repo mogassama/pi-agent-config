@@ -12,7 +12,8 @@
  *                avant l'appel, sans blocage durable — ITE-B-capacite
  *   effet        chaque composante de l'empreinte mord seule ; un écart pose le blocage durable et
  *                sa preuve, même si l'outil échoue — ITE-B-effet
- *   exclusion    primitive et appel observé frères, dans les deux ordres — ITE-B-exclusion
+ *   exclusion    un seul appel non exempté à la fois, primitive comprise, dans tous les ordres —
+ *                ITE-B-exclusion
  *   provenance   un outil de lecture redéfini est observé — ITE-B-provenance
  *   sonde        un relevé impossible refuse avant, bloque après — ITE-B-sonde
  *   plan         le plan s'écrit avant son attachement, jamais après — ITE-B-plan-attache
@@ -23,8 +24,8 @@
 import { test, type TestContext } from "node:test";
 import { execFileSync } from "node:child_process";
 import {
-  appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync,
-  symlinkSync, utimesSync, writeFileSync,
+  appendFileSync, closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync,
+  renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +146,26 @@ regressionCorrigee("ITE-B-effet", "tout appel observé qui change l'état du pro
     ["ligne ajoutée au registre des lanes", (h) => () =>
       appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), `${JSON.stringify({ event: "ABANDONED" })}\n`)],
     ["modifie puis échoue", (h) => () => writeFileSync(join(h.root, "src", "b.py"), "b = 'echec'\n"), true],
+    /*
+     * Adjudication ITE-1 (E7) : un registre de plus de 1 Mio réécrit à taille égale, date rétablie.
+     * Le journal des délégations reçoit, AVANT l'appel, une ligne JSON valide de 1,2 Mio ; pendant
+     * l'appel, un octet de cette ligne change en place, puis `atime`/`mtime` sont rétablis.
+     */
+    ["registre > 1 Mio réécrit à taille égale, date rétablie", (h) => {
+      const journal = join(h.runDir, `${h.runId}-delegations.jsonl`);
+      appendFileSync(journal, `${JSON.stringify({ remplissage: "x".repeat(1_200_000) })}\n`);
+      // Une date à la seconde entière, posée avant l'appel : elle se rétablit exactement.
+      const date = Math.floor(Date.now() / 1000) - 3600;
+      utimesSync(journal, date, date);
+      return () => {
+        const avant = statSync(journal);
+        const fd = openSync(journal, "r+");
+        try { writeSync(fd, "y", avant.size - 20); } finally { closeSync(fd); }
+        utimesSync(journal, date, date);
+        const apres = statSync(journal);
+        precondition(apres.size === avant.size && apres.mtimeMs === avant.mtimeMs, "taille et date doivent être rétablies");
+      };
+    }],
   ];
   const manques: string[] = [];
   let n = 0;
@@ -168,23 +189,56 @@ regressionCorrigee("ITE-B-effet", "tout appel observé qui change l'état du pro
 
 // ================================================================== exclusion
 
-regressionCorrigee("ITE-B-exclusion", "une primitive et un appel observé frères ne s'exécutent pas ensemble, dans les deux ordres", async () => {
+regressionCorrigee("ITE-B-exclusion", "un seul appel non exempté à la fois, délégation comprise, dans tous les ordres", async () => {
+  const constats: string[] = [];
+  // 1. Une écriture licite du plan avant attachement, avec un outil frère : le frère est refusé, et
+  //    l'écriture du plan seule ne provoque aucune fausse attribution.
+  const neuf = await monter();
+  try {
+    const plan = join(neuf.runDir, `${neuf.runId}-plan.json`);
+    const contenu = readFileSync(plan, "utf-8");
+    const p1 = (await neuf.emettre("tool_call", { toolName: "write", toolCallId: "P1", input: { path: plan, content: contenu } })) as Decision;
+    const p2 = (await neuf.emettre("tool_call", { toolName: "bash", toolCallId: "P2", input: { command: "ls" } })) as Decision;
+    writeFileSync(plan, `${contenu}\n`);
+    await neuf.emettre("tool_result", { toolName: "write", toolCallId: "P1", content: [] });
+    await neuf.emettre("tool_execution_end", { toolName: "bash", toolCallId: "P2" });
+    if (p1?.block === true || p2?.block !== true || bloque(neuf) || preuves(neuf).length !== 0) {
+      constats.push(`plan + frère : plan ${JSON.stringify(p1)}, frère ${JSON.stringify(p2)}, bloqué ${bloque(neuf)}`);
+    }
+  } finally { neuf.fin(); }
+
   const { h } = await monterAvecLane();
   try {
-    const t1 = (await h.emettre("tool_call", { toolName: "task", toolCallId: "T1", input: {} })) as Decision;
-    const b1 = (await h.emettre("tool_call", { toolName: "bash", toolCallId: "B1", input: { command: "ls" } })) as Decision;
-    await h.emettre("tool_result", { toolName: "task", toolCallId: "T1", content: [] });
-    const b2 = (await h.emettre("tool_call", { toolName: "bash", toolCallId: "B2", input: { command: "ls" } })) as Decision;
-    const t2 = (await h.emettre("tool_call", { toolName: "task", toolCallId: "T2", input: {} })) as Decision;
-    await h.emettre("tool_result", { toolName: "bash", toolCallId: "B2", content: [] });
-    const t3 = (await h.emettre("tool_call", { toolName: "task", toolCallId: "T3", input: {} })) as Decision;
-    await h.emettre("tool_execution_end", { toolName: "task", toolCallId: "T3" });
-    propriete(
-      t1?.block !== true && b1?.block === true && b2?.block !== true && t2?.block === true && t3?.block !== true,
-      `task puis bash : bash refusé (${JSON.stringify(b1)}) ; bash puis task : task refusée ` +
-        `(${JSON.stringify(t2)}) ; seuls, chacun passe (${JSON.stringify([t1, b2, t3])})`,
-    );
+    // 2. task puis bash, bash puis task, task puis task : le second est refusé.
+    const d = async (nom: string, id: string) =>
+      (await h.emettre("tool_call", { toolName: nom, toolCallId: id, input: nom === "bash" ? { command: "ls" } : {} })) as Decision;
+    const fin = (nom: string, id: string) => h.emettre("tool_result", { toolName: nom, toolCallId: id, content: [] });
+    const ordres: Array<[string, string]> = [["task", "bash"], ["bash", "task"], ["task", "task"], ["bash", "bash"]];
+    let n = 0;
+    for (const [a, b] of ordres) {
+      n += 1;
+      const premier = await d(a, `A${n}`);
+      const second = await d(b, `B${n}`);
+      await fin(a, `A${n}`);
+      if (premier?.block === true || second?.block !== true) {
+        constats.push(`${a} puis ${b} : premier ${JSON.stringify(premier)}, second ${JSON.stringify(second)}`);
+      }
+    }
+    const seul = await d("task", "S1");
+    await h.emettre("tool_execution_end", { toolName: "task", toolCallId: "S1" });
+    if (seul?.block === true) constats.push(`seul, un appel doit passer : ${JSON.stringify(seul)}`);
+    if (bloque(h)) constats.push("aucun écart ne doit avoir été constaté jusqu'ici");
+
+    // 3. Deux outils observés frères : le second ne part pas, et ce que fait le premier reste constaté.
+    const o1 = await d("bash", "O1");
+    const o2 = await d("bash", "O2");
+    writeFileSync(join(h.root, "src", "b.py"), "b = 'o1'\n");
+    await fin("bash", "O1");
+    if (o1?.block === true || o2?.block !== true || !bloque(h) || preuves(h).length !== 1) {
+      constats.push(`deux observés : o1 ${JSON.stringify(o1)}, o2 ${JSON.stringify(o2)}, bloqué ${bloque(h)}, preuves ${preuves(h).length}`);
+    }
   } finally { h.fin(); }
+  propriete(constats.length === 0, `un seul appel non exempté à la fois ; ${constats.join(" · ")}`);
 });
 
 // ================================================================== provenance

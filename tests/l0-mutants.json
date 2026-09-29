@@ -1092,10 +1092,16 @@
     "replace": "    lienDur = false; void st; // mutant ITE-B-capacite : liens durs ignorés"
   },
   {
-    "test": "L0 REG ITE-B-exclusion — une primitive et un appel observé frères ne s'exécutent pas ensemble, dans les deux ordres",
+    "test": "L0 REG ITE-B-exclusion — un seul appel non exempté à la fois, délégation comprise, dans tous les ordres",
     "file": "extensions/subagent/index.ts",
-    "find": "  const conflit = [...EN_VOL.values()].some((k) => (primitive ? k === \"observe\" : k === \"primitive\"));",
-    "replace": "  const conflit = false; // mutant ITE-B-exclusion"
+    "find": "  const conflit = EN_VOL.size > 0;",
+    "replace": "  const conflit = false; // mutant ITE-B-exclusion : aucune exclusion"
+  },
+  {
+    "test": "L0 REG ITE-B-exclusion — un seul appel non exempté à la fois, délégation comprise, dans tous les ordres",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const conflit = EN_VOL.size > 0;",
+    "replace": "  const conflit = [...EN_VOL.values()].some((k) => (primitive ? k === \"observe\" : k === \"primitive\")); // mutant ITE-B-exclusion : l'ancienne règle, deux outils observés partent ensemble"
   },
   {
     "test": "L0 REG ITE-B-provenance — un outil de lecture redéfini par une extension est observé comme les autres",
@@ -1114,5 +1120,23 @@
     "file": "extensions/subagent/index.ts",
     "find": "    if (obs.planAvantAttache || lirePlanAttache(RUN_DIR).etat === \"non-attache\") {",
     "replace": "    if (true) { // mutant ITE-B-plan-attache : le plan se réécrit après attachement"
+  },
+  {
+    "test": "L0 REG ITE-B-effet — tout appel observé qui change l'état du projet pose le blocage durable et sa preuve",
+    "file": "subagent-only/empreinte.ts",
+    "find": "      } else {\n        lignes.push(`${rel} ${contenu(p)}`);",
+    "replace": "      } else if (st.isFile() && st.size > 1_048_576) { // mutant ITE-B-effet : raccourci taille, date, inode au-delà de 1 Mio\n        lignes.push(`${rel} taille:${st.size}:${st.mtimeMs}:${st.ino}`);\n      } else {\n        lignes.push(`${rel} ${contenu(p)}`);"
+  },
+  {
+    "test": "L0 REG ITE-C-reprise-compaction — la reprise de compaction-guard après le dernier INTEGRATED final ne rouvre ni délégation ni mutation",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (typeof nom !== \"string\" || !outilLectureVerifie(nom)) {\n          return { block: true, reason: `Refusé : ${TEXTE_PLAN_TERMINAL}` };",
+    "replace": "        if (false) { // mutant ITE-C-reprise-compaction (a) : tool_call ne refuse plus en plan terminal\n          return { block: true, reason: `Refusé : ${TEXTE_PLAN_TERMINAL}` };"
+  },
+  {
+    "test": "L0 REG ITE-C-reprise-compaction — la reprise de compaction-guard après le dernier INTEGRATED final ne rouvre ni délégation ni mutation",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (e.terminal?.etat === \"terminal\") {\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\"",
+    "replace": "  if (false) { // mutant ITE-C-reprise-compaction (b) : la délégation du tour repris n'est plus refusée par P0-C\n    activerEtatTerminal();\n    return refus(\"ITE_PLAN_TERMINAL\""
   }
 ]

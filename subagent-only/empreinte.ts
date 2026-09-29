@@ -32,7 +32,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readlinkSync, readSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { recordGitInvocation } from "./git-probe-counter.ts";
 
@@ -41,8 +41,28 @@ export class EmpreinteImpossible extends Error {}
 /** Le répertoire, sous `.pi-subagent-runs/`, où cette garde conserve ses preuves. Hors empreinte. */
 export const DOSSIER_PREUVES_P0B = "ite-p0b";
 
-/** Au-delà, un fichier de `.pi-subagent-runs/` s'identifie par taille, date et inode plutôt que par contenu. */
-const HACHAGE_COMPLET_MAX = 1_048_576;
+/**
+ * Le contenu se hache par blocs : la mémoire reste bornée quelle que soit la taille, et AUCUN fichier
+ * n'est identifié par ses seules métadonnées — taille, date et inode laissent passer une réécriture de
+ * même taille suivie d'une restauration de `mtime` (adjudication ITE-1, E7).
+ */
+const BLOC = 1_048_576;
+
+function hacherFichier(chemin: string): string {
+  const h = createHash("sha256");
+  const tampon = Buffer.allocUnsafe(BLOC);
+  const fd = openSync(chemin, "r");
+  try {
+    for (;;) {
+      const n = readSync(fd, tampon, 0, BLOC, null);
+      if (n === 0) break;
+      h.update(n === BLOC ? tampon : tampon.subarray(0, n));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return h.digest("hex");
+}
 
 export interface Empreinte {
   /** composante → condensé. Deux empreintes se comparent composante par composante. */
@@ -82,7 +102,7 @@ function contenu(chemin: string): string {
   if (st.isSymbolicLink()) return `lien:${readlinkSync(chemin)}`;
   if (st.isDirectory()) return "dossier";
   if (!st.isFile()) return `autre:${st.mode}`;
-  return `fichier:${st.mode & 0o777}:${sha(readFileSync(chemin))}`;
+  return `fichier:${st.mode & 0o777}:${hacherFichier(chemin)}`;
 }
 
 /** Les worktrees listés par git : chemin, et la ligne brute qui les décrit. */
@@ -165,9 +185,6 @@ function espaceDesRuns(runDir: string): { condense: string; lignes: string[] } {
       if (st.isDirectory()) {
         lignes.push(`${rel}/`);
         parcourir(p);
-      } else if (st.isFile() && st.size > HACHAGE_COMPLET_MAX) {
-        const s = statSync(p);
-        lignes.push(`${rel} taille:${s.size}:${s.mtimeMs}:${s.ino}`);
       } else {
         lignes.push(`${rel} ${contenu(p)}`);
       }

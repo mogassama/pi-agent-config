@@ -1994,20 +1994,23 @@ function avantAppelP0B(event: { toolName?: unknown; toolCallId?: unknown; input?
   if (outilLectureVerifie(nom)) return undefined;
   const primitive = nom === NOM_PRIMITIVE;
   /*
-   * Exclusion (Q-L) : pi prépare les appels frères un par un, puis les exécute ensemble. Une
-   * primitive et un appel observé qui s'exécuteraient en même temps rendraient l'empreinte fausse
-   * dans les deux sens — l'écriture d'un worker attribuée à l'orchestrateur, ou l'écriture de
-   * l'orchestrateur blanchie par la délégation. Le second arrivé est refusé, dans les deux ordres.
+   * Exclusion (Q-L, adjudication ITE-1) : pi prépare les appels frères un par un, puis les exécute
+   * ensemble. Deux appels non exemptés qui s'exécuteraient en même temps rendraient l'empreinte fausse :
+   * l'écriture d'un worker attribuée à l'orchestrateur, l'écriture de l'orchestrateur blanchie par la
+   * délégation, ou deux outils observés dont chacun voit l'état initial puis l'état que l'autre a
+   * restauré. Dès qu'un appel non exempté est en vol, le suivant est refusé avant exécution, que le
+   * premier soit `task` ou un outil observé. Seule la lecture native vérifiée, exemptée plus haut,
+   * s'exécute à côté.
    */
-  const conflit = [...EN_VOL.values()].some((k) => (primitive ? k === "observe" : k === "primitive"));
+  const conflit = EN_VOL.size > 0;
   if (conflit) {
     return {
       block: true,
-      reason: primitive
-        ? "Refusé : un appel d'outil de l'orchestrateur est en cours ; une délégation ne part pas en même " +
-          "temps (P0-B). Relance-la seule, après."
-        : "Refusé : une délégation est en cours ; aucun autre outil ne s'exécute en même temps qu'elle " +
-          "(P0-B). Relance cet appel seul, après.",
+      reason:
+        "Refusé : un autre appel d'outil de l'orchestrateur est en cours. Pendant un run, un seul appel " +
+        "non exempté s'exécute à la fois — délégation comprise — pour que chaque changement de l'état du " +
+        "projet soit attribué à l'appel qui l'a fait (P0-B). Relance cet appel seul, après. Plusieurs " +
+        "délégations parallèles passent par un seul appel `task` avec `batch`.",
     };
   }
   if (!id) return { block: true, reason: "Refusé : appel d'outil sans identifiant, inobservable (P0-B)." };

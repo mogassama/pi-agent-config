@@ -12,6 +12,8 @@
  *   redémarrage     l'état se retrouve sur le registre seul — ITE-C-redemarrage
  *   identité        un plan attaché qui manque, diverge ou devient illisible refuse tout — ITE-C-plan-rompu
  *   compatibilité   un INTEGRATED sans status sous un plan à design_update : indéterminé — ITE-C-indetermine
+ *   reprise         la reprise de compaction-guard après le dernier INTEGRATED final ne rouvre rien —
+ *                   ITE-C-reprise-compaction (adjudication ITE-1, E11)
  *
  * Montage : `l0-b2-harness.ts` (dont `OUTILS_PI`, l'API d'outils de pi 0.86) et `l0-b3-fixtures.ts`.
  */
@@ -26,6 +28,8 @@ import {
 } from "./l0-b2-harness.ts";
 import { designMd, gardeDeRun, nettoyerHooks, planAvecDesign } from "./l0-b3-fixtures.ts";
 import { appendLaneEvent, type Lease } from "../subagent-only/run-manifest.ts";
+import compactionGuard from "../extensions/compaction-guard/index.ts";
+import { execFileSync } from "node:child_process";
 
 type Preuve = (t: TestContext) => Promise<void> | void;
 function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
@@ -274,6 +278,73 @@ regressionCorrigee("ITE-C-indetermine", "un INTEGRATED sans status sous un plan 
         `(${String(code)}) ; ${montrer(r)}`,
     );
   } finally { h.fin(); }
+});
+
+// ================================================================== reprise après compaction
+
+regressionCorrigee("ITE-C-reprise-compaction", "la reprise de compaction-guard après le dernier INTEGRATED final ne rouvre ni délégation ni mutation", async () => {
+  /*
+   * Adjudication ITE-1 (E11) : la séquence exacte que QD-P0 rencontrera. Le plan est terminal ; le
+   * contexte franchit 50 % ; compaction-guard compacte pendant un run actif et envoie sa reprise
+   * (triggerTurn). Le tour repris est celui d'un modèle qui voudrait « reprendre là où il s'était
+   * arrêté » : il ne peut plus que lire et répondre.
+   */
+  const h = await monter();
+  try {
+    await toutIntegrer(h);
+    const git = (...a: string[]) => execFileSync("git", a, { cwd: h.root, encoding: "utf-8" });
+    const etatProjet = () => ({
+      tete: git("rev-parse", "HEAD"), statut: git("status", "--porcelain", "--untracked-files=all"),
+      refs: git("for-each-ref"), worktrees: git("worktree", "list", "--porcelain"),
+      registre: JSON.stringify(h.evenements()), seq: manifeste(h).nextSeq, enfants: APPELS.length,
+    });
+    const avant = etatProjet();
+
+    // compaction-guard, chargé comme pi le charge, sur un run actif au-dessus du seuil.
+    const reprises: Array<{ message: { customType: string }; options?: { triggerTurn?: boolean } }> = [];
+    let finDeTour: ((e: unknown, ctx: unknown) => void) | undefined;
+    compactionGuard({
+      on: (_n: "turn_end", cb: (e: unknown, ctx: never) => void) => { finDeTour = cb as typeof finDeTour; },
+      sendMessage: (message, options) => { reprises.push({ message, options }); },
+    });
+    precondition(finDeTour !== undefined, "compaction-guard doit écouter turn_end");
+    finDeTour!({}, {
+      getContextUsage: () => ({ tokens: 150_000, contextWindow: 272_000 }),
+      isIdle: () => false,
+      compact: (o?: { onComplete?: (r: unknown) => void }) => o?.onComplete?.({}),
+    });
+
+    // Le tour repris : tout ce qu'un modèle tenterait pour « reprendre le travail ».
+    const outilsRepris: Array<[string, Record<string, unknown>]> = [
+      ["task", tache("W03")],
+      ["task", { agent: "reviewer", task: "rejuger" }],
+      ["bash", { command: "git apply correctif.patch" }],
+      ["write", { path: "src/a.py", content: "a = 'repris'\n" }],
+      ["edit", { path: "src/b.py", edits: [] }],
+    ];
+    const passes: string[] = [];
+    let n = 0;
+    for (const [nom, input] of outilsRepris) {
+      n += 1;
+      if ((await outil(h, nom, `rep-${n}`, input))?.block !== true) passes.push(nom);
+    }
+    const delegation = await issue(() => h.outil.execute("rep-exec", tache("W03")));
+    const codeDelegation = delegation.kind === "returned" ? gardeDeRun(delegation.value)?.code : undefined;
+    const lectureAdmise = (await outil(h, "read", "rep-read", { path: "src/a.py" }))?.block !== true;
+    const actifs = [...OUTILS_PI.actifs].sort();
+    const apres = etatProjet();
+
+    propriete(
+      reprises.length === 1 && reprises[0].options?.triggerTurn === true &&
+        passes.length === 0 && codeDelegation === "ITE_PLAN_TERMINAL" && lectureAdmise &&
+        JSON.stringify(actifs) === JSON.stringify([...LECTURE].sort()) &&
+        JSON.stringify(apres) === JSON.stringify(avant),
+      `une reprise exactement (${reprises.length}) ; dans le tour repris, aucun outil mutant ni délégation ` +
+        `ne passe (passés ${JSON.stringify(passes)}, exécution ${String(codeDelegation)}), la lecture reste ` +
+        `(${lectureAdmise}), outils actifs ${JSON.stringify(actifs)} ; projet, registre, séquence et enfants ` +
+        `inchangés (${JSON.stringify(apres) === JSON.stringify(avant)})`,
+    );
+  } finally { h.fin(); outilsPiParDefaut(); }
 });
 
 // ================================================================== ce qui doit survivre
