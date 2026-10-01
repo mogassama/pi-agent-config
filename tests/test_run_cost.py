@@ -363,6 +363,24 @@ class Cycles(unittest.TestCase):
             self.assertEqual((k["ecritures_hors_scope_refusees"], k["approved_refuses_r2"], k["plan_validation_retries"],
                               k["cycles_rework"]), (2, 1, 1, 0))
 
+    def test_revues_bloquantes_refusees_comptees(self):
+        # LOT-REPRISES-CORRECTIF, RC : un submit bloquant refusé faute d'avoir lu les kept_consumers.
+        refus_rc = {"type": "tool_execution_end", "toolName": "submit", "result": {
+            "content": [{"type": "text", "text": "Refused"}],
+            "details": {"refus": {"code": "REVIEW_BLOCKING_WITHOUT_KEPT_CONSUMERS", "unit": "W01",
+                                  "missing_kept_consumers": ["tests/test_config.py"]}}}}
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            unite_jouee(runs, sessions, [
+                ("worker", {}),
+                ("reviewer", {"verdict": "needs_rework", "transcription": [refus_rc, refus_rc]}),
+            ])
+            code, sortie = lancer(runs, sessions, "--cycles", "--json", Path(t) / "g.json")
+            self.assertEqual(code, 0, sortie)
+            k = json.loads((Path(t) / "g.json").read_text(encoding="utf-8"))["cycles"]["compteurs"]
+            self.assertEqual((k["revues_bloquantes_refusees"], k["approved_refuses_r2"]), (2, 0))
+            self.assertIn("revues_bloquantes_refusees 2", sortie)
+
     def test_ligne_illisible_d_une_transcription_refuse(self):
         with tempfile.TemporaryDirectory() as t:
             runs, sessions = monter(Path(t), ["W01"], [])
