@@ -463,7 +463,8 @@ test("l'inventaire est celui qu'on croit : un lanceur ajouté le fait bouger", (
   assert.deepEqual(
     [...parClasse.entries()].sort(),
     // 17 : le lot ITE ajoute le lanceur compté de `subagent-only/empreinte.ts` (P0-B).
-    [["counted-git", 17], ["opaque-shell", 3], ["outside-recovery", 2]],
+    // 18 : LOT-REPRISES ajoute le `git ls-files` compté de `subagent-only/consommateurs.ts` (R1-a).
+    [["counted-git", 18], ["opaque-shell", 3], ["outside-recovery", 2]],
     "l'inventaire a changé — classer le nouveau site plutôt que d'ajuster ce compte",
   );
 });

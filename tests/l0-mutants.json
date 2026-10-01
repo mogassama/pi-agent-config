@@ -1330,5 +1330,77 @@
     "file": "subagent-only/dispatch.ts",
     "find": "    validation: typeof envelope.validation === \"string\" ? envelope.validation : undefined,",
     "replace": "    validation: undefined, // mutant ITE-P1D-validation : le champ ne traverse pas"
+  },
+  {
+    "test": "L0 REG R1A-consommateurs — les consommateurs statiques directs d'un module écrit sont trouvés sous toutes leurs formes, et un import dynamique n'est jamais compté",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "      const paquet = importeur.paquet ? base : base.slice(0, -1);",
+    "replace": "      const paquet = base; // mutant R1A-consommateurs : un module se prend pour son paquet"
+  },
+  {
+    "test": "L0 REG R1A-consommateurs — les consommateurs statiques directs d'un module écrit sont trouvés sous toutes leurs formes, et un import dynamique n'est jamais compté",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "    for (const nom of n.names) if (nom !== \"*\") vus.add(`${m}.${nom}`);",
+    "replace": "    // mutant R1A-consommateurs : `from pkg import mod` ne voit plus le sous-module"
+  },
+  {
+    "test": "L0 REG R1A-classement — chaque consommateur se classe dans le scope ou dans kept_consumers ; kept_consumers est disjoint, suivi, non réservé, et détecté",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "      if (inScope(p, u.expectedWriteScope)) return refus(p, `${p} est aussi dans expected_write_scope`);",
+    "replace": "      // mutant R1A-classement : kept_consumers peut recouvrir le scope"
+  },
+  {
+    "test": "L0 REG R1A-classement — chaque consommateur se classe dans le scope ou dans kept_consumers ; kept_consumers est disjoint, suivi, non réservé, et détecté",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "      if (p.endsWith(\".py\") && !(consumers[u.id] ?? []).includes(p)) {",
+    "replace": "      if (p.endsWith(\".py\") && false) { // mutant R1A-classement : entrée Python non détectée admise"
+  },
+  {
+    "test": "L0 REG R1A-classement — chaque consommateur se classe dans le scope ou dans kept_consumers ; kept_consumers est disjoint, suivi, non réservé, et détecté",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "    const manque = (consumers[u.id] ?? []).filter((c) => !kept[u.id].includes(c));",
+    "replace": "    const manque = (consumers[u.id] ?? []).filter((c) => !kept[u.id].includes(c)).slice(1); // mutant R1A-classement"
+  },
+  {
+    "test": "L0 REG R1A-analyse-impossible — une analyse Python impossible refuse le gel, nommée, sans repli ni « non couvert »",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "      return impossible(`python3 absent ou inexécutable dans le PATH : ${message(e)}`);",
+    "replace": "      interpreter = { executable: \"python3\" }; // mutant R1A-analyse-impossible : repli silencieux"
+  },
+  {
+    "test": "L0 REG R1A-analyse-impossible — une analyse Python impossible refuse le gel, nommée, sans repli ni « non couvert »",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "        typeof rendu.file === \"string\" ? rendu.file : undefined,",
+    "replace": "        undefined, // mutant R1A-analyse-impossible : le fichier n'est plus nommé"
+  },
+  {
+    "test": "L0 REG R1A-analyse-impossible — une analyse Python impossible refuse le gel, nommée, sans repli ni « non couvert »",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "      return impossible(\"sortie de l'analyse illisible\");",
+    "replace": "      rendu = { ok: true, imports: {} }; // mutant R1A-analyse-impossible : illisible lu comme vide"
+  },
+  {
+    "test": "L0 REG R1A-interpreteur — l'interpréteur est résolu une fois par tentative, et c'est cet exécutable-là qui analyse",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "      brut = executeur.analyser(interpreter.executable, root, fichiers);",
+    "replace": "      brut = executeur.analyser(\"python3\", root, fichiers); // mutant R1A-interpreteur"
+  },
+  {
+    "test": "L0 REG R1A-non-python — une unité qui n'écrit aucun .py suivi ne requiert aucun interpréteur",
+    "file": "subagent-only/consommateurs.ts",
+    "find": "  if (ciblesPython(unites, suivis).length > 0) {",
+    "replace": "  if (true) { // mutant R1A-non-python : l'interpréteur est toujours requis"
+  },
+  {
+    "test": "L0 REG R1A-gel — un consommateur non classé refuse la délégation avant tout effet, et le plan corrigé est attaché tel quel",
+    "file": "extensions/subagent/index.ts",
+    "find": "    const conso = validerConsommateurs(process.cwd(), JSON.parse(text), PLAN.units);\n    if (!conso.ok) {",
+    "replace": "    const conso = validerConsommateurs(process.cwd(), JSON.parse(text), PLAN.units);\n    if (false && !conso.ok) { // mutant R1A-gel : le validateur ne refuse plus"
+  },
+  {
+    "test": "L0 REG R1A-gel — un consommateur non classé refuse la délégation avant tout effet, et le plan corrigé est attaché tel quel",
+    "file": "extensions/subagent/index.ts",
+    "find": "              // LOT-REPRISES, R1-a : le refus structuré, que `run-cost --cycles` compte.\n              ...(p.refus ? { details: { plan_refusal: p.refus } } : {}),",
+    "replace": "              // mutant R1A-gel : le refus n'est plus structuré"
   }
 ]

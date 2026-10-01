@@ -893,7 +893,8 @@ test("une lane divergée exige sa base, et la vérifie", async () => {
     const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
     execFileSync("git", ["worktree", "add", "-b", `pi-lane/${h.runId}-W03-g1`, laneDir, "HEAD"],
       { cwd: h.root, stdio: "ignore" });
-    writeFileSync(join(laneDir, "src", "a.py"), "a = premier essai\n");
+    // Du Python valide : depuis LOT-REPRISES (R1-a), un .py suivi que l'ast refuse fait refuser le gel.
+    writeFileSync(join(laneDir, "src", "a.py"), "a = 'premier essai'\n");
     execFileSync("git", ["add", "-A"], { cwd: laneDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-qm", "essai"], { cwd: laneDir, stdio: "ignore" });
 

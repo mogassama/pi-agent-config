@@ -84,6 +84,7 @@ import {
 } from "../../subagent-only/run-manifest.js";
 import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
 import { validerDesignUpdates, type DesignUpdate } from "../../subagent-only/design-update.js";
+import { validerConsommateurs, type RefusPlan } from "../../subagent-only/consommateurs.js";
 import {
   SchedulerInputError,
   admettre,
@@ -3041,11 +3042,11 @@ function reconstruireTentatives(lignes: string[], laneRead: LaneRead): void {
  * gelé — le relire à chaque appel inviterait à le corriger en cours de route,
  * et une prédiction réécrite après coup ne mesure plus rien.
  */
-let PLAN: PlanResult | undefined;
+let PLAN: (PlanResult & { refus?: RefusPlan }) | undefined;
 /** Le texte du plan, gardé pour l'attacher au run une fois la propriété prise. */
 let PLAN_TEXT: string | undefined;
 
-function plan(): PlanResult {
+function plan(): PlanResult & { refus?: RefusPlan } {
   if (PLAN?.status === "usable") return PLAN;
   const path = join(process.cwd(), RUNS_DIR, `${RUN_ID}-plan.json`);
   let text: string | undefined;
@@ -3075,6 +3076,19 @@ function plan(): PlanResult {
     const verdict = validerDesignUpdates(JSON.parse(text), { bundle: racineBundle !== null, design });
     if (!verdict.ok) {
       PLAN = { ...PLAN, status: "invalid", reason: `design_update : ${verdict.reason}`, units: [] };
+    }
+  }
+  /*
+   * LOT-REPRISES, R1-a : le validateur pré-gel des consommateurs Python, au même endroit et
+   * pour la même raison que `design_update` — avant tout `attachPlan`, toute publication du
+   * `planHash`, toute lane et toute délégation liée à une unité. Un plan refusé n'est jamais
+   * attaché ni mémorisé : l'orchestrateur le corrige, et la tentative suivante le relit.
+   * Le refus garde sa forme structurée (`refus`), que le résultat `task` publie.
+   */
+  if (PLAN.status === "usable" && text !== undefined) {
+    const conso = validerConsommateurs(process.cwd(), JSON.parse(text), PLAN.units);
+    if (!conso.ok) {
+      PLAN = { ...PLAN, status: "invalid", reason: conso.reason, units: [], refus: conso.refus };
     }
   }
   // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
@@ -4126,7 +4140,7 @@ export default function (pi: ExtensionAPI) {
         "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
         ...(PREFLIGHT.ok
           ? [
-              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing.`,
+              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...],"kept_consumers":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime lists every tracked Python file that statically imports a module a unit will write: each must be in that unit's expected_write_scope (the unit changes it) or in its kept_consumers (left untouched, the interface it uses preserved — no write right). A plan with an unclassified consumer is refused before anything runs, the list is in the refusal, and you correct the plan before any delegation, without searching for anything.`,
             ]
           : [
               /*
@@ -4322,9 +4336,12 @@ export default function (pi: ExtensionAPI) {
         if (hasBatch) {
           const p = plan();
           if (p.status !== "usable") {
-            return invalidCall(
-              `un lot exige un plan exploitable ; il est ${p.status}${p.reason ? ` — ${p.reason}` : ""}.`,
-            );
+            return {
+              ...invalidCall(
+                `un lot exige un plan exploitable ; il est ${p.status}${p.reason ? ` — ${p.reason}` : ""}.`,
+              ),
+              ...(p.refus ? { details: { plan_refusal: p.refus } } : {}),
+            };
           }
         }
 
@@ -4353,6 +4370,8 @@ export default function (pi: ExtensionAPI) {
                   `nothing has run.`,
               }],
               isError: true,
+              // LOT-REPRISES, R1-a : le refus structuré, que `run-cost --cycles` compte.
+              ...(p.refus ? { details: { plan_refusal: p.refus } } : {}),
             };
           }
         }

@@ -102,6 +102,7 @@ that work unit:
   "goal": "…",
   "depends_on": [],
   "expected_write_scope": ["…"],
+  "kept_consumers": ["…"],
   "design_update": {
     "decision_id": "D-001",
     "from_status": "proposé",
@@ -121,6 +122,12 @@ that work unit:
   decision's `### D-nnn — …` heading; the statuses are `proposé`, `en cours`,
   `terminé`, and the only transitions are `proposé → en cours` and
   `en cours → terminé`. A decision has at most one owning unit per plan.
+
+**`kept_consumers`** lists the tracked files that statically import a module the
+unit writes and that the unit leaves untouched: their interface is preserved, and
+the field grants no write right. Before freeze the runtime lists every such Python
+importer; one that is in neither `expected_write_scope` nor `kept_consumers`
+refuses the plan, with the list in the refusal.
 
 The bundle is a *direction*, not a specification. It is silent on almost everything by construction. Silence is the normal state and is never a defect.
 
