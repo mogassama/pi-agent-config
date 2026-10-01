@@ -19,6 +19,8 @@ export interface AppelDispatch {
   testCommand?: string | null;
   /** LOT-REPRISES, R1-b : le périmètre que le runtime a porté à cet enfant, tel que reçu. */
   perimetre?: { unit: string; scope: string[]; kept: string[] } | null;
+  /** LOT-REPRISES, R2 : la projection des risques portée à un reviewer, telle que reçue. */
+  risquesOuverts?: { ids: string[]; remis: string[] } | { inconnu: string } | null;
 }
 
 /** Les appels reçus, dans l'ordre. Le harnais le vide entre deux scénarios. */
@@ -39,7 +41,7 @@ export function reinitialiser(): void {
 export async function dispatch(
   agent: { name?: string },
   task: string,
-  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"] }; seq?: number },
+  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"] }; seq?: number },
 ): Promise<RunResult> {
   const appel: AppelDispatch = {
     agent: agent?.name ?? "?",
@@ -48,6 +50,7 @@ export async function dispatch(
     cwd: opts?.ctx?.cwd,
     testCommand: opts?.ctx?.testCommand,
     perimetre: opts?.ctx?.perimetre,
+    risquesOuverts: opts?.ctx?.risquesOuverts,
   };
   APPELS.push(appel);
   /*

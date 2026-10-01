@@ -221,7 +221,9 @@ function consume(line: string, state: StreamState): void {
 
   if (e.type === "tool_execution_end" && e.toolName === "submit") {
     const details = e.result?.details;
-    if (details) state.submit = details as Record<string, unknown>;
+    // LOT-REPRISES, R2 : un `submit` refusé dans l'enfant (`details.refus`) n'est pas une
+    // enveloppe ; l'enfant continue, et seule une soumission acceptée en devient une.
+    if (details && !(typeof details === "object" && "refus" in details)) state.submit = details as Record<string, unknown>;
   }
 }
 

@@ -53,6 +53,12 @@ export interface BuildContext {
    * et `kept_consumers`. Porté dans la tâche et, pour `role-guard`, dans l'environnement.
    */
   perimetre?: { unit: string; scope: string[]; kept: string[] } | null;
+  /**
+   * LOT-REPRISES, R2 : pour un reviewer d'unité, la projection des risques ouverts de l'unité lue
+   * au registre autoritaire au départ — ids ouverts et ids remis — ou la raison de son
+   * indisponibilité. Portée par l'environnement (`PI_SUBAGENT_OPEN_RISKS`) au `submit`.
+   */
+  risquesOuverts?: { ids: string[]; remis: string[] } | { inconnu: string } | null;
 }
 
 /** LOT-REPRISES, R1-b : le début de la note de périmètre, reconnaissable dans une transcription. */
@@ -445,6 +451,9 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
       PI_SUBAGENT_ROLE: agent.envelopeRole ?? agent.name,
       PI_SUBAGENT_READONLY: readOnly ? "1" : "0",
       ...(perimetre ? { PI_SUBAGENT_WRITE_SCOPE: JSON.stringify(perimetre) } : {}),
+      ...((agent.envelopeRole ?? agent.name) === "reviewer" && ctx.risquesOuverts
+        ? { PI_SUBAGENT_OPEN_RISKS: JSON.stringify(ctx.risquesOuverts) }
+        : {}),
     },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),

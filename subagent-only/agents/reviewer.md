@@ -76,6 +76,12 @@ de-duplicates them — an id is a coordinate, not a text to match. `open_risks` 
 for concerns discovered now. If a continuation changes what you can conclude
 about the change as a whole, that belongs in `summary` and in the verdict.
 
+**`approved` leaves nothing open.** A verdict of `approved` with a new entry in
+`open_risks`, or with a risk of this unit still open after your submission, is
+refused by `submit` and nothing is recorded: the change would look approved and
+still not be integrable. Settle the risk, return `needs_rework` or `blocked`, or —
+if the remark genuinely blocks nothing — make it a finding rather than an open risk.
+
 **Report only what meets all six.** A reviewer with no admission criteria
 reports everything it notices, which is how a review of freshly written code
 returns findings about the code it just approved:

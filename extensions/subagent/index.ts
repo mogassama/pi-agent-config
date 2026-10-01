@@ -3116,6 +3116,24 @@ function perimetreDe(unite: string | undefined, lectureSeule: boolean): Perimetr
 }
 
 /**
+ * LOT-REPRISES, R2 : ce que le reviewer d'une unité reçoit au départ — les ids de ses risques
+ * encore ouverts au registre autoritaire (`open` et `routed`, toutes générations) et ceux qui
+ * lui sont remis par `for_risks`. Un état inconnu est transmis comme tel : l'enfant refuse alors
+ * `approved`, comme la porte refuserait l'intégration.
+ */
+function projectionDesRisques(
+  lane: LaneContext | undefined,
+  unite: string | undefined,
+  remis: unknown,
+): { ids: string[]; remis: string[] } | { inconnu: string } | null {
+  if (!lane || !unite) return null;
+  const etat = etatAutoritaire(lane.laneId, unite);
+  if (!etat.connu) return { inconnu: etat.raison };
+  const confies = Array.isArray(remis) ? remis.filter((x): x is string => typeof x === "string") : [];
+  return { ids: etat.risques.map((f) => f.id), remis: confies };
+}
+
+/**
  * The ledger's transitions, on disk, one JSON object per line.
  *
  * Append-only at each transition rather than a final snapshot, because the
@@ -5274,6 +5292,9 @@ export default function (pi: ExtensionAPI) {
                   cwd: cwdEnfant,
                   testCommand: testCommandDuRun,
                   perimetre: lane ? perimetreDe(unit, isReadOnly(agent.tools)) : null,
+                  risquesOuverts: (agent.envelopeRole ?? agent.name) === "reviewer"
+                    ? projectionDesRisques(lane, unit, forRisks)
+                    : null,
                 },
                 seq: seqs[i],
                 signal: bothSignals(signal),

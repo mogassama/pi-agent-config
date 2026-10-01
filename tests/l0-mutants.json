@@ -1456,5 +1456,59 @@
     "file": "subagent-only/role-guard.ts",
     "find": "      role,\n      perimetre,\n    });",
     "replace": "      role,\n    }); // mutant R1B-branchement"
+  },
+  {
+    "test": "L0 REG R2-refus — approved est refusé tant qu'un risque reste ouvert après la soumission, et seulement alors",
+    "file": "subagent-only/envelope/approbation.ts",
+    "find": "  if (soumission.verdict !== \"approved\") return null;",
+    "replace": "  // mutant R2-refus : tout verdict est jugé"
+  },
+  {
+    "test": "L0 REG R2-refus — approved est refusé tant qu'un risque reste ouvert après la soumission, et seulement alors",
+    "file": "subagent-only/envelope/approbation.ts",
+    "find": "    ? projection.ids.filter((id) => !(projection.remis.includes(id) && resolus.includes(id)))",
+    "replace": "    ? projection.ids.filter((id) => !resolus.includes(id)) // mutant R2-refus : réclamé suffit"
+  },
+  {
+    "test": "L0 REG R2-refus — approved est refusé tant qu'un risque reste ouvert après la soumission, et seulement alors",
+    "file": "subagent-only/envelope/approbation.ts",
+    "find": "  if (nouveaux === 0 && restants.length === 0) return null;",
+    "replace": "  if (restants.length === 0) return null; // mutant R2-refus : les nouveaux open_risks passent"
+  },
+  {
+    "test": "L0 REG R2-projection — sans projection seuls les nouveaux open_risks se jugent ; une projection illisible ou inconnue refuse approved",
+    "file": "subagent-only/envelope/approbation.ts",
+    "find": "  return { inconnu: \"projection des risques illisible\" };",
+    "replace": "  return null; // mutant R2-projection : illisible vaut absente"
+  },
+  {
+    "test": "L0 REG R2-submit — le submit du reviewer refuse approved avec un risque restant, sans terminer, et accepte le reste",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "      if (role === \"reviewer\") {",
+    "replace": "      if (role === \"jamais\") { // mutant R2-submit"
+  },
+  {
+    "test": "L0 REG R2-submit — le submit du reviewer refuse approved avec un risque restant, sans terminer, et accepte le reste",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "  pi.registerTool(buildSubmitTool(role, lireProjection(process.env.PI_SUBAGENT_OPEN_RISKS)));",
+    "replace": "  pi.registerTool(buildSubmitTool(role)); // mutant R2-submit : la projection n'est plus lue"
+  },
+  {
+    "test": "L0 REG R2-dispatch — un submit refusé n'est jamais l'enveloppe : seul compte celui qui est accepté",
+    "file": "subagent-only/dispatch.ts",
+    "find": "    if (details && !(typeof details === \"object\" && \"refus\" in details)) state.submit = details as Record<string, unknown>;",
+    "replace": "    if (details) state.submit = details as Record<string, unknown>; // mutant R2-dispatch"
+  },
+  {
+    "test": "L0 REG R2-transmission — le runtime porte au reviewer d'une unité ses risques ouverts et ceux qui lui sont remis, au worker rien",
+    "file": "extensions/subagent/index.ts",
+    "find": "                    ? projectionDesRisques(lane, unit, forRisks)",
+    "replace": "                    ? { ids: [], remis: [] } // mutant R2-projection"
+  },
+  {
+    "test": "L0 REG R2-transmission — le runtime porte au reviewer d'une unité ses risques ouverts et ceux qui lui sont remis, au worker rien",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "        ? { PI_SUBAGENT_OPEN_RISKS: JSON.stringify(ctx.risquesOuverts) }",
+    "replace": "        ? {} // mutant R2-projection : l'enfant ne reçoit plus la projection"
   }
 ]

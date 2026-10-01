@@ -21,6 +21,8 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 
+import { lireProjection, refusApprobation, texteDuRefus, type Projection } from "./approbation.ts";
+
 // ---------------------------------------------------------------- envelope
 
 /*
@@ -244,7 +246,7 @@ type RoleName = keyof typeof payloads;
 
 // ------------------------------------------------------------------- tool
 
-function buildSubmitTool(role: RoleName) {
+function buildSubmitTool(role: RoleName, projection: Projection | null = null) {
   // Flat, not { ...envelope, payload: {...} }.
   //
   // Each child sees exactly one role's schema, so the wrapper separated nothing
@@ -273,6 +275,21 @@ function buildSubmitTool(role: RoleName) {
     parameters,
 
     async execute(_toolCallId, params: Static<typeof parameters>) {
+      /*
+       * LOT-REPRISES, R2 : `approved` avec un risque restant ouvert est refusé ici, dans l'enfant,
+       * sans le terminer. L'enveloppe n'existe pas, donc aucune `REVIEWED` n'est publiée, et le
+       * parent ne réécrit rien. `details.refus` est la forme structurée ; `dispatch` ne la prend
+       * jamais pour une enveloppe.
+       */
+      if (role === "reviewer") {
+        const refus = refusApprobation(params as Record<string, unknown>, projection);
+        if (refus) {
+          return {
+            content: [{ type: "text" as const, text: texteDuRefus(refus) }],
+            details: { refus },
+          };
+        }
+      }
       return {
         content: [{ type: "text" as const, text: params.summary }],
         details: { role, ...params },
@@ -295,5 +312,6 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  pi.registerTool(buildSubmitTool(role));
+  // R2 : la projection des risques ouverts de l'unité, lue par le parent au départ de la revue.
+  pi.registerTool(buildSubmitTool(role, lireProjection(process.env.PI_SUBAGENT_OPEN_RISKS)));
 }
