@@ -48,7 +48,15 @@ export interface BuildContext {
    * l'appelant. Portée aux seuls rôles qui écrivent ; absente, rien n'est ajouté.
    */
   testCommand?: string | null;
+  /**
+   * LOT-REPRISES, R1-b : le périmètre gelé de l'unité d'un writer de lane — `expected_write_scope`
+   * et `kept_consumers`. Porté dans la tâche et, pour `role-guard`, dans l'environnement.
+   */
+  perimetre?: { unit: string; scope: string[]; kept: string[] } | null;
 }
+
+/** LOT-REPRISES, R1-b : le début de la note de périmètre, reconnaissable dans une transcription. */
+export const NOTE_PERIMETRE = "Périmètre d'écriture de ";
 
 export interface SpawnPlan {
   args: string[];
@@ -421,13 +429,22 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // P1-A : la commande que le run a déjà vue réussir, pour un writer seulement — un rôle en lecture
   // ne lance pas les tests, et lui la donner serait l'inviter à le faire.
   const noteTest = !readOnly && ctx.testCommand ? `${NOTE_COMMANDE_DE_TEST}\`${ctx.testCommand}\`\n\n` : "";
-  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${CLOSING_INSTRUCTION}`);
+  // R1-b : le périmètre gelé, pour un writer de lane seulement. Un rôle en lecture n'écrit rien.
+  const perimetre = !readOnly && ctx.perimetre ? ctx.perimetre : null;
+  const notePerimetre = perimetre
+    ? `${NOTE_PERIMETRE}${perimetre.unit} : ${perimetre.scope.join(", ")}. ` +
+      `Consommateurs à laisser intacts, interface préservée : ${perimetre.kept.length > 0 ? perimetre.kept.join(", ") : "aucun"}. ` +
+      "Un edit ou un write hors de ce périmètre est refusé ; un fichier dont l'interface devrait changer " +
+      "se signale dans `deviations`.\n\n"
+    : "";
+  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${notePerimetre}${CLOSING_INSTRUCTION}`);
 
   return {
     args,
     env: {
       PI_SUBAGENT_ROLE: agent.envelopeRole ?? agent.name,
       PI_SUBAGENT_READONLY: readOnly ? "1" : "0",
+      ...(perimetre ? { PI_SUBAGENT_WRITE_SCOPE: JSON.stringify(perimetre) } : {}),
     },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),

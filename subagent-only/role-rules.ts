@@ -10,8 +10,10 @@
  * allowlist — and a rule that cannot be tested is a rule that gets re-broken.
  */
 
-import { existsSync, statSync, type BigIntStats } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, realpathSync, statSync, type BigIntStats } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+import { inScope } from "./work-units.ts";
 
 /** The Forge bundle, exactly as AGENTS.md defines it. */
 export const BUNDLE_FILES = ["INSTRUCTIONS.md", "ARCHITECTURE.md", "DESIGN.md", "CONVENTIONS.md"];
@@ -547,6 +549,11 @@ export interface RoleContext {
   cwd: string;
   readOnly: boolean;
   role: string;
+  /**
+   * LOT-REPRISES, R1-b : le périmètre gelé de l'unité d'un writer de lane, ou absent. Lu une fois
+   * au chargement de l'enfant (`PI_SUBAGENT_WRITE_SCOPE`).
+   */
+  perimetre?: Perimetre | null;
 }
 
 /**
@@ -581,6 +588,11 @@ export function decideRoleGuard(
             "something decisive is genuinely missing from the task text, name it in your " +
             "envelope rather than going to look for it.";
     }
+  }
+
+  if (ctx.perimetre && (kind === "write" || kind === "edit")) {
+    const reason = refusHorsPerimetre(input.path, ctx.perimetre, ctx.cwd);
+    if (reason) return reason;
   }
 
   if (kind === "bash" && ctx.root) {
@@ -700,5 +712,76 @@ export function noteDeRegroupement(
           "déjà connues, puis ne lire ensuite que les dépendances découvertes"
       : null;
   }
+  return null;
+}
+
+// ------------------------------------------------------------------ périmètre (LOT-REPRISES, R1-b)
+
+/**
+ * Le périmètre gelé d'une unité, tel que l'enfant writer le reçoit : son `expected_write_scope`
+ * et ses `kept_consumers`.
+ *
+ * R1-b prévient les mutations hors périmètre effectuées par les outils d'écriture contrôlés par
+ * `role-guard` (`edit`, `write`) ; la porte `scope-breach` reste l'autorité pour l'état réel et
+ * couvre notamment tout autre canal de mutation. Avant ce lot, un dépassement n'était vu qu'à
+ * l'intégration, un worker complet plus tard (QD-P1a, QD-P1b).
+ */
+export interface Perimetre {
+  unit: string;
+  scope: string[];
+  kept: string[];
+}
+
+export const WRITE_OUTSIDE_SCOPE = "WRITE_OUTSIDE_SCOPE";
+
+/**
+ * Le périmètre transmis par l'environnement. Présent mais illisible : un périmètre vide — toute
+ * écriture refusée —, jamais l'absence de garde.
+ */
+export function lirePerimetre(brut: string | undefined): Perimetre | null {
+  if (brut === undefined || brut === "") return null;
+  try {
+    const v = JSON.parse(brut) as Partial<Perimetre>;
+    const liste = (x: unknown) => Array.isArray(x) && x.every((e) => typeof e === "string") ? (x as string[]) : null;
+    const scope = liste(v.scope);
+    const kept = liste(v.kept);
+    if (typeof v.unit !== "string" || scope === null || kept === null) throw new Error("forme");
+    return { unit: v.unit, scope, kept };
+  } catch {
+    return { unit: "?", scope: [], kept: [] };
+  }
+}
+
+/**
+ * Un `edit` ou un `write` hors du périmètre, `kept_consumers` compris : la raison du refus.
+ *
+ * La destination se résout depuis la lane (`cwd`), comme la garde du bundle. Un chemin qui en
+ * sort n'appartient à aucun périmètre. Le même matcher que `scopeBreach` décide.
+ */
+/** Le chemin réel du plus long ancêtre existant, suivi du reste tel quel. */
+function cheminReel(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    const parent = dirname(p);
+    return parent === p ? p : join(cheminReel(parent), basename(p));
+  }
+}
+
+export function refusHorsPerimetre(path: string | undefined, perimetre: Perimetre, cwd: string): string | null {
+  if (!path) return null;
+  if (!isAbsolute(path) && !usableCwd(cwd)) return unknownCwd(path);
+  const abs = isAbsolute(path) ? path : resolve(cwd, path);
+  // Comparés sur leur chemin réel : un lien (macOS `/var` → `/private/var`, un lien posé dans la
+  // lane) ne fait ni entrer ni sortir une destination du périmètre.
+  const rel = relative(cheminReel(cwd), cheminReel(abs)).split(sep).join("/");
+  const dedans = rel !== "" && !rel.startsWith("../") && rel !== ".." && !isAbsolute(rel);
+  const refus = (pourquoi: string) =>
+    `blocked by role-guard: ${WRITE_OUTSIDE_SCOPE} ${dedans ? rel : path} — ${pourquoi} ` +
+    `hors du périmètre gelé de ${perimetre.unit} ; garde l'interface existante, ou signale le besoin ` +
+    "dans `deviations`. Rien n'a été écrit.";
+  if (!dedans) return refus("chemin hors de la lane,");
+  if (perimetre.kept.includes(rel)) return refus("consommateur à laisser intact (kept_consumers),");
+  if (!inScope(rel, perimetre.scope)) return refus("fichier");
   return null;
 }

@@ -342,11 +342,17 @@ export function scopesCollide(a: WorkUnit, b: WorkUnit): boolean {
 /**
  * Les fichiers qu'une délégation a écrits hors de ce que son unité déclarait.
  *
- * Constaté, jamais empêché. Le run 15 a mesuré 6 dépassements sur 46 écritures,
- * donc tuer une délégation sur une prédiction imparfaite confondrait une erreur
- * de planning avec une erreur de code. Mais le dépassement rend la lane non
- * intégrable : le worktree empêche la corruption immédiate, la porte de merge
- * empêche d'intégrer une hypothèse devenue fausse.
+ * Deux étages depuis LOT-REPRISES (R1-b, Q1). **Prévention** : `role-guard` refuse, avant
+ * mutation, un `edit` ou un `write` hors du périmètre gelé, `kept_consumers` compris — l'appel,
+ * jamais la délégation. **Autorité** : cette fonction, sur l'état réel de la lane, qui couvre
+ * tout autre canal de mutation (`bash`). Le dépassement rend la lane non intégrable : le
+ * worktree empêche la corruption immédiate, la porte de merge empêche d'intégrer une hypothèse
+ * devenue fausse. Aucune violation observée n'est effacée ni réparée, aucun rollback.
+ *
+ * Avant ce lot, seul le second étage existait (« constaté, jamais empêché » : le run 15 avait
+ * mesuré 6 dépassements sur 46 écritures, et tuer une délégation sur une prédiction imparfaite
+ * aurait confondu une erreur de planning avec une erreur de code). QD-P1a et QD-P1b ont montré
+ * le coût de n'avoir que lui : un dépassement vu à l'intégration, un worker complet plus tard.
  */
 export function scopeBreach(
   unit: WorkUnit | undefined,

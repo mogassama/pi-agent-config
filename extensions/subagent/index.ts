@@ -164,7 +164,7 @@ import {
 } from "../../subagent-only/work-units.js";
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
-import { BUNDLE_FILES, bundleRoot } from "../../subagent-only/role-rules.js";
+import { BUNDLE_FILES, bundleRoot, type Perimetre } from "../../subagent-only/role-rules.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 import { terminalite, unitesTerminales, type Terminalite } from "../../subagent-only/terminal.js";
 import {
@@ -3042,11 +3042,11 @@ function reconstruireTentatives(lignes: string[], laneRead: LaneRead): void {
  * gelé — le relire à chaque appel inviterait à le corriger en cours de route,
  * et une prédiction réécrite après coup ne mesure plus rien.
  */
-let PLAN: (PlanResult & { refus?: RefusPlan }) | undefined;
+let PLAN: (PlanResult & { refus?: RefusPlan; kept?: Record<string, string[]> }) | undefined;
 /** Le texte du plan, gardé pour l'attacher au run une fois la propriété prise. */
 let PLAN_TEXT: string | undefined;
 
-function plan(): PlanResult & { refus?: RefusPlan } {
+function plan(): PlanResult & { refus?: RefusPlan; kept?: Record<string, string[]> } {
   if (PLAN?.status === "usable") return PLAN;
   const path = join(process.cwd(), RUNS_DIR, `${RUN_ID}-plan.json`);
   let text: string | undefined;
@@ -3089,6 +3089,8 @@ function plan(): PlanResult & { refus?: RefusPlan } {
     const conso = validerConsommateurs(process.cwd(), JSON.parse(text), PLAN.units);
     if (!conso.ok) {
       PLAN = { ...PLAN, status: "invalid", reason: conso.reason, units: [], refus: conso.refus };
+    } else {
+      PLAN = { ...PLAN, kept: conso.kept };
     }
   }
   // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
@@ -3096,6 +3098,21 @@ function plan(): PlanResult & { refus?: RefusPlan } {
   // le rend visible lui-même. Le journaliser ici l'aurait rangé dans un fichier
   // dont ce n'est pas le sujet, sous un type d'événement qui ne le décrit pas.
   return PLAN;
+}
+
+/**
+ * LOT-REPRISES, R1-b : le périmètre gelé d'une unité, pour un writer qui travaille dans sa lane.
+ *
+ * Lu dans le plan gelé et validé — jamais dans la tâche : `expected_write_scope` et les
+ * `kept_consumers` que R1-a a acceptés. Un rôle en lecture n'en reçoit pas.
+ */
+function perimetreDe(unite: string | undefined, lectureSeule: boolean): Perimetre | null {
+  if (!unite || lectureSeule) return null;
+  const p = plan();
+  if (p.status !== "usable") return null;
+  const u = p.units.find((x) => x.id === unite);
+  if (!u) return null;
+  return { unit: u.id, scope: [...u.expectedWriteScope], kept: [...(p.kept?.[u.id] ?? [])] };
 }
 
 /**
@@ -5047,6 +5064,7 @@ export default function (pi: ExtensionAPI) {
                   ctx: {
                     agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd,
                     testCommand: isReadOnly(agent.tools) ? null : commandeDuRun(RUN_ID),
+                    perimetre: perimetreDe(workUnit.id, isReadOnly(agent.tools)),
                   },
                   seq,
                   signal: bothSignals(signal),
@@ -5255,6 +5273,7 @@ export default function (pi: ExtensionAPI) {
                    */
                   cwd: cwdEnfant,
                   testCommand: testCommandDuRun,
+                  perimetre: lane ? perimetreDe(unit, isReadOnly(agent.tools)) : null,
                 },
                 seq: seqs[i],
                 signal: bothSignals(signal),

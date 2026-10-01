@@ -39,12 +39,14 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { bundleRoot, decideRoleGuard, noteDeRegroupement, type TourObserve } from "./role-rules.ts";
+import { bundleRoot, decideRoleGuard, lirePerimetre, noteDeRegroupement, type TourObserve } from "./role-rules.ts";
 
 export default function (pi: ExtensionAPI): void {
   const role = process.env.PI_SUBAGENT_ROLE ?? "";
   const readOnly = process.env.PI_SUBAGENT_READONLY === "1";
   const root = bundleRoot(process.cwd());
+  // LOT-REPRISES, R1-b : le périmètre gelé de l'unité, pour un writer de lane seulement.
+  const perimetre = lirePerimetre(process.env.PI_SUBAGENT_WRITE_SCOPE);
   // P1-B, P1-C : les tours clos, le tour en cours, et une note au plus par tour.
   const historique: TourObserve[] = [];
   let courant: TourObserve = { appels: [] };
@@ -86,6 +88,7 @@ export default function (pi: ExtensionAPI): void {
       cwd: process.cwd(),
       readOnly,
       role,
+      perimetre,
     });
     return reason ? { block: true, reason } : undefined;
   });

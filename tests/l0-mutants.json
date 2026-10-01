@@ -1402,5 +1402,59 @@
     "file": "extensions/subagent/index.ts",
     "find": "              // LOT-REPRISES, R1-a : le refus structuré, que `run-cost --cycles` compte.\n              ...(p.refus ? { details: { plan_refusal: p.refus } } : {}),",
     "replace": "              // mutant R1A-gel : le refus n'est plus structuré"
+  },
+  {
+    "test": "L0 REG R1B-garde — edit et write hors périmètre sont refusés avant mutation, kept_consumers compris ; le périmètre passe",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (perimetre.kept.includes(rel)) return refus(\"consommateur à laisser intact (kept_consumers),\");",
+    "replace": "  // mutant R1B-garde : kept_consumers n'est plus un refus en soi"
+  },
+  {
+    "test": "L0 REG R1B-garde — edit et write hors périmètre sont refusés avant mutation, kept_consumers compris ; le périmètre passe",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (!inScope(rel, perimetre.scope)) return refus(\"fichier\");",
+    "replace": "  // mutant R1B-garde : le scope n'est plus vérifié"
+  },
+  {
+    "test": "L0 REG R1B-garde — edit et write hors périmètre sont refusés avant mutation, kept_consumers compris ; le périmètre passe",
+    "file": "subagent-only/role-rules.ts",
+    "find": "  if (ctx.perimetre && (kind === \"write\" || kind === \"edit\")) {",
+    "replace": "  if (ctx.perimetre && kind === \"write\") { // mutant R1B-garde : edit n'est plus gardé"
+  },
+  {
+    "test": "L0 REG R1B-lecture-env — un périmètre présent mais illisible refuse tout ; absent, il n'y a pas de garde",
+    "file": "subagent-only/role-rules.ts",
+    "find": "    return { unit: \"?\", scope: [], kept: [] };",
+    "replace": "    return null; // mutant R1B-lecture-env : illisible vaut absence de garde"
+  },
+  {
+    "test": "L0 REG R1B-note — le périmètre est porté aux seuls writers, dans la tâche et dans l'environnement",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "  const perimetre = !readOnly && ctx.perimetre ? ctx.perimetre : null;",
+    "replace": "  const perimetre = ctx.perimetre ? ctx.perimetre : null; // mutant R1B-note"
+  },
+  {
+    "test": "L0 REG R1B-note — le périmètre est porté aux seuls writers, dans la tâche et dans l'environnement",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "      ...(perimetre ? { PI_SUBAGENT_WRITE_SCOPE: JSON.stringify(perimetre) } : {}),",
+    "replace": "      // mutant R1B-note : role-guard ne reçoit plus le périmètre"
+  },
+  {
+    "test": "L0 REG R1B-transmission — le runtime porte au worker de la lane le périmètre du plan validé, jamais au reviewer",
+    "file": "extensions/subagent/index.ts",
+    "find": "                  perimetre: lane ? perimetreDe(unit, isReadOnly(agent.tools)) : null,",
+    "replace": "                  perimetre: null, // mutant R1B-transmission"
+  },
+  {
+    "test": "L0 REG R1B-transmission — le runtime porte au worker de la lane le périmètre du plan validé, jamais au reviewer",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return { unit: u.id, scope: [...u.expectedWriteScope], kept: [...(p.kept?.[u.id] ?? [])] };",
+    "replace": "  return { unit: u.id, scope: [...u.expectedWriteScope], kept: [] }; // mutant R1B-transmission"
+  },
+  {
+    "test": "L0 REG R1B-branchement — le vrai role-guard refuse au tool_call un edit hors périmètre, et le fichier reste intact",
+    "file": "subagent-only/role-guard.ts",
+    "find": "      role,\n      perimetre,\n    });",
+    "replace": "      role,\n    }); // mutant R1B-branchement"
   }
 ]
