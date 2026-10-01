@@ -1490,8 +1490,8 @@
   {
     "test": "L0 REG R2-submit — le submit du reviewer refuse approved avec un risque restant, sans terminer, et accepte le reste",
     "file": "subagent-only/envelope/envelope.ts",
-    "find": "  pi.registerTool(buildSubmitTool(role, lireProjection(process.env.PI_SUBAGENT_OPEN_RISKS)));",
-    "replace": "  pi.registerTool(buildSubmitTool(role)); // mutant R2-submit : la projection n'est plus lue"
+    "find": "  pi.registerTool(buildSubmitTool(role, lireProjection(process.env.PI_SUBAGENT_OPEN_RISKS), inspection));",
+    "replace": "  pi.registerTool(buildSubmitTool(role, null, inspection)); // mutant R2-submit : la projection n'est plus lue"
   },
   {
     "test": "L0 REG R2-dispatch — un submit refusé n'est jamais l'enveloppe : seul compte celui qui est accepté",
@@ -1510,5 +1510,89 @@
     "file": "subagent-only/spawn-args.ts",
     "find": "        ? { PI_SUBAGENT_OPEN_RISKS: JSON.stringify(ctx.risquesOuverts) }",
     "replace": "        ? {} // mutant R2-projection : l'enfant ne reçoit plus la projection"
+  },
+  {
+    "test": "L0 REG RC-refus — un verdict bloquant est refusé tant qu'un kept_consumer n'est pas inspecté, et seulement alors",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "  if (!BLOQUANTS.has(String(soumission.verdict))) return null;",
+    "replace": "  if (String(soumission.verdict) !== \"needs_rework\") return null; // mutant RC-refus : blocked échappe"
+  },
+  {
+    "test": "L0 REG RC-refus — un verdict bloquant est refusé tant qu'un kept_consumer n'est pas inspecté, et seulement alors",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "    return { code: REVIEW_BLOCKING_WITHOUT_KEPT_CONSUMERS, unit: null, missing_kept_consumers: [], kept_inconnu: gardes.inconnu };",
+    "replace": "    return null; // mutant RC-refus : inconnu vaut aucun kept"
+  },
+  {
+    "test": "L0 REG RC-refus — un verdict bloquant est refusé tant qu'un kept_consumer n'est pas inspecté, et seulement alors",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "  return { inconnu: \"liste des kept_consumers illisible\" };",
+    "replace": "  return null; // mutant RC-refus : illisible vaut absente"
+  },
+  {
+    "test": "L0 REG RC-refus — un verdict bloquant est refusé tant qu'un kept_consumer n'est pas inspecté, et seulement alors",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "    return reel === null || !inspectes.has(reel);",
+    "replace": "    return reel !== null && !inspectes.has(reel); // mutant RC-refus : un kept introuvable passe"
+  },
+  {
+    "test": "L0 REG RC-preuve — seul un read réussi qui résout dans le worktree inspecte un fichier",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "  if (!e || e.toolName !== \"read\" || e.isError !== false) return null;",
+    "replace": "  if (!e || e.isError === true) return null; // mutant RC-preuve : tout outil non en erreur inspecte"
+  },
+  {
+    "test": "L0 REG RC-preuve — seul un read réussi qui résout dans le worktree inspecte un fichier",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "  if (rel === \"\" || rel === \"..\" || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;",
+    "replace": "  if (rel === \"\") return null; // mutant RC-preuve : hors du worktree compte"
+  },
+  {
+    "test": "L0 REG RC-preuve — seul un read réussi qui résout dans le worktree inspecte un fichier",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "    reel = resoudre(resolve(cwd, chemin));",
+    "replace": "    reel = resolve(cwd, chemin); // mutant RC-preuve : sans realpath"
+  },
+  {
+    "test": "L0 REG RC-submit — le vrai submit refuse un verdict bloquant tant que chaque kept n'a pas été lu par read, sans terminer",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "        if (inspection) {",
+    "replace": "        if (false) { // mutant RC-submit"
+  },
+  {
+    "test": "L0 REG RC-submit — le vrai submit refuse un verdict bloquant tant que chaque kept n'a pas été lu par read, sans terminer",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "        if (reel) inspectes.add(reel);",
+    "replace": "        void reel; // mutant RC-submit : aucune lecture retenue"
+  },
+  {
+    "test": "L0 REG RC-submit — le vrai submit refuse un verdict bloquant tant que chaque kept n'a pas été lu par read, sans terminer",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "    const gardes = lireGardes(process.env.PI_SUBAGENT_KEPT_CONSUMERS);",
+    "replace": "    const gardes = lireGardes(undefined); // mutant RC-submit : la liste n'est plus lue"
+  },
+  {
+    "test": "L0 REG RC-dispatch — un submit refusé par RC n'est jamais l'enveloppe",
+    "file": "subagent-only/dispatch.ts",
+    "find": "    if (details && !(typeof details === \"object\" && \"refus\" in details)) state.submit = details as Record<string, unknown>;",
+    "replace": "    if (details) state.submit = details as Record<string, unknown>; // mutant RC-dispatch"
+  },
+  {
+    "test": "L0 REG RC-transmission — le runtime porte au reviewer d'une unité les kept_consumers du plan validé, au worker rien",
+    "file": "extensions/subagent/index.ts",
+    "find": "                  gardes: lane && (agent.envelopeRole ?? agent.name) === \"reviewer\" ? gardesDe(unit) : null,",
+    "replace": "                  gardes: null, // mutant RC-transmission"
+  },
+  {
+    "test": "L0 REG RC-transmission — le runtime porte au reviewer d'une unité les kept_consumers du plan validé, au worker rien",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "      ...(gardes ? { PI_SUBAGENT_KEPT_CONSUMERS: JSON.stringify(gardes) } : {}),",
+    "replace": "      ...({}), // mutant RC-transmission : l'enfant ne reçoit plus la liste"
+  },
+  {
+    "test": "L0 REG RC-transmission — le runtime porte au reviewer d'une unité les kept_consumers du plan validé, au worker rien",
+    "file": "subagent-only/spawn-args.ts",
+    "find": "  const gardes = reviewer && ctx.gardes && ctx.gardes.kept.length > 0 ? ctx.gardes : null;",
+    "replace": "  const gardes = ctx.gardes && ctx.gardes.kept.length > 0 ? ctx.gardes : null; // mutant RC-transmission : tout rôle"
   }
 ]

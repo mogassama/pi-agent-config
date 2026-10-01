@@ -3116,6 +3116,20 @@ function perimetreDe(unite: string | undefined, lectureSeule: boolean): Perimetr
 }
 
 /**
+ * LOT-REPRISES-CORRECTIF, RC : les kept_consumers d'une unité, pour son reviewer.
+ *
+ * Lus dans le plan gelé et validé par R1-a — jamais dans la tâche. Une unité sans kept_consumers
+ * n'impose rien : `null`.
+ */
+function gardesDe(unite: string | undefined): { unit: string; kept: string[] } | null {
+  if (!unite) return null;
+  const p = plan();
+  if (p.status !== "usable") return null;
+  const kept = p.kept?.[unite] ?? [];
+  return kept.length > 0 ? { unit: unite, kept: [...kept] } : null;
+}
+
+/**
  * LOT-REPRISES, R2 : ce que le reviewer d'une unité reçoit au départ — les ids de ses risques
  * encore ouverts au registre autoritaire (`open` et `routed`, toutes générations) et ceux qui
  * lui sont remis par `for_risks`. Un état inconnu est transmis comme tel : l'enfant refuse alors
@@ -5083,6 +5097,7 @@ export default function (pi: ExtensionAPI) {
                     agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd,
                     testCommand: isReadOnly(agent.tools) ? null : commandeDuRun(RUN_ID),
                     perimetre: perimetreDe(workUnit.id, isReadOnly(agent.tools)),
+                    gardes: (agent.envelopeRole ?? agent.name) === "reviewer" ? gardesDe(workUnit.id) : null,
                   },
                   seq,
                   signal: bothSignals(signal),
@@ -5295,6 +5310,7 @@ export default function (pi: ExtensionAPI) {
                   risquesOuverts: (agent.envelopeRole ?? agent.name) === "reviewer"
                     ? projectionDesRisques(lane, unit, forRisks)
                     : null,
+                  gardes: lane && (agent.envelopeRole ?? agent.name) === "reviewer" ? gardesDe(unit) : null,
                 },
                 seq: seqs[i],
                 signal: bothSignals(signal),

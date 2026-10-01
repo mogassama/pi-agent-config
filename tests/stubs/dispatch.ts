@@ -21,6 +21,8 @@ export interface AppelDispatch {
   perimetre?: { unit: string; scope: string[]; kept: string[] } | null;
   /** LOT-REPRISES, R2 : la projection des risques portée à un reviewer, telle que reçue. */
   risquesOuverts?: { ids: string[]; remis: string[] } | { inconnu: string } | null;
+  /** LOT-REPRISES-CORRECTIF, RC : les kept_consumers portés à un reviewer, tels que reçus. */
+  gardes?: { unit: string; kept: string[] } | null;
 }
 
 /** Les appels reçus, dans l'ordre. Le harnais le vide entre deux scénarios. */
@@ -41,7 +43,7 @@ export function reinitialiser(): void {
 export async function dispatch(
   agent: { name?: string },
   task: string,
-  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"] }; seq?: number },
+  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"]; gardes?: AppelDispatch["gardes"] }; seq?: number },
 ): Promise<RunResult> {
   const appel: AppelDispatch = {
     agent: agent?.name ?? "?",
@@ -51,6 +53,7 @@ export async function dispatch(
     testCommand: opts?.ctx?.testCommand,
     perimetre: opts?.ctx?.perimetre,
     risquesOuverts: opts?.ctx?.risquesOuverts,
+    gardes: opts?.ctx?.gardes,
   };
   APPELS.push(appel);
   /*

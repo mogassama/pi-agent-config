@@ -59,10 +59,19 @@ export interface BuildContext {
    * indisponibilité. Portée par l'environnement (`PI_SUBAGENT_OPEN_RISKS`) au `submit`.
    */
   risquesOuverts?: { ids: string[]; remis: string[] } | { inconnu: string } | null;
+  /**
+   * LOT-REPRISES-CORRECTIF, RC : pour un reviewer d'unité, les kept_consumers de l'unité lus dans
+   * le plan validé. Portés dans la tâche et, pour le `submit`, dans l'environnement
+   * (`PI_SUBAGENT_KEPT_CONSUMERS`) : un verdict bloquant exige de les avoir lus.
+   */
+  gardes?: { unit: string; kept: string[] } | null;
 }
 
 /** LOT-REPRISES, R1-b : le début de la note de périmètre, reconnaissable dans une transcription. */
 export const NOTE_PERIMETRE = "Périmètre d'écriture de ";
+
+/** LOT-REPRISES-CORRECTIF, RC : le début de la note du reviewer, reconnaissable dans une transcription. */
+export const NOTE_GARDES = "Consommateurs à préserver de ";
 
 export interface SpawnPlan {
   args: string[];
@@ -443,7 +452,15 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
       "Un edit ou un write hors de ce périmètre est refusé ; un fichier dont l'interface devrait changer " +
       "se signale dans `deviations`.\n\n"
     : "";
-  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${notePerimetre}${CLOSING_INSTRUCTION}`);
+  // RC : les kept_consumers de l'unité, pour le reviewer seulement — et seulement s'il y en a.
+  const reviewer = (agent.envelopeRole ?? agent.name) === "reviewer";
+  const gardes = reviewer && ctx.gardes && ctx.gardes.kept.length > 0 ? ctx.gardes : null;
+  const noteGardes = gardes
+    ? `${NOTE_GARDES}${gardes.unit} : ${gardes.kept.join(", ")}. ` +
+      "Un verdict needs_rework ou blocked exige de les avoir lus dans cette revue, avec l'outil read : " +
+      "chaque finding et le correctif qu'il demande doivent rester compatibles avec eux.\n\n"
+    : "";
+  args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${notePerimetre}${noteGardes}${CLOSING_INSTRUCTION}`);
 
   return {
     args,
@@ -454,6 +471,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
       ...((agent.envelopeRole ?? agent.name) === "reviewer" && ctx.risquesOuverts
         ? { PI_SUBAGENT_OPEN_RISKS: JSON.stringify(ctx.risquesOuverts) }
         : {}),
+      ...(gardes ? { PI_SUBAGENT_KEPT_CONSUMERS: JSON.stringify(gardes) } : {}),
     },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),

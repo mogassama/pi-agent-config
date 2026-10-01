@@ -22,6 +22,7 @@ import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 
 import { lireProjection, refusApprobation, texteDuRefus, type Projection } from "./approbation.ts";
+import { inspecte, lireGardes, refusBloquant, texteDuRefusInspection, type Gardes } from "./inspection.ts";
 
 // ---------------------------------------------------------------- envelope
 
@@ -246,7 +247,18 @@ type RoleName = keyof typeof payloads;
 
 // ------------------------------------------------------------------- tool
 
-function buildSubmitTool(role: RoleName, projection: Projection | null = null) {
+/**
+ * LOT-REPRISES-CORRECTIF, RC : ce que le `submit` du reviewer consulte pour un verdict bloquant —
+ * les kept_consumers transmis par le parent, les chemins réels que cette délégation a lus, et le
+ * worktree de l'enfant où ils se résolvent.
+ */
+interface Inspection {
+  gardes: Gardes | null;
+  inspectes: ReadonlySet<string>;
+  cwd: string;
+}
+
+function buildSubmitTool(role: RoleName, projection: Projection | null = null, inspection: Inspection | null = null) {
   // Flat, not { ...envelope, payload: {...} }.
   //
   // Each child sees exactly one role's schema, so the wrapper separated nothing
@@ -289,6 +301,20 @@ function buildSubmitTool(role: RoleName, projection: Projection | null = null) {
             details: { refus },
           };
         }
+        /*
+         * LOT-REPRISES-CORRECTIF, RC : `needs_rework` ou `blocked` sans avoir lu chaque
+         * kept_consumer de l'unité est refusé de la même façon — sans terminer, sous
+         * `details.refus` : aucune enveloppe, aucune `REVIEWED`, aucun finding publié.
+         */
+        if (inspection) {
+          const refusRc = refusBloquant(params as Record<string, unknown>, inspection.gardes, inspection.inspectes, inspection.cwd);
+          if (refusRc) {
+            return {
+              content: [{ type: "text" as const, text: texteDuRefusInspection(refusRc) }],
+              details: { refus: refusRc },
+            };
+          }
+        }
       }
       return {
         content: [{ type: "text" as const, text: params.summary }],
@@ -312,6 +338,26 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
+  /*
+   * RC : pour le reviewer d'une unité dotée de kept_consumers, les lectures réelles de cette
+   * délégation. Tenues ici, à partir des `tool_result` que pi transmet — rien n'est déclaré par
+   * le modèle. Le gestionnaire ne modifie jamais le résultat.
+   */
+  let inspection: Inspection | null = null;
+  if (role === "reviewer") {
+    const gardes = lireGardes(process.env.PI_SUBAGENT_KEPT_CONSUMERS);
+    if (gardes) {
+      const cwd = process.cwd();
+      const inspectes = new Set<string>();
+      inspection = { gardes, inspectes, cwd };
+      pi.on("tool_result", async (event) => {
+        const reel = inspecte(event, cwd);
+        if (reel) inspectes.add(reel);
+        return undefined;
+      });
+    }
+  }
+
   // R2 : la projection des risques ouverts de l'unité, lue par le parent au départ de la revue.
-  pi.registerTool(buildSubmitTool(role, lireProjection(process.env.PI_SUBAGENT_OPEN_RISKS)));
+  pi.registerTool(buildSubmitTool(role, lireProjection(process.env.PI_SUBAGENT_OPEN_RISKS), inspection));
 }
