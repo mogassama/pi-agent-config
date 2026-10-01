@@ -3,7 +3,7 @@
 run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée au plan terminal, et sa décomposition.
 
   bin/run-cost <runs> <sessions> [--run <runId>] [--session <fichier>]… [--coupure auto|aucune|<ISO>]
-               [--json <fichier>] [--tours]
+               [--json <fichier>] [--tours] [--cycles]
 
   <runs>      le `.pi-subagent-runs` du dépôt, ou sa copie relevée
   <sessions>  le dossier des sessions pi de l'orchestrateur pour ce dépôt (*.jsonl)
@@ -18,6 +18,14 @@ run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée
               la résidence des résultats d'outils par nature. La transcription d'un enfant sert alors
               aux totaux : elle est lue sans omission (une ligne illisible refuse, fichier et ligne
               nommés), et la somme de ses tours doit ÉGALER le total de l'artefact, sinon refus nommé.
+  --cycles    ajoute les cycles worker → reviewer → reprise de chaque unité, avant coupure (LOT-REPRISES,
+              R3) : workers initiaux et de reprise, reviewers, et la cause de chaque reprise, lue dans
+              cet ordre — registres (lanes, délégations), `policy_blockers` structurés de la porte
+              (`details.integration_gate` des résultats `task` de la session), verdict structuré de la
+              revue. Une cause non démontrable s'écrit `unknown`. Plus les compteurs : porte
+              scope-breach et open-risks, approved avec risque ouvert, refus REVIEW_APPROVED_WITH_OPEN_RISKS
+              et WRITE_OUTSIDE_SCOPE relevés dans les transcriptions (lues sans omission), refus de plan
+              structurés (`details.plan_refusal`).
 
 Entrées sans ambiguïté (adjudication ITE-1, P1-0). Sans sélection explicite : exactement un run dans
 <runs>, son plan `<runId>-plan.json`, et des sessions qui mentionnent toutes ce run et lui seul ;
@@ -41,6 +49,7 @@ Lot ITE, P1-0 (adjudication ITE Q-F, Q-N). Deux familles de nombres, et elles ne
 Une délégation compte AVANT si elle a commencé avant la coupure ; un appel de l'orchestrateur, si son
 horodatage la précède. Rien ici n'écrit, rien ne lance git. Code 0 ; 2 sur une précondition.
 """
+import fnmatch
 import glob
 import hashlib
 import json
@@ -400,6 +409,183 @@ def imprimer_tours(runs, dl, avant):
     return sortie
 
 
+# ------------------------------------------------------------------ cycles (--cycles, LOT-REPRISES R3)
+
+def seq_de(nom, run_id):
+    m = re.match(rf"^{re.escape(run_id)}-(\d+)-", os.path.basename(nom or ""))
+    return int(m.group(1)) if m else None
+
+
+def resultats_task(fichiers, run_id):
+    """Les résultats `task` de l'orchestrateur, avec leurs détails structurés : porte, refus de plan."""
+    out = []
+    for p in fichiers:
+        for e in jsonl(p):
+            if e.get("type") != "message":
+                continue
+            m = e.get("message") or {}
+            if m.get("role") != "toolResult" or m.get("toolName") != "task":
+                continue
+            d = m.get("details") if isinstance(m.get("details"), dict) else {}
+            seqs = {seq_de(c.get("artifact"), run_id) for c in d.get("children") or [] if isinstance(c, dict)}
+            seqs.add(seq_de(d.get("artifact"), run_id))
+            out.append({"t": ts(e.get("timestamp")), "gate": d.get("integration_gate") if isinstance(d.get("integration_gate"), dict) else None,
+                        "plan_refusal": d.get("plan_refusal") if isinstance(d.get("plan_refusal"), dict) else None,
+                        "seqs": sorted(x for x in seqs if x is not None)})
+    return out
+
+
+def marqueurs(runs, d):
+    """Dans la transcription d'un enfant, lue sans omission : refus R2 (structurés) et refus R1-b (codés)."""
+    tr = os.path.join(runs, os.path.basename(d.get("artifact_nom") or "")[:-5] + ".jsonl")
+    if not os.path.isfile(tr):
+        return None
+    r2, hors = 0, 0
+    for e in jsonl(tr):
+        if e.get("type") != "tool_execution_end":
+            continue
+        res = e.get("result") if isinstance(e.get("result"), dict) else {}
+        det = res.get("details") if isinstance(res.get("details"), dict) else {}
+        if e.get("toolName") == "submit" and isinstance(det.get("refus"), dict) and \
+                det["refus"].get("code") == "REVIEW_APPROVED_WITH_OPEN_RISKS":
+            r2 += 1
+        if e.get("toolName") in ("edit", "write") and "WRITE_OUTSIDE_SCOPE" in texte(res.get("content")):
+            hors += 1
+    return {"approved_refuses_r2": r2, "ecritures_hors_scope_refusees": hors}
+
+
+def dans_scope(f, motifs):
+    f = f[2:] if f.startswith("./") else f
+    for brut in motifs:
+        p = (brut[2:] if brut.startswith("./") else brut).rstrip("/")
+        if p in ("", ".") or f == p or f.startswith(p + "/") or fnmatch.fnmatchcase(f, brut):
+            return True
+    return False
+
+
+def scopes_du_plan(runs, run_id):
+    doc = json.loads(lire_octets(os.path.join(runs, f"{run_id}-plan.json")).decode("utf-8"))
+    return {str(u.get("id", "")).strip(): [str(x) for x in u.get("expected_write_scope") or []]
+            for u in doc.get("work_units", []) if isinstance(u, dict)}
+
+
+def cycles(runs, run_id, dl, evenements, taches, avant):
+    """
+    Les cycles de chaque unité, avant coupure. Un cycle de reprise est toute délégation worker d'une
+    unité après son premier worker ; sa cause est ce qui a empêché l'intégration de l'état précédent :
+    le `policy_blockers` de la porte relevée sur la dernière revue entre les deux workers, sinon le
+    verdict structuré de cette revue (`needs_rework`, `blocked`), sinon `unknown`.
+    """
+    scopes = scopes_du_plan(runs, run_id)
+    porte = {}
+    for t in taches:
+        for sq in t["seqs"]:
+            if t["gate"]:
+                porte[sq] = t["gate"]
+    par_unite = {}
+    for d in dl:
+        if d["unite"] and avant(ts(d["at"])):
+            par_unite.setdefault(d["unite"], []).append(d)
+    journal = {d.get("seq"): d for d in jsonl(os.path.join(runs, f"{run_id}-delegations.jsonl")) if "seq" in d} \
+        if os.path.isfile(os.path.join(runs, f"{run_id}-delegations.jsonl")) else {}
+    integrees = {}
+    for e in evenements:
+        if e.get("event") == "INTEGRATED" and e.get("work_unit") not in integrees:
+            integrees[e.get("work_unit")] = ts(e.get("at"))
+    unites, compte = {}, {
+        "worker_initial": 0, "rework_workers": 0, "reviewers": 0, "cycles_rework": 0,
+        "porte_scope_breach": 0, "porte_open_risks": 0, "scope_breach_avant_premiere_integration": 0,
+        "reprises_scope_breach": 0, "reprises_open_risks": 0, "approved_avec_risque_ouvert": 0,
+        "approved_refuses_r2": 0, "ecritures_hors_scope_refusees": 0, "transcriptions_absentes": 0,
+        "plan_validation_retries": sum(1 for t in taches if t["plan_refusal"]),
+    }
+    for u, ds in sorted(par_unite.items()):
+        ds = sorted(ds, key=lambda d: d["seq"])
+        workers = [d for d in ds if d["role"] == "worker"]
+        revues = [d for d in ds if d["role"] == "reviewer"]
+        compte["worker_initial"] += 1 if workers else 0
+        compte["rework_workers"] += max(0, len(workers) - 1)
+        compte["reviewers"] += len(revues)
+        for r in revues:
+            g = porte.get(r["seq"]) or {}
+            bloqueurs = g.get("policy_blockers") or [] if g.get("outcome") == "blocked" else []
+            if "scope-breach" in bloqueurs:
+                compte["porte_scope_breach"] += 1
+                if u not in integrees or ts(r["at"]) < integrees[u]:
+                    compte["scope_breach_avant_premiere_integration"] += 1
+            if "open-risks" in bloqueurs:
+                compte["porte_open_risks"] += 1
+            art = lire_json(os.path.join(runs, os.path.basename(r["artifact_nom"])))
+            payload = ((art.get("envelope") or {}).get("payload") or {})
+            if r["verdict"] == "approved" and (payload.get("open_risks") or "open-risks" in bloqueurs):
+                compte["approved_avec_risque_ouvert"] += 1
+        for d in ds:
+            m = marqueurs(runs, d)
+            if m is None:
+                compte["transcriptions_absentes"] += 1
+                continue
+            compte["approved_refuses_r2"] += m["approved_refuses_r2"]
+            compte["ecritures_hors_scope_refusees"] += m["ecritures_hors_scope_refusees"]
+        reprises = []
+        for i in range(1, len(workers)):
+            prec, w = workers[i - 1], workers[i]
+            entre = [r for r in revues if prec["seq"] < r["seq"] < w["seq"]]
+            if not entre:
+                cause = {"cause": "unknown", "source": "aucune revue entre les deux workers"}
+            else:
+                r = entre[-1]
+                g = porte.get(r["seq"]) or {}
+                bloqueurs = sorted(g.get("policy_blockers") or []) if g.get("outcome") == "blocked" else []
+                if bloqueurs:
+                    cause = {"cause": "+".join(bloqueurs), "source": f"policy_blockers de la porte, revue #{r['seq']}"}
+                    if "scope-breach" in bloqueurs:
+                        ecrits = sorted({f for x in workers[:i] for f in (journal.get(x["seq"]) or {}).get("changed_files") or []})
+                        # Ce que les workers précédents ont écrit hors du scope du plan (journal des délégations).
+                        cause["ecrits_hors_scope"] = [f for f in ecrits if not dans_scope(f, scopes.get(u, []))]
+                    if "open-risks" in bloqueurs:
+                        etat = {}
+                        for e in evenements:
+                            # L'état des risques après cette revue : aucun worker n'en change, et la revue
+                            # est la dernière avant ce worker.
+                            if e.get("event") == "RISK" and e.get("work_unit") == u and ts(e.get("at")) < ts(w["at"]):
+                                etat[e.get("id")] = e.get("transition")
+                        cause["risques_ouverts"] = sorted(k for k, v in etat.items() if v != "resolved")
+                elif r["verdict"] in ("needs_rework", "blocked"):
+                    cause = {"cause": r["verdict"], "source": f"verdict structuré, revue #{r['seq']}",
+                             "constats": [c for c in r["constats"] if c]}
+                else:
+                    cause = {"cause": "unknown", "source": f"revue #{r['seq']} {r['verdict']} sans porte relevée"}
+            if "scope-breach" in cause["cause"]:
+                compte["reprises_scope_breach"] += 1
+            if "open-risks" in cause["cause"]:
+                compte["reprises_open_risks"] += 1
+            reprises.append({"worker": w["seq"], **cause})
+        compte["cycles_rework"] += len(reprises)
+        unites[u] = {"chaine": [f"{d['role'][0].upper()}#{d['seq']}" for d in ds], "reprises": reprises}
+    return {"unites": unites, "compteurs": compte}
+
+
+def imprimer_cycles(c):
+    print("\n== CYCLES PAR UNITÉ (avant coupure) — causes lues dans les registres et la porte ; unknown si non démontrable")
+    for u, x in c["unites"].items():
+        print(f"  {u} : {' → '.join(x['chaine'])} · reprises {len(x['reprises'])}")
+        for r in x["reprises"]:
+            detail = ""
+            if r.get("ecrits_hors_scope"):
+                detail += f" · écrits hors scope par les workers précédents {', '.join(r['ecrits_hors_scope'])}"
+            if r.get("risques_ouverts"):
+                detail += f" · risques ouverts {', '.join(r['risques_ouverts'])}"
+            if r.get("constats"):
+                detail += f" · constats {','.join(r['constats'])}"
+            print(f"    W#{r['worker']} ← {r['cause']} ({r['source']}){detail}")
+    k = c["compteurs"]
+    print("  compteurs : " + " · ".join(f"{cle} {k[cle]}" for cle in (
+        "worker_initial", "rework_workers", "reviewers", "cycles_rework", "porte_scope_breach",
+        "scope_breach_avant_premiere_integration", "reprises_scope_breach", "porte_open_risks",
+        "reprises_open_risks", "approved_avec_risque_ouvert", "approved_refuses_r2",
+        "ecritures_hors_scope_refusees", "plan_validation_retries", "transcriptions_absentes")))
+
+
 # ------------------------------------------------------------------ grille
 
 def main(argv):
@@ -416,11 +602,15 @@ def analyser(argv):
         return 2
     runs, sessions = argv[1], argv[2]
     coupure_arg, sortie_json, run_explicite, sessions_explicites = "auto", None, None, []
-    avec_tours = False
+    avec_tours, avec_cycles = False, False
     i = 3
     while i < len(argv):
         if argv[i] == "--tours":
             avec_tours = True
+            i += 1
+            continue
+        if argv[i] == "--cycles":
+            avec_cycles = True
             i += 1
             continue
         if argv[i] in ("--coupure", "--json", "--run", "--session") and i + 1 < len(argv):
@@ -553,6 +743,11 @@ def analyser(argv):
 
     if avec_tours:
         grille["tours"] = imprimer_tours(runs, dl, avant)
+
+    if avec_cycles:
+        c = cycles(runs, run_id, dl, evenements, resultats_task(fichiers_sessions, run_id), avant)
+        imprimer_cycles(c)
+        grille["cycles"] = c
 
     if sortie_json:
         with open(sortie_json, "w", encoding="utf-8") as f:

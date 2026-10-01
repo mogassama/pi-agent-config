@@ -10,6 +10,8 @@ design_update, une relecture comptée quand le contenu a changé ; et, depuis l'
 les entrées ambiguës : deux runs dans le dossier, une session étrangère, une ligne JSONL illisible,
 un plan qui ne correspond plus à son planHash. Depuis le plan P1 (Q4) : --tours, qui lit la
 transcription d'un enfant sans omission et rapproche la somme de ses tours du total de l'artefact.
+Depuis LOT-REPRISES (R3) : --cycles, dont chaque cause de reprise se lit dans la porte puis le
+verdict structuré, et vaut unknown sinon.
 
     python3 tests/test_run_cost.py
     bin/test-guards                # le lance aussi
@@ -263,6 +265,111 @@ class Tours(unittest.TestCase):
             code, sortie = lancer(runs, sessions, "--tours")
             self.assertEqual(code, 2, sortie)
             self.assertIn("transcription absente", sortie)
+
+
+# ------------------------------------------------------------------ --cycles (LOT-REPRISES, R3)
+
+def unite_jouee(runs, sessions, chaine):
+    """
+    Une unité W01 jouée délégation par délégation. Chaque élément : (rôle, extra) où extra porte
+    verdict, open_risks, changed_files, gate (la porte relevée sur le résultat `task`), refus (le
+    plan refusé avant elle) et transcription (lignes brutes de la transcription de l'enfant).
+    """
+    journal, session = [], [{"type": "session", "timestamp": "2026-01-01T00:00:00Z", "cwd": "/d"}]
+    for i, (role, x) in enumerate(chaine, 1):
+        nom = f"{RUN}-{i:02d}-{role}"
+        payload = {"verdict": x.get("verdict"), "open_risks": x.get("open_risks", []), "findings": x.get("findings", [])} \
+            if role == "reviewer" else {}
+        (runs / f"{nom}.json").write_text(json.dumps({
+            "usage": {"input": 10, "output": 0}, "turns": 1, "envelope": {"status": "ok", "payload": payload}}), encoding="utf-8")
+        (runs / f"{nom}.jsonl").write_text("".join(
+            (l if isinstance(l, str) else json.dumps(l)) + "\n" for l in x.get("transcription", [])), encoding="utf-8")
+        journal.append({"at": f"2026-01-01T00:{i:02d}:00Z", "seq": i, "role": role, "work_unit": "W01",
+                        "artifact": f"/x/{nom}.json", "changed_files": x.get("changed_files", [])})
+        if x.get("refus"):
+            session.append({"type": "message", "timestamp": f"2026-01-01T00:{i:02d}:00Z", "message": {
+                "role": "toolResult", "toolName": "task", "toolCallId": f"r{i}", "content": [{"type": "text", "text": "Refused"}],
+                "details": {"plan_refusal": {"code": "PLAN_DIRECT_STATIC_CONSUMERS_UNCLASSIFIED", "missing": {"W01": ["x.py"]}}}}})
+        details = {"artifact": f"/x/{nom}.json", "children": [{"artifact": f"/x/{nom}.json"}]}
+        if x.get("gate"):
+            details["integration_gate"] = {"outcome": "blocked", "policy_blockers": x["gate"]}
+        session.append({"type": "message", "timestamp": f"2026-01-01T00:{i:02d}:01Z", "message": {
+            "role": "toolResult", "toolName": "task", "toolCallId": f"t{i}",
+            "content": [{"type": "text", "text": f"[run {RUN}] ok"}], "details": details}})
+    ecrire_jsonl(runs / f"{RUN}-delegations.jsonl", journal)
+    ecrire_jsonl(sessions / "s.jsonl", session)
+
+
+def risque(id_, transition, minute):
+    return {"event_seq": minute, "work_unit": "W01", "lane": f"{RUN}-W01-g1", "at": f"2026-01-01T00:{minute:02d}:00.500Z",
+            "event": "RISK", "id": id_, "transition": transition}
+
+
+class Cycles(unittest.TestCase):
+    """LOT-REPRISES, R3 : les cycles de reprise et leur cause, lus dans les registres et la porte ; unknown sinon."""
+
+    def test_causes_lues_dans_la_porte_puis_le_verdict(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [risque("r-1", "opened", 2)])
+            unite_jouee(runs, sessions, [
+                ("worker", {"changed_files": ["src/a.py", "lib/hors.py"]}),
+                ("reviewer", {"verdict": "approved", "open_risks": ["où ?"], "gate": ["open-risks", "scope-breach"]}),
+                ("worker", {}),
+                ("reviewer", {"verdict": "needs_rework", "findings": [{"severity": "LOW"}]}),
+                ("worker", {}),
+                ("reviewer", {"verdict": "approved"}),
+            ])
+            code, sortie = lancer(runs, sessions, "--cycles", "--json", Path(t) / "g.json")
+            self.assertEqual(code, 0, sortie)
+            c = json.loads((Path(t) / "g.json").read_text(encoding="utf-8"))["cycles"]
+            r = c["unites"]["W01"]["reprises"]
+            self.assertEqual([x["cause"] for x in r], ["open-risks+scope-breach", "needs_rework"])
+            self.assertEqual(r[0]["ecrits_hors_scope"], ["lib/hors.py"])
+            self.assertEqual(r[0]["risques_ouverts"], ["r-1"])
+            k = c["compteurs"]
+            self.assertEqual((k["worker_initial"], k["rework_workers"], k["cycles_rework"], k["reviewers"]), (1, 2, 2, 3))
+            self.assertEqual((k["porte_scope_breach"], k["reprises_scope_breach"], k["porte_open_risks"],
+                              k["reprises_open_risks"], k["approved_avec_risque_ouvert"]), (1, 1, 1, 1, 1))
+
+    def test_cause_non_demontrable_est_unknown(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            unite_jouee(runs, sessions, [
+                ("worker", {}), ("worker", {}),
+                ("reviewer", {"verdict": "approved"}), ("worker", {}),
+            ])
+            code, sortie = lancer(runs, sessions, "--cycles", "--json", Path(t) / "g.json")
+            self.assertEqual(code, 0, sortie)
+            r = json.loads((Path(t) / "g.json").read_text(encoding="utf-8"))["cycles"]["unites"]["W01"]["reprises"]
+            self.assertEqual([x["cause"] for x in r], ["unknown", "unknown"])
+            self.assertIn("aucune revue entre les deux workers", r[0]["source"])
+            self.assertIn("sans porte relevée", r[1]["source"])
+
+    def test_refus_structures_et_codes_comptes(self):
+        refus_r2 = {"type": "tool_execution_end", "toolName": "submit", "result": {
+            "content": [{"type": "text", "text": "Refused"}],
+            "details": {"refus": {"code": "REVIEW_APPROVED_WITH_OPEN_RISKS", "new_open_risks": 1, "open_risk_ids": []}}}}
+        hors = {"type": "tool_execution_end", "toolName": "edit", "isError": True, "result": {
+            "content": [{"type": "text", "text": "blocked by role-guard: WRITE_OUTSIDE_SCOPE lib/hors.py — fichier"}]}}
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            unite_jouee(runs, sessions, [
+                ("worker", {"refus": True, "transcription": [hors, hors]}),
+                ("reviewer", {"verdict": "approved", "transcription": [refus_r2]}),
+            ])
+            code, sortie = lancer(runs, sessions, "--cycles", "--json", Path(t) / "g.json")
+            self.assertEqual(code, 0, sortie)
+            k = json.loads((Path(t) / "g.json").read_text(encoding="utf-8"))["cycles"]["compteurs"]
+            self.assertEqual((k["ecritures_hors_scope_refusees"], k["approved_refuses_r2"], k["plan_validation_retries"],
+                              k["cycles_rework"]), (2, 1, 1, 0))
+
+    def test_ligne_illisible_d_une_transcription_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = monter(Path(t), ["W01"], [])
+            unite_jouee(runs, sessions, [("worker", {"transcription": ["{tronquée"]}), ("reviewer", {"verdict": "approved"})])
+            code, sortie = lancer(runs, sessions, "--cycles")
+            self.assertEqual(code, 2, sortie)
+            self.assertIn(f"{RUN}-01-worker.jsonl:1", sortie)
 
 
 if __name__ == "__main__":
