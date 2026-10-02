@@ -3,7 +3,7 @@
 run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée au plan terminal, et sa décomposition.
 
   bin/run-cost <runs> <sessions> [--run <runId>] [--session <fichier>]… [--coupure auto|aucune|<ISO>]
-               [--json <fichier>] [--tours] [--cycles]
+               [--json <fichier>] [--tours] [--cycles] [--postes]
 
   <runs>      le `.pi-subagent-runs` du dépôt, ou sa copie relevée
   <sessions>  le dossier des sessions pi de l'orchestrateur pour ce dépôt (*.jsonl)
@@ -26,6 +26,49 @@ run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée
               scope-breach et open-risks, approved avec risque ouvert, refus REVIEW_APPROVED_WITH_OPEN_RISKS
               et WRITE_OUTSIDE_SCOPE relevés dans les transcriptions (lues sans omission), refus de plan
               structurés (`details.plan_refusal`).
+  --postes    ajoute les postes de LOT-EFFICACITÉ (M) : les règles D1 et D3 adjugées au diagnostic,
+              versionnées sans changement, et les compteurs des leviers.
+              D1 — chaque appel de l'orchestrateur avant coupure dans UNE catégorie, décidée sur ses
+              outils et leurs résultats : planification initiale, refus R1-a, réécriture après refus,
+              dispatch/délégation, traitement des retours, intégration / portes, finalisation avant T,
+              autre / unknown (listé appel par appel, jamais réaffecté).
+              D3 — chaque tour de chaque délégation dans UNE catégorie primaire (lecture, edit/write,
+              test, environnement, git, submit, mixed/other) ; chaque tour `test` dans une classe :
+              découverte / correction de la commande, tests légitimes après modification, réexécution
+              liée à un échec, validation finale. Un tour multi-outils n'est jamais compté deux fois.
+              Rapprochements : somme des catégories D1 = orchestrateur avant coupure (et même nombre
+              d'appels) ; somme des tours de chaque transcription = total de sa délégation. Leur somme
+              absolue doit valoir 0, sinon code 1. Une transcription absente : poste non établi, listé,
+              jamais 0. Une ligne JSONL illisible refuse, fichier et ligne nommés.
+              Compteurs, lus dans les seules traces structurées du relevé, jamais dans l'environnement
+              des enfants. Trace absente de tout le relevé : « absent » ; absente pour une partie des
+              délégations, ou contradictoire : « non établi » — jamais 0 par défaut. Une trace ne se
+              compte que valide et rattachée à sa délégation (run, séquence, rôle, unité ; provenance :
+              run, planHash, unité, séquence, arbre, fichiers) ; chaque submit needs_rework ou blocked,
+              apparié par toolCallId, doit porter une observation details.inspection cohérente, sinon
+              kept_inspectes_par_injection n'est pas établi (séquence et toolCallId nommés).
+                kept_derives      chemins, somme sur les unités des `derived` de <runId>-kept.json,
+                                  rapproché de `details.plan_kept` (une discordance : non établi) ;
+                                  un chemin compte une fois par unité (le kept est sans doublon).
+                kept_retires      entrées `dropped` de <runId>-kept.json, une par (unité, chemin).
+                fichiers_injectes fichiers, `injection.provenance.files` de <runId>-<NN>-transmis.json,
+                                  sur les revues de lane avant coupure ; une injection par délégation.
+                octets_injectes   octets bruts injectés, `injection.octets_injectes` des mêmes traces.
+                relectures_injectees  appels `read` (tool_execution_start) d'une revue dont le chemin,
+                                  résolu contre le cwd de sa session, est un fichier qui lui a été
+                                  injecté, dans la lane ; chaque appel compte (deux plages : deux
+                                  relectures) ; une lecture à la racine du dépôt n'en est pas une.
+                kept_inspectes_par_injection  paires (délégation, kept) distinctes portées par
+                                  `par_injection` de `details.inspection` des submits bloquants, chacune
+                                  validée : injection.etat = valide, kept dans la provenance transmise,
+                                  contrôle ok, blob lu = attendu = transmis ; un kept observé à deux
+                                  submits de la même revue compte une fois.
+                contrat_test      la décision sur test_command (absent, ignore, transmis) et ce que le
+                                  premier writer de lane avant coupure a reçu (etablie, declaree,
+                                  aucune), lus dans le `test_contract` de sa trace transmis.json.
+                tours_decouverte_test  tours D3 « découverte / correction de la commande » de ce
+                                  premier writer ; établi seulement s'il porte sa trace test_contract.
+                tours_environnement    tours D3 « environnement » du même writer, même condition.
 
 Entrées sans ambiguïté (adjudication ITE-1, P1-0). Sans sélection explicite : exactement un run dans
 <runs>, son plan `<runId>-plan.json`, et des sessions qui mentionnent toutes ce run et lui seul ;
@@ -47,7 +90,8 @@ Lot ITE, P1-0 (adjudication ITE Q-F, Q-N). Deux familles de nombres, et elles ne
               ne remplacent jamais un relevé.
 
 Une délégation compte AVANT si elle a commencé avant la coupure ; un appel de l'orchestrateur, si son
-horodatage la précède. Rien ici n'écrit, rien ne lance git. Code 0 ; 2 sur une précondition.
+horodatage la précède. Rien ici n'écrit, rien ne lance git. Code 0 ; 2 sur une précondition ; 1 si un
+rapprochement de --postes n'est pas nul.
 """
 import fnmatch
 import glob
@@ -591,6 +635,559 @@ def imprimer_cycles(c):
         "revues_bloquantes_refusees", "ecritures_hors_scope_refusees", "plan_validation_retries", "transcriptions_absentes")))
 
 
+# ------------------------------------------------------------------ postes (--postes, LOT-EFFICACITÉ M)
+#
+# Les règles D1 et D3 adjugées au diagnostic de LOT-EFFICACITÉ (diagnostic/d1-ventilation.py,
+# d3-tours.py, commun.py), versionnées ici sans changement, et les compteurs des leviers E1-bis, E2,
+# E3. Une transcription absente rend un poste NON ÉTABLI, jamais 0 ; une trace attendue absente rend
+# un compteur ABSENT ou NON ÉTABLI, jamais 0.
+
+POSTES_D1 = ["planification initiale", "refus R1-a", "réécriture après refus", "dispatch/délégation",
+             "traitement des retours", "intégration / portes", "finalisation avant T", "autre / unknown"]
+REFUS_PLAN = "Refused: plan invalid"
+POSTES_D3 = ["lecture", "edit/write", "test", "environnement", "git", "submit", "mixed/other"]
+CLASSES_TESTS = ["découverte / correction de la commande", "tests légitimes après modification",
+                 "réexécution liée à un échec", "validation finale"]
+LECTURE_D3 = {"read", "ls", "grep", "find"}
+ENV_D3 = re.compile(r"command -v|\bwhich\b|--version|python3? -c|\buv run\b|\.venv|VIRTUAL_ENV|python-version|uv\.lock")
+
+
+def nb(x):
+    return f"{x:,}".replace(",", " ")
+
+
+def appels_postes(fichiers, avant):
+    """Les appels facturés de l'orchestrateur avant coupure, avec leurs outils, et les résultats par toolCallId."""
+    appels, res = [], {}
+    for p in fichiers:
+        for e in jsonl(p):
+            m = e.get("message") or {}
+            if e.get("type") != "message":
+                continue
+            if m.get("role") == "toolResult":
+                t = "".join(x.get("text", "") for x in m.get("content") or [] if isinstance(x, dict) and x.get("type") == "text")
+                res[m.get("toolCallId")] = (t, m.get("details"))
+            if m.get("role") != "assistant" or tot(m.get("usage") or {}) <= 0 or not avant(ts(e.get("timestamp"))):
+                continue
+            outils = [x for x in m.get("content") or [] if isinstance(x, dict) and x.get("type") == "toolCall"]
+            appels.append({"at": str(e.get("timestamp")), "cout": tot(m.get("usage") or {}), "outils": outils})
+    return appels, res
+
+
+def chemin_arg(a):
+    return str((a.get("arguments") or {}).get("path") or "")
+
+
+def ventiler_d1(run_id, appels, res):
+    """D1 : une catégorie par appel, décidée sur ses outils et leurs résultats ; unknown n'est jamais réaffecté."""
+    plan = f"{run_id}-plan.json"
+    artefact = re.compile(rf"{run_id}-\d\d-[a-z-]+\.json$")
+    vu_task, dernier_plan, version, out = False, None, None, []
+    for a in appels:
+        noms = [o.get("name") for o in a["outils"]]
+        attr = ""
+        if not noms:
+            cat = "finalisation avant T"
+        elif "task" in noms:
+            textes = [res.get(o.get("id"), ("", None))[0] for o in a["outils"] if o.get("name") == "task"]
+            if set(noms) != {"task"}:
+                cat, attr = "autre / unknown", "task mêlé à d'autres outils"
+            elif all(t.startswith(REFUS_PLAN) for t in textes):
+                cat, dernier_plan = "refus R1-a", "refus"
+            elif any(t.startswith(REFUS_PLAN) for t in textes):
+                cat, attr = "autre / unknown", "refus R1-a et dispatch dans le même appel"
+            else:
+                cat = "dispatch/délégation"
+                if any(t.startswith("[task: invalid]") for t in textes):
+                    attr = "invalide"
+                dernier_plan = "accepte"
+            vu_task = True
+        elif noms == ["write"] and chemin_arg(a["outils"][0]).endswith(plan):
+            contenu = (a["outils"][0].get("arguments") or {}).get("content")
+            if not vu_task and version is None:
+                cat, attr = "planification initiale", "première écriture du plan"
+            elif dernier_plan == "refus" and contenu != version:
+                cat = "réécriture après refus"
+            else:
+                cat, attr = "autre / unknown", "écriture du plan sans refus précédent, ou contenu identique"
+            version, dernier_plan = contenu, "ecrit"
+        elif not vu_task:
+            cat = "planification initiale"
+        elif all(o.get("name") == "read" and artefact.search(chemin_arg(o)) for o in a["outils"]):
+            cat = "traitement des retours"
+        else:
+            cat = "autre / unknown"
+            attr = "après le premier task : " + ", ".join(
+                f"{o.get('name')} {os.path.basename(chemin_arg(o)) or ''}".strip() for o in a["outils"])
+        out.append((a, cat, attr))
+    return out
+
+
+def tours_postes(transcription):
+    """Les tours d'un enfant (message_end assistant), leurs appels et la fin de chacun ; et le cwd de sa session."""
+    ev = jsonl(transcription)
+    fins = {e.get("toolCallId"): e for e in ev if e.get("type") == "tool_execution_end"}
+    cwd = next((e.get("cwd") for e in ev if e.get("type") == "session" and isinstance(e.get("cwd"), str)), None)
+    out = []
+    for e in ev:
+        m = e.get("message") or {}
+        if e.get("type") == "message_end" and m.get("role") == "assistant":
+            appels = [x for x in m.get("content") or [] if isinstance(x, dict) and x.get("type") == "toolCall"]
+            u = m.get("usage") or {}
+            out.append({"cout": tot(u), "ctx": ctx(u), "appels": appels, "fins": [fins.get(a.get("id")) for a in appels]})
+    return out, ev, cwd
+
+
+def commande(a):
+    return str((a.get("arguments") or {}).get("command") or "")
+
+
+def est_git(c):
+    segs = [s.strip() for s in re.split(r"&&|\|\||;|\n", c) if s.strip()]
+    return bool(segs) and all(s.startswith("git ") or s == "git" for s in segs)
+
+
+def categorie_d3(t):
+    noms = [a.get("name") for a in t["appels"]]
+    if not noms:
+        return "mixed/other", "sans outil"
+    if all(x in LECTURE_D3 for x in noms):
+        return "lecture", ""
+    if all(x in ("edit", "write") for x in noms):
+        return "edit/write", ""
+    if noms == ["submit"]:
+        return "submit", ""
+    if all(x == "bash" for x in noms):
+        cs = [commande(a) for a in t["appels"]]
+        if all("pytest" in c for c in cs):
+            return "test", ""
+        if not any("pytest" in c for c in cs):
+            if all(est_git(c) for c in cs):
+                return "git", ""
+            if all(ENV_D3.search(c) and not est_git(c) for c in cs):
+                return "environnement", ""
+    attr = []
+    if any(a.get("name") == "bash" and "pytest" in commande(a) for a in t["appels"]):
+        attr.append("contient un test")
+    if any(a.get("name") == "bash" and ENV_D3.search(commande(a)) and "pytest" not in commande(a) for a in t["appels"]):
+        attr.append("sonde l'environnement")
+    return "mixed/other", " · ".join(attr)
+
+
+def forme_test(c):
+    i = c.find("pytest")
+    return re.sub(r"\s+", " ", c[: i + len("pytest")]).strip()
+
+
+def classer_tests(lancements):
+    """lancements : (index du tour, commande, réussi, code 127) des tours `test`, dans l'ordre."""
+    out = {}
+    for k, (i, c, ok, c127) in enumerate(lancements):
+        suivant_ok = next((x for x in lancements[k + 1:] if x[2]), None)
+        prec = lancements[k - 1] if k > 0 else None
+        if not ok and (c127 or (suivant_ok is not None and forme_test(c) != forme_test(suivant_ok[1]))):
+            cl = CLASSES_TESTS[0]
+        elif prec is not None and not prec[2] and forme_test(prec[1]) == forme_test(c):
+            cl = CLASSES_TESTS[2]
+        elif k == len(lancements) - 1 and ok:
+            cl = CLASSES_TESTS[3]
+        else:
+            cl = CLASSES_TESTS[1]
+        out[i] = cl
+    return out
+
+
+def texte_fin(fin):
+    if not fin:
+        return ""
+    r = fin.get("result") or {}
+    c = r.get("content") if isinstance(r, dict) else None
+    if isinstance(c, list):
+        return "".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
+    return str(r)
+
+
+def postes_d3(tt):
+    """Une catégorie primaire par tour ; les tours `test` dans une des quatre classes."""
+    prem, lancements = [], []
+    for i, t in enumerate(tt):
+        c, attr = categorie_d3(t)
+        prem.append((c, attr))
+        if c == "test":
+            ok = all(x is not None and x.get("isError") is False for x in t["fins"])
+            c127 = any("code 127" in texte_fin(x) for x in t["fins"] if x)
+            lancements.append((i, " ".join(commande(x) for x in t["appels"]), ok, c127))
+    return prem, classer_tests(lancements)
+
+
+def transcriptions_du_run(runs, run_id):
+    out = {}
+    for f in sorted(glob.glob(os.path.join(runs, f"{run_id}-[0-9][0-9]-*.jsonl"))):
+        m = re.search(r"-(\d\d)-([a-z-]+)\.jsonl$", f)
+        if m:
+            out[int(m.group(1))] = (m.group(2), f)
+    return out
+
+
+def lire_trace(chemin):
+    """Une trace structurée du runtime : (doc, None), (None, 'absente') ou (None, 'illisible')."""
+    if not os.path.isfile(chemin):
+        return None, "absente"
+    try:
+        return lire_json(chemin), None
+    except ValueError:
+        return None, "illisible"
+
+
+def compteur(valeur, etat=None):
+    """Un compteur établi porte une valeur ; sinon son état (absent, non établi) et la raison — jamais 0."""
+    return {"valeur": valeur} if etat is None else {"valeur": None, "etat": etat}
+
+
+def trace_invalide(doc, run_id, d, agent, champ, plan_hash):
+    """
+    Pourquoi une trace transmis.json ne se compte pas, ou None si elle se compte : forme, rattachement à la
+    délégation (run, séquence, rôle, unité), et pour l'injection sa provenance (run, planHash, unité,
+    séquence, arbre, fichiers) ; pour le contrat de test sa décision et ce qui a été transmis.
+    """
+    if not isinstance(doc, dict):
+        return "trace de forme invalide"
+    if doc.get("run") != run_id or doc.get("seq") != d["seq"]:
+        return f"trace d'un autre run ou d'une autre séquence (run {doc.get('run')}, séquence {doc.get('seq')})"
+    if doc.get("agent") != agent or doc.get("unit") != d["unite"]:
+        return f"trace d'un autre rôle ou d'une autre unité ({doc.get('agent')}, {doc.get('unit')})"
+    if champ not in doc:
+        return f"champ {champ} absent"
+    v = doc[champ]
+    if champ == "injection":
+        if v is None:
+            return None
+        if not isinstance(v, dict) or not isinstance(v.get("provenance"), dict):
+            return "injection de forme invalide"
+        p = v["provenance"]
+        if p.get("run") != run_id or p.get("seq") != d["seq"] or p.get("unit") != d["unite"] or p.get("planHash") != plan_hash \
+                or not isinstance(p.get("tree"), str) or not p.get("tree"):
+            return "provenance contradictoire (run, séquence, unité, planHash ou arbre)"
+        fs = p.get("files")
+        if not isinstance(fs, list) or not fs or not all(
+                isinstance(f, dict) and isinstance(f.get("path"), str) and isinstance(f.get("blob"), str) and f.get("blob")
+                and isinstance(f.get("size"), int) and f["size"] >= 0 for f in fs):
+            return "fichiers de provenance de forme invalide"
+        if len({f["path"] for f in fs}) != len(fs) or v.get("octets_injectes") != sum(f["size"] for f in fs):
+            return "provenance contradictoire (doublon ou octets injectés ≠ somme des tailles)"
+        return None
+    if not isinstance(v, dict) or v.get("transmis") not in ("etablie", "declaree", "aucune") or \
+            not isinstance(v.get("decision"), dict) or v["decision"].get("etat") not in ("absent", "ignore", "transmis"):
+        return "test_contract de forme invalide"
+    return None
+
+
+def observation_invalide(obs, verdict, d, prov, blobs):
+    """
+    Pourquoi l'observation d'un submit bloquant ne se compte pas, ou None : présente, lisible, du même
+    verdict et de l'unité de la délégation, provenance observée = provenance transmise, et chaque kept
+    retenu par injection présent dans la provenance avec un contrôle ok, blob lu = attendu = transmis.
+    Un kept retenu par injection exige injection.etat = valide : absente ou invalide, l'observation est
+    inexploitable, même si ses contrôles concordent (adjudication de la révision 2, correction 2).
+    """
+    if not isinstance(obs, dict):
+        return "observation details.inspection absente ou illisible"
+    if obs.get("verdict") != verdict or obs.get("unit") not in (d["unite"], None):
+        return "observation d'un autre verdict ou d'une autre unité"
+    inj = obs.get("injection") if isinstance(obs.get("injection"), dict) else {}
+    if (obs.get("par_injection") or []) and inj.get("etat") != "valide":
+        return "kept retenu par injection avec état d'injection absent ou invalide"
+    if inj.get("etat") == "valide":
+        vue = inj.get("provenance") or {}
+        if not prov or any(vue.get(c) != prov.get(c) for c in ("run", "planHash", "unit", "seq", "tree")):
+            return "provenance observée ≠ provenance transmise"
+    controles = obs.get("controles") if isinstance(obs.get("controles"), list) else []
+    for kp in obs.get("par_injection") or []:
+        c = [x for x in controles if isinstance(x, dict) and x.get("path") == kp]
+        if kp not in blobs or not c or c[-1].get("ok") is not True or not (c[-1].get("lu") == c[-1].get("attendu") == blobs[kp]):
+            return f"{kp} retenu par injection sans fichier de provenance ou contrôle de blob valide"
+    return None
+
+
+def compteurs_postes(runs, run_id, unites, fichiers_sessions, dl, par_seq, avant):
+    """
+    Les compteurs des leviers, lus dans les seules traces structurées conservées du relevé, jamais
+    dans l'environnement des enfants. Une trace attendue absente : « absent » si le relevé n'en
+    porte aucune (run antérieur au levier), « non établi » si elle manque pour une partie des
+    délégations ou se contredit. Unités, sources et doublons : voir l'aide de --postes.
+    """
+    k = {}
+    # E1-bis : <runId>-kept.json, rapproché de details.plan_kept des résultats `task` de la session.
+    manifeste, _ = manifeste_du_run(runs, run_id)
+    doc, pb = lire_trace(os.path.join(runs, f"{run_id}-kept.json"))
+    publies = []
+    for p in fichiers_sessions:
+        for e in jsonl(p):
+            m = e.get("message") or {}
+            if e.get("type") == "message" and m.get("role") == "toolResult" and isinstance(m.get("details"), dict) \
+                    and isinstance(m["details"].get("plan_kept"), dict):
+                publies.append(m["details"]["plan_kept"])
+    if doc is None and pb == "absente" and not publies:
+        k["kept_derives"] = k["kept_retires"] = compteur(None, f"absent : ni {run_id}-kept.json ni details.plan_kept")
+    elif doc is None:
+        k["kept_derives"] = k["kept_retires"] = compteur(None, f"non établi : {run_id}-kept.json {pb}")
+    elif doc.get("schema") != "pi-kept/1" or doc.get("planHash") != manifeste.get("planHash") or \
+            not isinstance(doc.get("units"), dict) or any(u not in doc["units"] for u in unites):
+        k["kept_derives"] = k["kept_retires"] = compteur(None, f"non établi : {run_id}-kept.json ne correspond pas au plan gelé")
+    elif any({u: (x or {}).get("kept") for u, x in pub.items()} != {u: (x or {}).get("kept") for u, x in doc["units"].items()}
+             for pub in publies):
+        k["kept_derives"] = k["kept_retires"] = compteur(None, "non établi : details.plan_kept diffère du kept durable")
+    else:
+        k["kept_derives"] = compteur(sum(len(x.get("derived") or []) for x in doc["units"].values()))
+        k["kept_retires"] = compteur(sum(len(x.get("dropped") or []) for x in doc["units"].values()))
+
+    # E2 : <runId>-<NN>-transmis.json de chaque revue de lane, details.inspection de ses submits bloquants.
+    # Correction 3 de l'adjudication de la livraison (02-10) : chaque trace comptée est valide et rattachée
+    # à sa délégation ; chaque submit bloquant, apparié par toolCallId, porte une observation cohérente.
+    plan_hash = manifeste.get("planHash")
+    revues = [d for d in dl if d["role"] == "reviewer" and d["unite"] and avant(ts(d["at"]))]
+    traces, manquantes, contradictoires = {}, [], []
+    for d in revues:
+        doc_, pb_ = lire_trace(os.path.join(runs, f"{run_id}-{d['seq']:02d}-transmis.json"))
+        if doc_ is None and pb_ == "absente":
+            manquantes.append(d["seq"])
+            continue
+        defaut = trace_invalide(doc_, run_id, d, "reviewer", "injection", plan_hash) if doc_ is not None else "illisible"
+        if defaut:
+            contradictoires.append(f"#{d['seq']} {defaut}")
+        else:
+            traces[d["seq"]] = doc_
+    noms = ("fichiers_injectes", "octets_injectes", "relectures_injectees", "kept_inspectes_par_injection")
+    if not revues or (len(manquantes) == len(revues)):
+        for c in noms:
+            k[c] = compteur(None, "absent : aucune trace transmis.json d'une revue" if revues else "absent : aucune revue de lane avant coupure")
+    elif manquantes or contradictoires:
+        raisons = ([f"trace absente pour #{', #'.join(str(s) for s in manquantes)}"] if manquantes else []) + contradictoires
+        for c in noms:
+            k[c] = compteur(None, f"non établi : {' ; '.join(raisons)}")
+    else:
+        fichiers = octets = relectures = 0
+        inspectes, sans_transcription, observations = set(), [], []
+        for d in revues:
+            inj = traces[d["seq"]]["injection"]
+            prov = (inj or {}).get("provenance") or {}
+            blobs = {f["path"]: f["blob"] for f in prov.get("files") or []}
+            fichiers += len(blobs)
+            octets += (inj or {}).get("octets_injectes") or 0
+            seq_tr = par_seq.get(d["seq"])
+            if not seq_tr:
+                sans_transcription.append(d["seq"])
+                continue
+            _, ev, cwd = tours_postes(seq_tr[1])
+            debuts = {}
+            for e in ev:
+                if e.get("type") == "tool_execution_start":
+                    debuts[e.get("toolCallId")] = e
+                    if e.get("toolName") == "read" and cwd:
+                        p = str((e.get("args") or {}).get("path") or "")
+                        rel = os.path.relpath(os.path.normpath(os.path.join(cwd, p)), cwd)
+                        if rel in blobs:
+                            relectures += 1
+            for e in ev:
+                if e.get("type") != "tool_execution_end" or e.get("toolName") != "submit":
+                    continue
+                ident = e.get("toolCallId")
+                debut = debuts.get(ident)
+                if debut is None:
+                    observations.append(f"#{d['seq']} {ident} : submit sans début apparié")
+                    continue
+                verdict = (debut.get("args") or {}).get("verdict")
+                if verdict not in ("needs_rework", "blocked"):
+                    continue
+                det = (e.get("result") or {}).get("details") if isinstance(e.get("result"), dict) else None
+                obs = det.get("inspection") if isinstance(det, dict) else None
+                defaut = observation_invalide(obs, verdict, d, prov, blobs)
+                if defaut:
+                    observations.append(f"#{d['seq']} {ident} : {defaut}")
+                    continue
+                for kp in (obs or {}).get("par_injection") or []:
+                    inspectes.add((d["seq"], kp))
+        k["fichiers_injectes"] = compteur(fichiers)
+        k["octets_injectes"] = compteur(octets)
+        if sans_transcription:
+            raison = f"non établi : transcription absente pour #{', #'.join(str(s) for s in sans_transcription)}"
+            k["relectures_injectees"] = k["kept_inspectes_par_injection"] = compteur(None, raison)
+        else:
+            k["relectures_injectees"] = compteur(relectures)
+            k["kept_inspectes_par_injection"] = compteur(len(inspectes)) if not observations else \
+                compteur(None, f"non établi : {' ; '.join(observations)}")
+
+    # E3 (§ 4.5) : la décision du contrat de test et ce que le premier writer de lane a reçu (test_contract de sa
+    # trace transmis.json, valide et rattachée à sa délégation), puis les tours D3 de ce premier writer.
+    writers = sorted((d for d in dl if d["role"] == "worker" and d["unite"] and avant(ts(d["at"]))), key=lambda d: d["seq"])
+    noms = ("contrat_test", "tours_decouverte_test", "tours_environnement")
+    contrats = {d["seq"]: lire_trace(os.path.join(runs, f"{run_id}-{d['seq']:02d}-transmis.json")) for d in writers}
+    presentes = [s for s, (doc_, pb_) in contrats.items() if pb_ != "absente"]
+    if not writers or not presentes:
+        for c in noms:
+            k[c] = compteur(None, "absent : aucune trace test_contract d'un writer" if writers else "absent : aucun writer de lane avant coupure")
+    else:
+        premier = writers[0]
+        doc_, pb_ = contrats[premier["seq"]]
+        defaut = ("trace absente" if pb_ == "absente" else "illisible") if doc_ is None else \
+            trace_invalide(doc_, run_id, premier, "worker", "test_contract", plan_hash)
+        if defaut:
+            for c in noms:
+                k[c] = compteur(None, f"non établi : test_contract du premier writer #{premier['seq']} : {defaut}")
+        else:
+            tc = doc_["test_contract"]
+            k["contrat_test"] = compteur({"decision": tc["decision"]["etat"], "premier_writer": tc["transmis"]})
+            if premier["seq"] not in par_seq:
+                raison = f"non établi : transcription absente pour #{premier['seq']}"
+                k["tours_decouverte_test"] = k["tours_environnement"] = compteur(None, raison)
+            else:
+                tt, _, _ = tours_postes(par_seq[premier["seq"]][1])
+                prem, cl = postes_d3(tt)
+                k["tours_decouverte_test"] = compteur(sum(1 for i in cl if cl[i] == CLASSES_TESTS[0]))
+                k["tours_environnement"] = compteur(sum(1 for c, _ in prem if c == "environnement"))
+    return k
+
+
+def imprimer_compteur(nom, c):
+    v = c["valeur"]
+    if v is None:
+        return f"{nom} {c['etat']}"
+    if isinstance(v, dict):
+        return f"{nom} " + " ".join(f"{a}={b}" for a, b in v.items())
+    return f"{nom} {v}"
+
+
+def postes(runs, run_id, unites, fichiers_sessions, dl, releves, coupure, avant):
+    """
+    --postes : D1 et D3, rapprochés à la grille, puis les compteurs des leviers. Rend le dictionnaire
+    pour --json ; la somme des écarts absolus doit être nulle.
+    """
+    appels, res = appels_postes(fichiers_sessions, avant)
+    v = ventiler_d1(run_id, appels, res)
+    orch = releves["orchestrateur"]["avant"]
+    par_tr = transcriptions_du_run(runs, run_id)
+    par_d = {d["seq"]: d for d in dl}
+    seqs = sorted(set(par_tr) | set(par_d))
+    ecarts, non_etablis = 0, []
+
+    print("\n== POSTES — D1 : l'orchestrateur avant coupure, une catégorie par appel ; unknown jamais réaffecté")
+    if coupure is None:
+        print("  ATTENTION : aucune coupure (plan jamais terminal) — chiffres exclus de toute comparaison fonctionnelle")
+    par = {c: [0, 0] for c in POSTES_D1}
+    for a, c, _ in v:
+        par[c][0] += 1
+        par[c][1] += a["cout"]
+    somme = sum(x[1] for x in par.values())
+    e1, e2 = somme - orch, len(appels) - sum(x[0] for x in par.values())
+    ecarts += abs(e1) + abs(e2)
+    print(f"  orchestrateur avant T : {nb(orch)} (run-cost) · {len(appels)} appels · somme des catégories {nb(somme)} · écart {e1}")
+    for c in POSTES_D1:
+        print(f"    {c:26s} {par[c][0]:3d} appels  {nb(par[c][1]):>11}")
+    residuel = orch - par["refus R1-a"][1] - par["réécriture après refus"][1]
+    print(f"  résiduel orchestrateur hors refus R1-a et réécritures : {nb(residuel)}")
+    print("  appels, dans l'ordre :")
+    for a, c, attr in v:
+        outils = ", ".join(f"{o.get('name')}" for o in a["outils"]) or "—"
+        print(f"    {a['at'][11:19]} {nb(a['cout']):>9}  {c:26s} [{outils}]{' · ' + attr if attr else ''}")
+    print(f"  sous-agents avant T : {nb(releves['sous_agents']['avant'])} · " +
+          " · ".join(f"{r} {nb(x['avant'])}" for r, x in sorted(releves["par_role"].items())))
+    print(f"  TOTAL avant T : {nb(releves['total']['avant'])} · après : {nb(releves['total']['apres'])}")
+    d3 = {}
+    for seq in seqs:
+        d = par_d.get(seq)
+        role = par_tr[seq][0] if seq in par_tr else d["role"]
+        cote = "avant T" if d and avant(ts(d["at"])) else "après T"
+        if seq not in par_tr:
+            non_etablis.append(seq)
+            print(f"    #{seq:02d} {role:9s} {cote:8s} transcription absente : non établi · run-cost {nb(d['total']):>10}")
+            continue
+        tt, _, _ = tours_postes(par_tr[seq][1])
+        d3[seq] = tt
+        st_ = sum(t["cout"] for t in tt)
+        ecart = st_ - (d["total"] if d else 0)
+        ecarts += abs(ecart)
+        print(f"    #{seq:02d} {role:9s} {cote:8s} transcription {nb(st_):>10} · run-cost {nb(d['total'] if d else 0):>10} · écart {ecart}")
+
+    print("\n== POSTES — D3 : une catégorie primaire par tour, sommes exactes ; tests en quatre classes")
+    agreg = {}
+    for seq in seqs:
+        d = par_d.get(seq)
+        role = par_tr[seq][0] if seq in par_tr else d["role"]
+        av = bool(d) and avant(ts(d["at"]))
+        if seq not in d3:
+            print(f"  #{seq:02d} {role} · {'avant T' if av else 'APRÈS T'} · transcription absente : postes non établis")
+            if av:
+                agreg.setdefault(role, {"n": 0, "total": 0, "cats": {c: 0 for c in POSTES_D3}, "tests": {c: 0 for c in CLASSES_TESTS},
+                                        "tours": 0, "un_appel": 0, "absentes": 0})["absentes"] += 1
+            continue
+        if d is None:
+            somme_ = sum(t["cout"] for t in d3[seq])
+            print(f"  #{seq:02d} {role} · transcription sans délégation au journal · écart {somme_}")
+            continue
+        tt = d3[seq]
+        prem, cl = postes_d3(tt)
+        cats = {c: [0, 0] for c in POSTES_D3}
+        classes = {c: [0, 0] for c in CLASSES_TESTS}
+        lignes = []
+        for i, t in enumerate(tt):
+            c, attr = prem[i]
+            cats[c][0] += 1
+            cats[c][1] += t["cout"]
+            if i in cl:
+                classes[cl[i]][0] += 1
+                classes[cl[i]][1] += t["cout"]
+            outils = ", ".join(a.get("name") for a in t["appels"]) or "—"
+            seconds = [x for x in (attr, "un seul appel" if len(t["appels"]) == 1 and i > 0 else "", cl.get(i, "")) if x]
+            lignes.append(f"      t{i + 1:02d} {nb(t['cout']):>9} ctx {nb(t['ctx']):>7}  {c:13s} [{outils}]"
+                          f"{' · ' + ' · '.join(seconds) if seconds else ''}")
+        somme_ = sum(x[1] for x in cats.values())
+        ecart = somme_ - d["total"]
+        ecarts += abs(ecart)
+        print(f"  #{seq:02d} {role} · {'avant T' if av else 'APRÈS T'} · {len(tt)} tours · total {nb(d['total'])} · "
+              f"somme des catégories {nb(somme_)} · écart {ecart}")
+        for c in POSTES_D3:
+            if cats[c][0]:
+                print(f"    {c:13s} {cats[c][0]:3d} tours {nb(cats[c][1]):>11}  {100 * cats[c][1] / d['total']:5.1f} %")
+        if cl:
+            for c in CLASSES_TESTS:
+                if classes[c][0]:
+                    print(f"      test · {c:38s} {classes[c][0]:2d} tours {nb(classes[c][1]):>10}")
+        for x in lignes:
+            print(x)
+        if av:
+            a = agreg.setdefault(role, {"n": 0, "total": 0, "cats": {c: 0 for c in POSTES_D3}, "tests": {c: 0 for c in CLASSES_TESTS},
+                                        "tours": 0, "un_appel": 0, "absentes": 0})
+            a["n"] += 1
+            a["total"] += d["total"]
+            a["tours"] += len(tt)
+            a["un_appel"] += sum(1 for i, t in enumerate(tt) if i > 0 and len(t["appels"]) == 1)
+            for c in POSTES_D3:
+                a["cats"][c] += cats[c][1]
+            for c in CLASSES_TESTS:
+                a["tests"][c] += classes[c][1]
+    print("  synthèse avant T, par rôle (tokens ; part du rôle)")
+    for role, a in agreg.items():
+        if not a["n"]:
+            print(f"  {role:9s} non établi : {a['absentes']} transcription(s) absente(s)")
+            continue
+        parts = " · ".join(f"{c} {nb(x)} ({100 * x / a['total']:.1f} %)" for c, x in a["cats"].items() if x)
+        incomplet = f" · INCOMPLET : {a['absentes']} transcription(s) absente(s), non établie(s)" if a["absentes"] else ""
+        print(f"  {role:9s} n={a['n']} · total {nb(a['total'])} · tours {a['tours']} (dont {a['un_appel']} à un seul appel après t1){incomplet}")
+        print(f"      {parts}")
+        if any(a["tests"].values()):
+            print("      tests : " + " · ".join(f"{c} {nb(x)}" for c, x in a["tests"].items() if x))
+
+    k = compteurs_postes(runs, run_id, unites, fichiers_sessions, dl, par_tr, avant)
+    print("\n== POSTES — compteurs des leviers (traces structurées du relevé ; absent ou non établi, jamais 0 par défaut)")
+    print("  " + " · ".join(imprimer_compteur(c, k[c]) for c in (
+        "kept_derives", "kept_retires", "fichiers_injectes", "octets_injectes", "relectures_injectees",
+        "kept_inspectes_par_injection", "contrat_test", "tours_decouverte_test", "tours_environnement")))
+    print(f"  rapprochements D1 et D3 : somme des écarts absolus = {ecarts} ({'NUL' if ecarts == 0 else 'NON NUL'})"
+          + (f" · transcriptions absentes, non établies : #{', #'.join(str(s) for s in non_etablis)}" if non_etablis else ""))
+    return {"d1": {c: {"appels": par[c][0], "tokens": par[c][1]} for c in POSTES_D1}, "residuel_hors_r1a": residuel,
+            "d3_par_role": agreg, "compteurs": k, "ecarts": ecarts, "transcriptions_absentes": non_etablis}
+
+
 # ------------------------------------------------------------------ grille
 
 def main(argv):
@@ -607,9 +1204,13 @@ def analyser(argv):
         return 2
     runs, sessions = argv[1], argv[2]
     coupure_arg, sortie_json, run_explicite, sessions_explicites = "auto", None, None, []
-    avec_tours, avec_cycles = False, False
+    avec_tours, avec_cycles, avec_postes = False, False, False
     i = 3
     while i < len(argv):
+        if argv[i] == "--postes":
+            avec_postes = True
+            i += 1
+            continue
         if argv[i] == "--tours":
             avec_tours = True
             i += 1
@@ -754,10 +1355,15 @@ def analyser(argv):
         imprimer_cycles(c)
         grille["cycles"] = c
 
+    code = 0
+    if avec_postes:
+        grille["postes"] = postes(runs, run_id, unites, fichiers_sessions, dl, grille["releves"], coupure, avant)
+        code = 0 if grille["postes"]["ecarts"] == 0 else 1
+
     if sortie_json:
         with open(sortie_json, "w", encoding="utf-8") as f:
             json.dump(grille, f, ensure_ascii=False, indent=2)
-    return 0
+    return code
 
 
 if __name__ == "__main__":

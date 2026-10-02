@@ -11,7 +11,8 @@ les entrées ambiguës : deux runs dans le dossier, une session étrangère, une
 un plan qui ne correspond plus à son planHash. Depuis le plan P1 (Q4) : --tours, qui lit la
 transcription d'un enfant sans omission et rapproche la somme de ses tours du total de l'artefact.
 Depuis LOT-REPRISES (R3) : --cycles, dont chaque cause de reprise se lit dans la porte puis le
-verdict structuré, et vaut unknown sinon.
+verdict structuré, et vaut unknown sinon. Depuis LOT-EFFICACITÉ (M) : --postes, dont les catégories
+D1 et D3 somment exactement à la grille, et dont les compteurs ne valent jamais 0 faute de trace.
 
     python3 tests/test_run_cost.py
     bin/test-guards                # le lance aussi
@@ -388,6 +389,302 @@ class Cycles(unittest.TestCase):
             code, sortie = lancer(runs, sessions, "--cycles")
             self.assertEqual(code, 2, sortie)
             self.assertIn(f"{RUN}-01-worker.jsonl:1", sortie)
+
+
+# ------------------------------------------------------------------ --postes (LOT-EFFICACITÉ, M)
+
+LANE = f"/repo/.git/pi-lanes/{RUN}-W01-g1"
+
+
+def appel_orch(minute, seconde, cout, outils=(), run=RUN):
+    """Un appel facturé de l'orchestrateur ; outils : (id, nom, arguments)."""
+    return {"type": "message", "timestamp": f"2026-01-01T00:{minute:02d}:{seconde:02d}Z", "message": {
+        "role": "assistant", "usage": {"input": cout, "output": 0},
+        "content": [{"type": "toolCall", "id": i, "name": n, "arguments": a} for i, n, a in outils]}}
+
+
+def resultat_orch(id_, nom, texte_, details=None):
+    m = {"role": "toolResult", "toolCallId": id_, "toolName": nom, "content": [{"type": "text", "text": texte_}]}
+    if details is not None:
+        m["details"] = details
+    return {"type": "message", "timestamp": "2026-01-01T00:00:00Z", "message": m}
+
+
+def tour_outils(cout, appels):
+    """Un tour d'enfant ; appels : (id, nom, arguments)."""
+    return {"type": "message_end", "message": {"role": "assistant", "usage": {"input": cout, "output": 0},
+            "content": [{"type": "toolCall", "id": i, "name": n, "arguments": a} for i, n, a in appels]}}
+
+
+def fin(id_, nom, erreur=False, texte_="ok", details=None):
+    r = {"content": [{"type": "text", "text": texte_}]}
+    if details is not None:
+        r["details"] = details
+    return {"type": "tool_execution_end", "toolCallId": id_, "toolName": nom, "isError": erreur, "result": r}
+
+
+def debut(id_, nom, args):
+    return {"type": "tool_execution_start", "toolCallId": id_, "toolName": nom, "args": args}
+
+
+KEPT_UNITES = {"W01": {"kept": ["tests/test_a.py"], "derived": ["tests/test_a.py"], "declared": [],
+                       "dropped": [{"path": "x.py", "reason": "non suivi"}]}}
+
+
+def run_complet(d):
+    """
+    Un run W01 joué jusqu'à la coupure (00:30) : l'orchestrateur traverse chaque catégorie D1, un
+    worker et un reviewer de lane laissent leurs transcriptions, et le runtime ses traces E1-bis, E2, E3.
+    """
+    runs, sessions = monter(d, ["W01"], [ouvert("W01", "2026-01-01T00:01:00Z"), integre("W01", "2026-01-01T00:30:00Z")])
+    ph = json.loads((runs / "active-run.json").read_text(encoding="utf-8"))["planHash"]
+    prov = {"run": RUN, "planHash": ph, "unit": "W01", "seq": 2, "tree": "t" * 40}
+    obs = {"verdict": "needs_rework", "unit": "W01", "par_read": ["tests/test_b.py"], "par_injection": ["tests/test_a.py"],
+           "controles": [{"path": "tests/test_a.py", "attendu": "b2", "lu": "b2", "ok": True}], "injection": {"etat": "valide", "provenance": prov}}
+    plan = f".pi-subagent-runs/{RUN}-plan.json"
+    session = [{"type": "session", "timestamp": "2026-01-01T00:00:00Z", "cwd": "/repo"},
+               appel_orch(0, 10, 10, [("b1", "bash", {"command": "ls"})]),
+               appel_orch(0, 20, 20, [("w1", "write", {"path": plan, "content": "A"})]),
+               appel_orch(0, 30, 30, [("t1", "task", {"agent": "worker"})]),
+               resultat_orch("t1", "task", "Refused: plan invalid — x"),
+               appel_orch(0, 40, 40, [("w2", "write", {"path": plan, "content": "B"})]),
+               appel_orch(0, 50, 50, [("t2", "task", {"agent": "worker"})]),
+               resultat_orch("t2", "task", f"[run {RUN}] ok", {"plan_kept": KEPT_UNITES}),
+               appel_orch(1, 0, 60, [("r1", "read", {"path": f".pi-subagent-runs/{RUN}-01-worker.json"})]),
+               appel_orch(1, 10, 70, [("e1", "edit", {"path": "src/a.py"})]),
+               appel_orch(1, 20, 80),
+               appel_orch(40, 0, 1000, [("t3", "task", {"agent": "reviewer"})])]
+    ecrire_jsonl(sessions / "s.jsonl", session)
+    worker = [{"type": "session", "cwd": LANE},
+              tour_outils(100, [("a", "read", {"path": "src/a.py"}), ("b", "grep", {"pattern": "x"})]),
+              tour_outils(110, [("c", "bash", {"command": "uv run pytest -q"})]), fin("c", "bash", True, "exit code 127"),
+              tour_outils(120, [("d", "bash", {"command": ".venv/bin/python -m pytest -q"})]), fin("d", "bash"),
+              tour_outils(130, [("e", "bash", {"command": "command -v python3"})]), fin("e", "bash"),
+              tour_outils(140, [("f", "edit", {"path": "src/a.py"}), ("g", "bash", {"command": "ls"})]),
+              tour_outils(150, [("h", "submit", {})])]
+    reviewer = [{"type": "session", "cwd": LANE},
+                tour_outils(200, [("a", "read", {"path": "src/a.py"}), ("b", "read", {"path": "../../../src/a.py"})]),
+                debut("a", "read", {"path": "src/a.py"}), debut("b", "read", {"path": "../../../src/a.py"}),
+                tour_outils(210, [("c", "submit", {"verdict": "needs_rework"})]),
+                debut("c", "submit", {"verdict": "needs_rework"}),
+                fin("c", "submit", True, "Refused", {"refus": {"code": "X"}, "inspection": obs}),
+                tour_outils(220, [("d", "submit", {"verdict": "needs_rework"})]),
+                debut("d", "submit", {"verdict": "needs_rework"}),
+                fin("d", "submit", False, "ok", {"verdict": "needs_rework", "inspection": obs})]
+    journal = []
+    for seq, role, lignes, total, minute in ((1, "worker", worker, 750, 2), (2, "reviewer", reviewer, 630, 5)):
+        nom = f"{RUN}-{seq:02d}-{role}"
+        (runs / f"{nom}.json").write_text(json.dumps({"usage": {"input": total, "output": 0}, "turns": 1,
+                                                      "envelope": {"status": "ok", "payload": {"verdict": "needs_rework"}}}), encoding="utf-8")
+        ecrire_jsonl(runs / f"{nom}.jsonl", lignes)
+        journal.append({"at": f"2026-01-01T00:{minute:02d}:00Z", "seq": seq, "role": role, "work_unit": "W01", "artifact": f"/x/{nom}.json"})
+    ecrire_jsonl(runs / f"{RUN}-delegations.jsonl", journal)
+    manifeste = json.loads((runs / "active-run.json").read_text(encoding="utf-8"))
+    (runs / f"{RUN}-kept.json").write_text(json.dumps({"schema": "pi-kept/1", "planHash": manifeste["planHash"], "units": KEPT_UNITES}), encoding="utf-8")
+    (runs / f"{RUN}-01-transmis.json").write_text(json.dumps({"run": RUN, "seq": 1, "agent": "worker", "unit": "W01", "test_contract": {
+        "decision": {"etat": "transmis", "commande": "uv run pytest -q"}, "transmis": "declaree", "commande": "uv run pytest -q"}}), encoding="utf-8")
+    (runs / f"{RUN}-02-transmis.json").write_text(json.dumps({"run": RUN, "seq": 2, "agent": "reviewer", "unit": "W01", "injection": {
+        "provenance": {**prov, "files": [{"path": "src/a.py", "blob": "b1", "size": 5},
+                                                                      {"path": "tests/test_a.py", "blob": "b2", "size": 7}]},
+        "exclus": [], "octets_injectes": 12, "surcout_octets": 90}}), encoding="utf-8")
+    return runs, sessions
+
+
+def postes_de(t, *extra):
+    code, sortie = lancer(*extra, "--postes", "--json", Path(t) / "g.json")
+    g = json.loads((Path(t) / "g.json").read_text(encoding="utf-8")) if (Path(t) / "g.json").exists() else {}
+    return code, sortie, g.get("postes")
+
+
+class Postes(unittest.TestCase):
+    """LOT-EFFICACITÉ, M : D1 et D3 versionnés, rapprochés à zéro ; compteurs lus dans les traces, jamais 0 par défaut."""
+
+    def test_categories_d1_d3_et_compteurs(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            code, sortie, p = postes_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            d1 = {c: (x["appels"], x["tokens"]) for c, x in p["d1"].items()}
+            self.assertEqual(d1["planification initiale"], (2, 30))
+            self.assertEqual(d1["refus R1-a"], (1, 30))
+            self.assertEqual(d1["réécriture après refus"], (1, 40))
+            self.assertEqual(d1["dispatch/délégation"], (1, 50))
+            self.assertEqual(d1["traitement des retours"], (1, 60))
+            self.assertEqual(d1["autre / unknown"], (1, 70))
+            self.assertEqual(d1["finalisation avant T"], (1, 80))
+            self.assertIn("autre / unknown            [edit] · après le premier task : edit a.py", sortie)
+            self.assertEqual(p["residuel_hors_r1a"], 360 - 30 - 40)
+            w = p["d3_par_role"]["worker"]
+            # Le tour edit + bash est mixed/other, une seule fois : les catégories somment au total.
+            self.assertEqual((w["cats"]["lecture"], w["cats"]["test"], w["cats"]["environnement"], w["cats"]["mixed/other"],
+                              w["cats"]["submit"]), (100, 230, 130, 140, 150))
+            self.assertEqual(sum(w["cats"].values()), w["total"])
+            self.assertEqual((w["tests"]["découverte / correction de la commande"], w["tests"]["validation finale"]), (110, 120))
+            self.assertEqual(p["ecarts"], 0)
+            self.assertIn("somme des écarts absolus = 0 (NUL)", sortie)
+            k = {c: x["valeur"] for c, x in p["compteurs"].items()}
+            self.assertEqual(k, {"kept_derives": 1, "kept_retires": 1, "fichiers_injectes": 2, "octets_injectes": 12,
+                                 "relectures_injectees": 1, "kept_inspectes_par_injection": 1,
+                                 "contrat_test": {"decision": "transmis", "premier_writer": "declaree"},
+                                 "tours_decouverte_test": 1, "tours_environnement": 1})
+
+    def test_trace_absente_n_est_jamais_zero(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            (runs / f"{RUN}-02-transmis.json").unlink()
+            (runs / f"{RUN}-kept.json").unlink()
+            (runs / f"{RUN}-01-transmis.json").unlink()
+            code, sortie, p = postes_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            k = p["compteurs"]
+            for c in ("fichiers_injectes", "octets_injectes", "relectures_injectees", "kept_inspectes_par_injection",
+                      "contrat_test", "tours_decouverte_test", "tours_environnement"):
+                self.assertIsNone(k[c]["valeur"], c)
+                self.assertTrue(k[c]["etat"].startswith("absent"), k[c])
+            # details.plan_kept publié, kept durable absent : la trace manque, le compteur n'est pas établi.
+            self.assertTrue(k["kept_derives"]["etat"].startswith("non établi"), k["kept_derives"])
+            self.assertIn("fichiers_injectes absent", sortie)
+            self.assertNotIn("fichiers_injectes 0", sortie)
+
+    def test_trace_partielle_ou_discordante_non_etablie(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            doc = json.loads((runs / f"{RUN}-kept.json").read_text(encoding="utf-8"))
+            doc["units"]["W01"]["kept"] = []
+            (runs / f"{RUN}-kept.json").write_text(json.dumps(doc), encoding="utf-8")
+            # Une seconde revue de lane sans trace transmis.json : l'injection n'est plus établie.
+            journal = rc.jsonl(str(runs / f"{RUN}-delegations.jsonl"))
+            journal.append({"at": "2026-01-01T00:06:00Z", "seq": 3, "role": "reviewer", "work_unit": "W01", "artifact": f"/x/{RUN}-03-reviewer.json"})
+            (runs / f"{RUN}-03-reviewer.json").write_text(json.dumps({"usage": {"input": 5, "output": 0}}), encoding="utf-8")
+            ecrire_jsonl(runs / f"{RUN}-03-reviewer.jsonl", [tour_outils(5, [])])
+            ecrire_jsonl(runs / f"{RUN}-delegations.jsonl", journal)
+            code, sortie, p = postes_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            k = p["compteurs"]
+            self.assertIn("details.plan_kept diffère", k["kept_derives"]["etat"])
+            self.assertIn("#3", k["fichiers_injectes"]["etat"])
+            self.assertTrue(k["fichiers_injectes"]["etat"].startswith("non établi"))
+
+    def test_transcription_absente_non_etablie(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            (runs / f"{RUN}-01-worker.jsonl").unlink()
+            code, sortie, p = postes_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            self.assertIn("#01 worker    avant T  transcription absente : non établi", sortie)
+            self.assertIn("transcription absente : postes non établis", sortie)
+            self.assertIn("worker    non établi : 1 transcription(s) absente(s)", sortie)
+            self.assertEqual(p["transcriptions_absentes"], [1])
+            self.assertIsNone(p["compteurs"]["tours_decouverte_test"]["valeur"])
+            self.assertIn("transcription absente pour #1", p["compteurs"]["tours_decouverte_test"]["etat"])
+
+    def test_rapprochement_non_nul_rend_1(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            (runs / f"{RUN}-02-reviewer.json").write_text(json.dumps({"usage": {"input": 631, "output": 0}}), encoding="utf-8")
+            code, sortie, p = postes_de(t, runs, sessions)
+            self.assertEqual(code, 1, sortie)
+            self.assertIn("NON NUL", sortie)
+            self.assertEqual(p["ecarts"], 2)
+
+    # Adjudication de la livraison (02-10), correction 3 : jamais un faux zéro, jamais une trace contradictoire comptée.
+
+    def _submit(self, runs, ident, f):
+        p = runs / f"{RUN}-02-reviewer.jsonl"
+        lignes = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l]
+        for e in lignes:
+            if e.get("type") == "tool_execution_end" and e.get("toolCallId") == ident:
+                f(e["result"]["details"])
+        ecrire_jsonl(p, lignes)
+
+    def test_submit_bloquant_sans_observation_non_etabli(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            self._submit(runs, "d", lambda det: det.pop("inspection"))
+            code, sortie, p = postes_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            k = p["compteurs"]["kept_inspectes_par_injection"]
+            self.assertIsNone(k["valeur"], k)
+            self.assertTrue(k["etat"].startswith("non établi") and "#2 d" in k["etat"], k)
+            self.assertNotIn("kept_inspectes_par_injection 0", sortie)
+
+    def test_trace_d_une_autre_delegation_non_etablie(self):
+        variantes = {
+            "autre run": lambda d: d.update(run="fedcba9876543210"),
+            "autre séquence": lambda d: d.update(seq=7),
+            "provenance d'un autre run": lambda d: d["injection"]["provenance"].update(run="fedcba9876543210"),
+            "provenance d'un autre plan": lambda d: d["injection"]["provenance"].update(planHash="0" * 16),
+            "provenance sans arbre": lambda d: d["injection"]["provenance"].pop("tree"),
+            "octets contradictoires": lambda d: d["injection"].update(octets_injectes=13),
+        }
+        for nom, f in variantes.items():
+            with self.subTest(nom), tempfile.TemporaryDirectory() as t:
+                runs, sessions = run_complet(Path(t))
+                chemin = runs / f"{RUN}-02-transmis.json"
+                doc = json.loads(chemin.read_text(encoding="utf-8"))
+                f(doc)
+                chemin.write_text(json.dumps(doc), encoding="utf-8")
+                code, sortie, p = postes_de(t, runs, sessions)
+                self.assertEqual(code, 0, sortie)
+                for c in ("fichiers_injectes", "octets_injectes", "kept_inspectes_par_injection"):
+                    x = p["compteurs"][c]
+                    self.assertIsNone(x["valeur"], (nom, c, x))
+                    self.assertTrue(x["etat"].startswith("non établi") and "#2" in x["etat"], (nom, c, x))
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            chemin = runs / f"{RUN}-01-transmis.json"
+            doc = json.loads(chemin.read_text(encoding="utf-8"))
+            doc["run"] = "fedcba9876543210"
+            chemin.write_text(json.dumps(doc), encoding="utf-8")
+            code, sortie, p = postes_de(t, runs, sessions)
+            x = p["compteurs"]["contrat_test"]
+            self.assertIsNone(x["valeur"], x)
+            self.assertTrue(x["etat"].startswith("non établi"), x)
+
+    def test_par_injection_sans_controle_valide_non_etabli(self):
+        variantes = {
+            "contrôle en échec": lambda o: o["controles"][0].update(ok=False),
+            "blob lu différent": lambda o: o["controles"][0].update(lu="b9"),
+            "blob attendu différent du transmis": lambda o: o["controles"][0].update(attendu="b9", lu="b9"),
+            "kept hors de la provenance": lambda o: o.update(par_injection=["tests/autre.py"],
+                                                              controles=[{"path": "tests/autre.py", "attendu": "b2", "lu": "b2", "ok": True}]),
+            "provenance observée d'un autre arbre": lambda o: o["injection"]["provenance"].update(tree="u" * 40),
+        }
+        for nom, f in variantes.items():
+            with self.subTest(nom), tempfile.TemporaryDirectory() as t:
+                runs, sessions = run_complet(Path(t))
+                self._submit(runs, "d", lambda det: f(det["inspection"]))
+                code, sortie, p = postes_de(t, runs, sessions)
+                self.assertEqual(code, 0, sortie)
+                x = p["compteurs"]["kept_inspectes_par_injection"]
+                self.assertIsNone(x["valeur"], (nom, x))
+                self.assertTrue(x["etat"].startswith("non établi") and "#2 d" in x["etat"], (nom, x))
+
+    def test_par_injection_avec_injection_absente_ou_invalide_non_etabli(self):
+        # Contrôles de blobs concordants avec la provenance transmise : seul l'état d'injection les
+        # rend inexploitables (adjudication de la révision 2, correction 2).
+        variantes = {
+            "injection absente": lambda o: o.update(injection={"etat": "absente"}),
+            "injection invalide": lambda o: o.update(injection={"etat": "invalide", "raison": "provenance illisible"}),
+        }
+        for nom, f in variantes.items():
+            with self.subTest(nom), tempfile.TemporaryDirectory() as t:
+                runs, sessions = run_complet(Path(t))
+                self._submit(runs, "d", lambda det: f(det["inspection"]))
+                code, sortie, p = postes_de(t, runs, sessions)
+                self.assertEqual(code, 0, sortie)
+                x = p["compteurs"]["kept_inspectes_par_injection"]
+                self.assertIsNone(x["valeur"], (nom, x))
+                self.assertTrue(x["etat"].startswith("non établi") and "#2 d" in x["etat"], (nom, x))
+
+    def test_ligne_illisible_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = run_complet(Path(t))
+            with open(runs / f"{RUN}-02-reviewer.jsonl", "a", encoding="utf-8") as f:
+                f.write("{tronquée\n")
+            code, sortie = lancer(runs, sessions, "--postes")
+            self.assertEqual(code, 2, sortie)
+            self.assertIn(f"{RUN}-02-reviewer.jsonl:", sortie)
 
 
 if __name__ == "__main__":
