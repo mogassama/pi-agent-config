@@ -40,6 +40,9 @@ import { readFileSync } from "node:fs";
 /** La phrase ajoutée à la tâche des writers suivants du même run (plan P1 v2 §2, P1-A). */
 export const NOTE_COMMANDE_DE_TEST = "Commande de test établie dans ce run : ";
 
+/** LOT-EFFICACITÉ, E3 : la note distincte d'une commande déclarée par le plan, jamais exécutée par le runtime. */
+export const NOTE_COMMANDE_DECLAREE = "Commande de test déclarée par le plan, pas encore exécutée dans ce run : ";
+
 /** Au-delà, ce n'est plus une invocation qu'on recopie : c'est un script. */
 const LONGUEUR_MAX = 500;
 
@@ -427,4 +430,32 @@ export function commandeEtablie(journal: string): string | null {
     retenue = meilleure(retenue, { commande: r.test_command, portee });
   }
   return retenue?.commande ?? null;
+}
+
+/**
+ * LOT-EFFICACITÉ, E3 (plan des leviers v2 complétée, § 4.2) : le champ racine `test_command` du plan,
+ * analysé au gel par les seules règles statiques de P1-A (`analyse`), sans exécution — rien de masqué,
+ * rien de caduc, exécuteur reconnu au dernier segment, portée complète. Une portée partielle ou
+ * indéterminée est ignorée. Le plan n'est JAMAIS refusé pour ce champ : la décision et sa raison sont
+ * publiées, c'est tout. Une commande déclarée n'est pas une commande établie : seule une exécution
+ * réussie observée par P1-A établit une commande.
+ */
+export type DecisionCommandeDeclaree =
+  | { etat: "absent" }
+  | { etat: "ignore"; raison: string }
+  | { etat: "transmis"; commande: string };
+
+export function decisionCommandeDeclaree(valeur: unknown): DecisionCommandeDeclaree {
+  if (valeur === undefined) return { etat: "absent" };
+  if (typeof valeur !== "string" || valeur.trim() === "") return { etat: "ignore", raison: "test_command n'est pas une chaîne non vide" };
+  const a = analyse(valeur);
+  if (!a) {
+    return {
+      etat: "ignore",
+      raison: "commande masquée, caduque, trop longue ou sans exécuteur de test reconnu au dernier segment",
+    };
+  }
+  if (a.portee === "partielle") return { etat: "ignore", raison: "portée partielle : une cible ou un sélecteur restreint la suite" };
+  if (a.portee === "indeterminee") return { etat: "ignore", raison: "portée indéterminée : une option inconnue" };
+  return { etat: "transmis", commande: valeur };
 }

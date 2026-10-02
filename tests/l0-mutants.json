@@ -1178,8 +1178,8 @@
   {
     "test": "L0 REG ITE-P1A-note — la note est portée aux seuls rôles qui écrivent, et absente sans commande",
     "file": "subagent-only/spawn-args.ts",
-    "find": "  const noteTest = !readOnly && ctx.testCommand ?",
-    "replace": "  const noteTest = ctx.testCommand ? // mutant ITE-P1A-note : portée aussi aux rôles en lecture\n   "
+    "find": "  const noteTest = readOnly\n    ? \"\"",
+    "replace": "  const noteTest = false // mutant ITE-P1A-note : portée aussi aux rôles en lecture\n    ? \"\""
   },
   {
     "test": "L0 REG ITE-P1A-transport — la commande observée chez un worker est inscrite au journal et portée au writer suivant du même run, jamais à un lecteur",
@@ -1785,5 +1785,41 @@
     "file": "subagent-only/transmis.ts",
     "find": "    if (!(k in d) || typeof d[k] !== \"string\" || d[k] === \"\") {",
     "replace": "    if (k in d && (typeof d[k] !== \"string\" || d[k] === \"\")) { // mutant E2 (o) : la présence de agent et unit n'est plus exigée"
+  },
+  {
+    "test": "L0 REG E3-transmission — un test_command recevable part au premier writer, jamais au lecteur, remplacé par la commande établie, et ne refuse jamais le plan",
+    "file": "extensions/subagent/index.ts",
+    "find": "    PLAN = { ...PLAN, testDeclare: decisionCommandeDeclaree((JSON.parse(text) as { test_command?: unknown }).test_command) };",
+    "replace": "    { const t = decisionCommandeDeclaree((JSON.parse(text) as { test_command?: unknown }).test_command); PLAN = t.etat === \"ignore\" ? { ...PLAN, status: \"invalid\", reason: `test_command : ${t.raison}`, units: [] } : { ...PLAN, testDeclare: t }; } // mutant E3 (a) : refus du plan sur une commande non conforme"
+  },
+  {
+    "test": "L0 REG E3-analyse — un test_command recevable est transmis, tout autre est ignoré avec sa raison, jamais refusé ni établi",
+    "file": "subagent-only/test-command.ts",
+    "find": "  if (!a) {\n    return {",
+    "replace": "  if (!a) return { etat: \"transmis\", commande: valeur }; // mutant E3 (b) : transmission d'une commande non conforme\n  if (!a) {\n    return {"
+  },
+  {
+    "test": "L0 REG E3-transmission — un test_command recevable part au premier writer, jamais au lecteur, remplacé par la commande établie, et ne refuse jamais le plan",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const declaree = !etablie && avecLane && decision?.etat === \"transmis\" ? decision.commande : null;",
+    "replace": "  const declaree = avecLane && decision?.etat === \"transmis\" ? decision.commande : null; // mutant E3 (c) : déclarée prioritaire sur l'établie"
+  },
+  {
+    "test": "L0 REG E3-transmission — un test_command recevable part au premier writer, jamais au lecteur, remplacé par la commande établie, et ne refuse jamais le plan",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (lectureSeule) return { etablie: null, declaree: null, trace: null };",
+    "replace": "  void lectureSeule; // mutant E3 (d) : transmission au reviewer"
+  },
+  {
+    "test": "L0 REG E3-analyse — un test_command recevable est transmis, tout autre est ignoré avec sa raison, jamais refusé ni établi",
+    "file": "subagent-only/test-command.ts",
+    "find": "  if (a.portee === \"indeterminee\") return { etat: \"ignore\", raison: \"portée indéterminée : une option inconnue\" };",
+    "replace": "  // mutant E3 (e) : portée indéterminée transmise"
+  },
+  {
+    "test": "L0 REG E3-transmission — un test_command recevable part au premier writer, jamais au lecteur, remplacé par la commande établie, et ne refuse jamais le plan",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const etablie = commandeDuRun(RUN_ID);",
+    "replace": "  const etablie = commandeDuRun(RUN_ID) ?? (PLAN?.testDeclare?.etat === \"transmis\" ? PLAN.testDeclare.commande : null); // mutant E3 (f) : déclarée promue en établie sans exécution"
   }
 ]

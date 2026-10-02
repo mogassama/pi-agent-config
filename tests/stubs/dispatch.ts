@@ -17,6 +17,8 @@ export interface AppelDispatch {
   cwd?: string;
   /** P1-A : la commande de test que le runtime a portée à cet enfant, telle que reçue. */
   testCommand?: string | null;
+  /** LOT-EFFICACITÉ, E3 : la commande déclarée par le plan portée à cet enfant, telle que reçue. */
+  testCommandDeclaree?: string | null;
   /** LOT-REPRISES, R1-b : le périmètre que le runtime a porté à cet enfant, tel que reçu. */
   perimetre?: { unit: string; scope: string[]; kept: string[] } | null;
   /** LOT-REPRISES, R2 : la projection des risques portée à un reviewer, telle que reçue. */
@@ -46,7 +48,7 @@ export function reinitialiser(): void {
 export async function dispatch(
   agent: { name?: string },
   task: string,
-  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"]; gardes?: AppelDispatch["gardes"]; injection?: AppelDispatch["injection"]; delegation?: AppelDispatch["delegation"] }; seq?: number },
+  opts: { ctx?: { cwd?: string; testCommand?: string | null; testCommandDeclaree?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"]; gardes?: AppelDispatch["gardes"]; injection?: AppelDispatch["injection"]; delegation?: AppelDispatch["delegation"] }; seq?: number },
 ): Promise<RunResult> {
   const appel: AppelDispatch = {
     agent: agent?.name ?? "?",
@@ -54,6 +56,7 @@ export async function dispatch(
     seq: opts?.seq,
     cwd: opts?.ctx?.cwd,
     testCommand: opts?.ctx?.testCommand,
+    testCommandDeclaree: opts?.ctx?.testCommandDeclaree,
     perimetre: opts?.ctx?.perimetre,
     risquesOuverts: opts?.ctx?.risquesOuverts,
     gardes: opts?.ctx?.gardes,

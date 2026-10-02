@@ -19,7 +19,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { loadAgents } from "../../subagent-only/agents.js";
 import { dispatch, type RunResult } from "../../subagent-only/dispatch.js";
-import { commandeDeTestDuFichierDetail, commandeEtablie, type CommandeRetenue } from "../../subagent-only/test-command.js";
+import {
+  commandeDeTestDuFichierDetail, commandeEtablie, decisionCommandeDeclaree, type CommandeRetenue, type DecisionCommandeDeclaree,
+} from "../../subagent-only/test-command.js";
 import { actionLines, countsLine, ligneWorker, reviewRisks, riskLines } from "../../subagent-only/counts.js";
 import {
   continuationReturned,
@@ -3055,6 +3057,8 @@ type PlanCourant = PlanResult & {
   keptMeta?: Record<string, KeptUnite>;
   /** E1-bis : plan gelé dont le kept durable ne se relit pas — jamais une liste vide. */
   keptInconnu?: string;
+  /** E3 : la décision sur le `test_command` déclaré, statique et déterministe — jamais un motif de refus. */
+  testDeclare?: DecisionCommandeDeclaree;
 };
 let PLAN: PlanCourant | undefined;
 /** Le texte du plan, gardé pour l'attacher au run une fois la propriété prise. */
@@ -3067,14 +3071,39 @@ let PLAN_TEXT: string | undefined;
  */
 let NOTE_GEL: { texte: string; details: Record<string, unknown> } | null = null;
 
-function noteDuGel(meta: Record<string, KeptUnite>): { texte: string; details: Record<string, unknown> } {
+function noteDuGel(meta: Record<string, KeptUnite>, test?: DecisionCommandeDeclaree): { texte: string; details: Record<string, unknown> } {
   const lignes = Object.entries(meta).map(([u, k]) => {
     const retires = k.dropped.length > 0
       ? ` ; retirés : ${k.dropped.map((d) => `${d.path} (${d.reason})`).join(", ")}`
       : "";
     return `kept_consumers de ${u}, calculés par le runtime : ${k.kept.length > 0 ? k.kept.join(", ") : "aucun"}${retires}.`;
   });
-  return { texte: lignes.join("\n"), details: { plan_kept: meta } };
+  // E3 : la décision sur `test_command`, dite une fois, avec sa raison.
+  if (test && test.etat === "transmis") lignes.push(`test_command transmis au premier writer : ${test.commande}`);
+  if (test && test.etat === "ignore") lignes.push(`test_command ignoré : ${test.raison}`);
+  return { texte: lignes.join("\n"), details: { plan_kept: meta, ...(test ? { plan_test_command: test } : {}) } };
+}
+
+/**
+ * LOT-EFFICACITÉ, E3 : ce qu'un writer de lane reçoit comme commande de test, et la trace de ce choix.
+ * La commande établie par P1-A remplace la commande déclarée ; un rôle en lecture ne reçoit rien.
+ */
+function contratDeTest(lectureSeule: boolean, avecLane: boolean): {
+  etablie: string | null;
+  declaree: string | null;
+  trace: Record<string, unknown> | null;
+} {
+  if (lectureSeule) return { etablie: null, declaree: null, trace: null };
+  const etablie = commandeDuRun(RUN_ID);
+  const decision = plan().status === "usable" ? PLAN?.testDeclare : undefined;
+  const declaree = !etablie && avecLane && decision?.etat === "transmis" ? decision.commande : null;
+  return {
+    etablie,
+    declaree,
+    trace: avecLane
+      ? { decision: decision ?? { etat: "absent" }, transmis: etablie ? "etablie" : declaree ? "declaree" : "aucune", commande: etablie ?? declaree }
+      : null,
+  };
 }
 
 /**
@@ -3241,6 +3270,13 @@ function plan(): PlanCourant {
         PLAN = { ...PLAN, kept: conso.kept, keptMeta: conso.meta };
       }
     }
+  }
+  /*
+   * LOT-EFFICACITÉ, E3 : `test_command`, champ racine optionnel, analysé par les règles statiques de
+   * P1-A. Recalculé à l'identique à toute reprise : il ne dépend que du texte du plan gelé.
+   */
+  if (PLAN.status === "usable" && text !== undefined) {
+    PLAN = { ...PLAN, testDeclare: decisionCommandeDeclaree((JSON.parse(text) as { test_command?: unknown }).test_command) };
   }
   // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
   // au registre de risques : le relevé lit le même plan avec les mêmes règles et
@@ -4342,7 +4378,7 @@ export default function (pi: ExtensionAPI) {
         "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
         ...(PREFLIGHT.ok
           ? [
-              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime computes every tracked Python file that statically imports a module a unit will write; each one outside that unit's expected_write_scope becomes a kept consumer — left untouched, the interface it uses preserved, no write right. You do not list them and you do not search for them: the result that freezes the plan names them. If a unit must change one, put it in expected_write_scope.`,
+              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}],"test_command":"..."}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime computes every tracked Python file that statically imports a module a unit will write; each one outside that unit's expected_write_scope becomes a kept consumer — left untouched, the interface it uses preserved, no write right. You do not list them and you do not search for them: the result that freezes the plan names them. If a unit must change one, put it in expected_write_scope. Add the top-level test_command only if what you have already read gives the project's full-suite test command, environment variables included; omit it otherwise — it is never a reason to read or search. The runtime checks it statically, never runs it, and hands it to the first worker until a worker has run a test command successfully.`,
             ]
           : [
               /*
@@ -4954,7 +4990,7 @@ export default function (pi: ExtensionAPI) {
                 ecrireKeptDurable(RUN_DIR, RUN_ID, { schema: KEPT_SCHEMA, planHash: hash, units: courant.keptMeta });
               },
             });
-            if (gel.publie && courant.keptMeta) NOTE_GEL = noteDuGel(courant.keptMeta);
+            if (gel.publie && courant.keptMeta) NOTE_GEL = noteDuGel(courant.keptMeta, courant.testDeclare);
           }
           seqs = Array.from({ length: Math.max(1, questions.length) }, () =>
             allocateSeq(RUN_DIR, lease).seq,
@@ -5341,10 +5377,18 @@ export default function (pi: ExtensionAPI) {
                 if (!ouverture) throw new Error(`${workUnit.id} n'a pas de lane allouée pour ce lot`);
                 const lane = ouverture.lane;
                 const tlAvant = arbreAvant(lane.cwd);
+                // E3 : le contrat de test du writer de lane, conservé avec sa décision (§ 6).
+                const contrat = contratDeTest(isReadOnly(agent.tools), true);
+                if (contrat.trace) {
+                  // Correction 2 : une trace inexploitable arrête cette délégation avant son spawn.
+                  const refusTransmis = conserverTransmis(seq, { agent: String(params.agent), unit: workUnit.id, test_contract: contrat.trace });
+                  if (refusTransmis) throw new Error(refusTransmis.content[0].text);
+                }
                 const result = await dispatch(effective, `${pkg.text}${candidate.task}`, {
                   ctx: {
                     agentDir: AGENT_DIR, selfDir: SELF_DIR, runId: RUN_ID, cwd: lane.cwd,
-                    testCommand: isReadOnly(agent.tools) ? null : commandeDuRun(RUN_ID),
+                    testCommand: contrat.etablie,
+                    testCommandDeclaree: contrat.declaree,
                     perimetre: perimetreDe(workUnit.id, isReadOnly(agent.tools)),
                     gardes: (agent.envelopeRole ?? agent.name) === "reviewer" ? gardesDe(workUnit.id) : null,
                   },
@@ -5537,8 +5581,15 @@ export default function (pi: ExtensionAPI) {
             throw err;
           }
         }
-        // P1-A : lue au journal durable juste avant le départ, pour un writer seulement.
-        const testCommandDuRun = isReadOnly(agent.tools) ? null : commandeDuRun(RUN_ID);
+        // P1-A : lue au journal durable juste avant le départ, pour un writer seulement. E3 : la commande
+        // déclarée par le plan, à un writer de lane, tant qu'aucune n'est établie.
+        const contrat = contratDeTest(isReadOnly(agent.tools), !!lane);
+        const testCommandDuRun = contrat.etablie;
+        if (contrat.trace && unit) {
+          // Correction 2 : une trace inexploitable arrête avant le spawn.
+          const refusTransmis = conserverTransmis(seqs[0], { agent: String(params.agent), unit, test_contract: contrat.trace });
+          if (refusTransmis) return refusTransmis;
+        }
         let results: RunResult[];
         try {
           const settled = await Promise.allSettled(
@@ -5559,6 +5610,7 @@ export default function (pi: ExtensionAPI) {
                    */
                   cwd: cwdEnfant,
                   testCommand: testCommandDuRun,
+                  testCommandDeclaree: contrat.declaree,
                   perimetre: lane ? perimetreDe(unit, isReadOnly(agent.tools)) : null,
                   risquesOuverts: (agent.envelopeRole ?? agent.name) === "reviewer"
                     ? projectionDesRisques(lane, unit, forRisks)

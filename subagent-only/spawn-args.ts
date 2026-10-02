@@ -24,7 +24,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { sliceSkillFile } from "./slicer.js";
-import { NOTE_COMMANDE_DE_TEST } from "./test-command.js";
+import { NOTE_COMMANDE_DE_TEST, NOTE_COMMANDE_DECLAREE } from "./test-command.js";
 
 export interface BuildContext {
   /** ~/.pi/agent */
@@ -49,6 +49,11 @@ export interface BuildContext {
    * l'appelant. Portée aux seuls rôles qui écrivent ; absente, rien n'est ajouté.
    */
   testCommand?: string | null;
+  /**
+   * LOT-EFFICACITÉ, E3 : la commande de test déclarée par le plan et statiquement recevable, pour un
+   * writer de lane, tant qu'aucune commande n'est établie dans le run. Note distincte de P1-A.
+   */
+  testCommandDeclaree?: string | null;
   /**
    * LOT-REPRISES, R1-b : le périmètre gelé de l'unité d'un writer de lane — `expected_write_scope`
    * et `kept_consumers`. Porté dans la tâche et, pour `role-guard`, dans l'environnement.
@@ -451,7 +456,14 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
 
   // P1-A : la commande que le run a déjà vue réussir, pour un writer seulement — un rôle en lecture
   // ne lance pas les tests, et lui la donner serait l'inviter à le faire.
-  const noteTest = !readOnly && ctx.testCommand ? `${NOTE_COMMANDE_DE_TEST}\`${ctx.testCommand}\`\n\n` : "";
+  // E3 : une commande établie par P1-A remplace la commande déclarée ; un rôle en lecture n'a ni l'une ni l'autre.
+  const noteTest = readOnly
+    ? ""
+    : ctx.testCommand
+      ? `${NOTE_COMMANDE_DE_TEST}\`${ctx.testCommand}\`\n\n`
+      : ctx.testCommandDeclaree
+        ? `${NOTE_COMMANDE_DECLAREE}\`${ctx.testCommandDeclaree}\`\n\n`
+        : "";
   // R1-b : le périmètre gelé, pour un writer de lane seulement. Un rôle en lecture n'écrit rien.
   const perimetre = !readOnly && ctx.perimetre ? ctx.perimetre : null;
   const notePerimetre = perimetre
