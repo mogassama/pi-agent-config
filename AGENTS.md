@@ -102,7 +102,6 @@ that work unit:
   "goal": "…",
   "depends_on": [],
   "expected_write_scope": ["…"],
-  "kept_consumers": ["…"],
   "design_update": {
     "decision_id": "D-001",
     "from_status": "proposé",
@@ -123,11 +122,14 @@ that work unit:
   `terminé`, and the only transitions are `proposé → en cours` and
   `en cours → terminé`. A decision has at most one owning unit per plan.
 
-**`kept_consumers`** lists the tracked files that statically import a module the
-unit writes and that the unit leaves untouched: their interface is preserved, and
-the field grants no write right. Before freeze the runtime lists every such Python
-importer; one that is in neither `expected_write_scope` nor `kept_consumers`
-refuses the plan, with the list in the refusal.
+**Kept consumers are computed by the runtime, not listed in the plan.** Before
+freeze the runtime finds every tracked Python file that statically imports a
+module a unit writes; each one outside that unit's `expected_write_scope` becomes
+a kept consumer: left untouched, its interface preserved, no write right. The
+result that freezes the plan names them. If a unit must change one, put it in
+`expected_write_scope`. A `kept_consumers` field is still read when present —
+non-Python paths must be tracked files, Python entries the analysis did not find
+are dropped and named — but there is nothing to list.
 
 The bundle is a *direction*, not a specification. It is silent on almost everything by construction. Silence is the normal state and is never a defect.
 

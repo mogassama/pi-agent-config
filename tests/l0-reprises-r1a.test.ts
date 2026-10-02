@@ -5,9 +5,10 @@
  *   consommateurs   l'`ast` du vrai python3, sur un vrai dépôt git : formes absolue,
  *                   `from pkg import mod`, relatives à un et deux niveaux, import dans une
  *                   fonction ; un import dynamique n'est jamais compté — R1A-consommateurs
- *   classement      consommateur non classé → refus structuré avec la liste ; classé dans le
- *                   scope ou dans kept_consumers → accepté ; kept_consumers dans le scope, non
- *                   suivi, réservé ou non détecté → refusé — R1A-classement
+ *   classement      RETIRÉE au LOT-EFFICACITÉ (E1-bis, plan des leviers v2 complétée, § 2.2) : un
+ *                   consommateur non classé n'est plus refusé, il est dérivé ; une entrée Python non
+ *                   détectée est retirée. Pendants : E1b-derivation et E1b-declares
+ *                   (tests/l0-efficacite-e1b.test.ts)
  *   impossible      fichier refusé par l'ast, python3 absent, sortie illisible : refus nommé,
  *                   sans repli ni « non couvert » — R1A-analyse-impossible
  *   interpréteur    résolu une fois par tentative, et c'est CET exécutable qui analyse — R1A-interpreteur
@@ -23,8 +24,6 @@ import { dirname, join } from "node:path";
 import {
   EXECUTEUR_REEL,
   PLAN_ANALYSE_IMPOSSIBLE,
-  PLAN_KEPT_INVALIDE,
-  PLAN_NON_CLASSES,
   validerConsommateurs,
   type Executeur,
 } from "../subagent-only/consommateurs.ts";
@@ -79,48 +78,19 @@ regressionCorrigee("R1A-consommateurs", "les consommateurs statiques directs d'u
   const root = depot(PAQUET);
   const u = unite("W01", ["src/pkg/io.py", "src/pkg/fingerprints.py"]);
   const v = validerConsommateurs(root, plan([{ id: "W01", expected_write_scope: u.expectedWriteScope }]), [u]);
-  precondition(!v.ok, `un plan sans classement doit être refusé (${JSON.stringify(v)})`);
-  if (v.ok) return;
-  propriete(v.refus.code === PLAN_NON_CLASSES, `code ${v.refus.code}`);
-  const manque = v.refus.code === PLAN_NON_CLASSES ? v.refus.missing.W01 ?? [] : [];
+  // LOT-EFFICACITÉ, E1-bis : la propriété est inchangée, seul son canal d'observation l'est — les
+  // consommateurs trouvés se lisent dans le classement dérivé, et non plus dans un refus.
+  precondition(v.ok, `un plan sans kept_consumers est accepté, son kept dérivé (${JSON.stringify(v)})`);
+  if (!v.ok) return;
+  const trouves = v.meta.W01?.derived ?? [];
+  propriete(JSON.stringify(trouves) === JSON.stringify(v.consumers.W01) && JSON.stringify(v.kept.W01) === JSON.stringify(trouves),
+    `le kept dérivé est exactement l'ensemble des consommateurs trouvés (${JSON.stringify(v.meta.W01)})`);
   for (const f of ["src/pkg/run.py", "src/pkg/entries.py", "src/pkg/sous/profond.py", "src/pkg/tardif.py", "tests/test_io.py"]) {
-    propriete(manque.includes(f), `${f} est un consommateur statique direct (${manque.join(", ")})`);
+    propriete(trouves.includes(f), `${f} est un consommateur statique direct (${trouves.join(", ")})`);
   }
-  propriete(!manque.includes("src/pkg/dynamique.py"), "un import dynamique n'est pas compté comme couvert");
-  propriete(!manque.includes("src/pkg/voisin.py"), "un fichier qui n'importe pas le module n'est pas compté");
-  propriete(!manque.includes("src/pkg/io.py"), "le module écrit n'est pas son propre consommateur");
-  propriete(v.reason.includes("src/pkg/run.py") && v.reason.includes("kept_consumers"), "la raison porte la liste et dit où classer");
-});
-
-regressionCorrigee("R1A-classement", "chaque consommateur se classe dans le scope ou dans kept_consumers ; kept_consumers est disjoint, suivi, non réservé, et détecté", () => {
-  const root = depot({ ...PAQUET, "DESIGN.md": "# D\n", "notes.txt": "n\n" });
-  const scope = ["src/pkg/io.py"];
-  const conso = ["src/pkg/entries.py", "src/pkg/run.py", "src/pkg/sous/profond.py", "src/pkg/tardif.py", "tests/test_io.py"];
-  const u = [unite("W01", scope)];
-  const ok = validerConsommateurs(root, plan([{ id: "W01", expected_write_scope: scope, kept_consumers: conso }]), u);
-  propriete(ok.ok, `tous classés dans kept_consumers : accepté (${JSON.stringify(ok)})`);
-  const mixte = [unite("W01", [...scope, "src/pkg/run.py"])];
-  const ok2 = validerConsommateurs(root, plan([{ id: "W01", expected_write_scope: [...scope, "src/pkg/run.py"], kept_consumers: conso.filter((c) => c !== "src/pkg/run.py") }]), mixte);
-  propriete(ok2.ok, `classés pour partie dans le scope : accepté (${JSON.stringify(ok2)})`);
-  const partiel = validerConsommateurs(root, plan([{ id: "W01", expected_write_scope: scope, kept_consumers: conso.slice(1) }]), u);
-  propriete(!partiel.ok && partiel.refus.code === PLAN_NON_CLASSES &&
-    JSON.stringify(partiel.refus).includes("src/pkg/entries.py"), "un seul oubli suffit à refuser, et il est nommé");
-
-  const kept = (k: unknown) => validerConsommateurs(root, plan([{ id: "W01", expected_write_scope: scope, kept_consumers: k }]), u);
-  // Dans le scope : une entrée qui passerait toutes les autres règles (suivie, non Python).
-  const large = ["src/pkg/io.py", "notes.txt"];
-  const recouvre = validerConsommateurs(root, plan([{ id: "W01", expected_write_scope: large, kept_consumers: [...conso, "notes.txt"] }]), [unite("W01", large)]);
-  propriete(!recouvre.ok && recouvre.refus.code === PLAN_KEPT_INVALIDE, `kept_consumers dans le scope : refusé (${JSON.stringify(recouvre)})`);
-  for (const [cas, k] of [
-    ["non suivi", [...conso, "src/pkg/absent.py"]],
-    ["réservé", [...conso, "DESIGN.md"]],
-    ["Python non détecté", [...conso, "src/pkg/voisin.py"]],
-    ["pas une liste", "src/pkg/run.py"],
-  ] as const) {
-    const r = kept(k);
-    propriete(!r.ok && r.refus.code === PLAN_KEPT_INVALIDE, `kept_consumers ${cas} : refusé (${JSON.stringify(r)})`);
-  }
-  propriete(kept([...conso, "notes.txt"]).ok, "une entrée non Python suivie et disjointe est admise");
+  propriete(!trouves.includes("src/pkg/dynamique.py"), "un import dynamique n'est pas compté comme couvert");
+  propriete(!trouves.includes("src/pkg/voisin.py"), "un fichier qui n'importe pas le module n'est pas compté");
+  propriete(!trouves.includes("src/pkg/io.py"), "le module écrit n'est pas son propre consommateur");
 });
 
 /** Un exécuteur dont chaque étape est observable, et que chaque preuve peut faire échouer. */
@@ -168,7 +138,9 @@ regressionCorrigee("R1A-interpreteur", "l'interpréteur est résolu une fois par
   propriete(s.journal.filter((j) => j === "interpreteur").length === 1, `une seule résolution (${s.journal.join(", ")})`);
   propriete(s.journal.filter((j) => j.startsWith("analyser")).length === 1 &&
     s.journal.includes(`analyser:${reel.executable}`), "l'analyse tourne avec l'exécutable résolu");
-  propriete(!v.ok && v.refus.code === PLAN_NON_CLASSES, "le verdict vient de cette analyse");
+  // LOT-EFFICACITÉ, E1-bis : le verdict de cette analyse se lit dans le kept dérivé, plus dans un refus.
+  propriete(v.ok && JSON.stringify(v.kept.W01) === JSON.stringify(v.consumers.W01) && (v.kept.W01 ?? []).includes("src/pkg/run.py"),
+    "le verdict vient de cette analyse");
 });
 
 regressionCorrigee("R1A-non-python", "une unité qui n'écrit aucun .py suivi ne requiert aucun interpréteur", () => {

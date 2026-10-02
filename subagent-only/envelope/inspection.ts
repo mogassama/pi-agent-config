@@ -44,7 +44,11 @@ export interface RefusInspection {
 export function lireGardes(brut: string | undefined): Gardes | null {
   if (brut === undefined || brut === "") return null;
   try {
-    const v = JSON.parse(brut) as { unit?: unknown; kept?: unknown };
+    const v = JSON.parse(brut) as { unit?: unknown; kept?: unknown; inconnu?: unknown };
+    // E1-bis : le parent dit explicitement qu'il ne sait pas — sa raison est gardée.
+    if (typeof v.unit === "string" && v.unit && typeof v.inconnu === "string" && v.inconnu && v.kept === undefined) {
+      return { inconnu: v.inconnu };
+    }
     if (typeof v.unit === "string" && v.unit && Array.isArray(v.kept) && v.kept.length > 0 &&
         v.kept.every((k) => typeof k === "string" && k !== "")) {
       return { unit: v.unit, kept: v.kept as string[] };

@@ -7,10 +7,22 @@
  * `scope-breach` a refusé l'intégration, et chaque reprise a rejoué un worker complet.
  *
  * Ce module dit, avant le gel, quels fichiers Python suivis importent statiquement un module
- * que l'unité va écrire (`direct_static_consumers`), et exige que le plan classe chacun : dans
- * `expected_write_scope` (l'unité le modifie) ou dans `kept_consumers` (l'unité le laisse
- * intact et préserve l'interface qu'il consomme). Un consommateur non classé refuse le plan ;
- * le refus porte la liste, l'orchestrateur n'a rien à chercher.
+ * que l'unité va écrire (`direct_static_consumers`). Chacun est dans `expected_write_scope`
+ * (l'unité le modifie) ou dans `kept_consumers` (l'unité le laisse intact et préserve
+ * l'interface qu'il consomme).
+ *
+ * LOT-EFFICACITÉ, E1-bis (plan des leviers v2 complétée, § 2.2) : ce classement n'est plus
+ * demandé à l'orchestrateur, il est DÉRIVÉ. Dans QD-REPRISES-a, QD-RC-a et QD-RC-b, les dix refus
+ * R1-a — un par erreur, l'un après l'autre — ont coûté 426 205 tokens en moyenne RC sans qu'aucun
+ * ne fasse élargir un scope : il s'agissait de recopier une liste que ce module calcule déjà.
+ *
+ *   kept(u) = déclarés_valides(u) ∪ (direct_static_consumers(u) − expected_write_scope(u))
+ *
+ * Un consommateur direct n'est jamais laissé non classé. Une entrée déclarée garde les contrôles
+ * communs de R1-a (forme, chemin réservé, disjonction avec le scope : refus) ; une entrée non
+ * Python doit être un chemin suivi existant (refus sinon) ; une entrée Python que l'analyse n'a
+ * pas trouvée est retirée et publiée avec sa raison, sans refus. Une impossibilité d'analyse
+ * reste `PLAN_PYTHON_ANALYSIS_IMPOSSIBLE`, jamais un retrait.
  *
  * Ce qu'il couvre, exactement (PLAN-LOT-REPRISES v2 gelé, § 2 et Q2) :
  *   - les nœuds `Import` et `ImportFrom` de l'`ast` Python, à tout niveau du fichier ;
@@ -33,6 +45,7 @@ import { join } from "node:path";
 import { recordGitInvocation } from "./git-probe-counter.ts";
 import { inScope, isReserved, type WorkUnit } from "./work-units.ts";
 
+/** Gardé pour la lecture des relevés antérieurs : E1-bis ne l'émet plus (§ 2.2). */
 export const PLAN_NON_CLASSES = "PLAN_DIRECT_STATIC_CONSUMERS_UNCLASSIFIED";
 export const PLAN_ANALYSE_IMPOSSIBLE = "PLAN_PYTHON_ANALYSIS_IMPOSSIBLE";
 export const PLAN_KEPT_INVALIDE = "PLAN_KEPT_CONSUMERS_INVALID";
@@ -47,13 +60,33 @@ export type RefusPlan =
   | { code: typeof PLAN_ANALYSE_IMPOSSIBLE; interpreter?: Interpreteur; file?: string; reason: string }
   | { code: typeof PLAN_KEPT_INVALIDE; unit: string; path?: string; reason: string };
 
+/**
+ * Le classement d'une unité, publié et rendu durable au gel (E1-bis) :
+ *
+ *   kept      le kept final : `declared` ∪ `derived`, sans doublon, trié (ordre de code d'unité UTF-16) ;
+ *   derived   les consommateurs statiques directs hors du scope, calculés par l'analyse ;
+ *   declared  les entrées de `kept_consumers` du plan gardées : non Python valides, ou Python
+ *             trouvées par l'analyse — dans l'ordre du plan, sans doublon ;
+ *   dropped   les entrées Python du plan que l'analyse n'a pas trouvées, chacune avec sa raison :
+ *             `non suivi` (absente de `git ls-files`), `inexistant` (suivie mais absente du disque),
+ *             `non consommateur direct` (suivie, présente, non trouvée par l'analyse).
+ */
+export interface KeptUnite {
+  kept: string[];
+  derived: string[];
+  declared: string[];
+  dropped: { path: string; reason: string }[];
+}
+
 export type VerdictConsommateurs =
   | {
       ok: true;
-      /** Par unité, ses consommateurs statiques directs (classés). */
+      /** Par unité, ses consommateurs statiques directs (tous hors du scope, donc tous dérivés). */
       consumers: Record<string, string[]>;
-      /** Par unité, ses `kept_consumers` validés. */
+      /** Par unité, son kept final. */
       kept: Record<string, string[]>;
+      /** Par unité, le détail du classement : `kept`, `derived`, `declared`, `dropped`. */
+      meta: Record<string, KeptUnite>;
       interpreter?: Interpreteur;
     }
   | { ok: false; refus: RefusPlan; reason: string };
@@ -191,11 +224,17 @@ export function keptBrut(doc: unknown, unite: string): { present: boolean; valeu
   return { present: false, valeur: undefined };
 }
 
+/** Ordre déterministe et documenté du kept final : comparaison par unités de code, comme `sort()`. */
+const trier = (l: readonly string[]): string[] => [...new Set(l)].sort();
+
 /**
- * Le classement : chaque `kept_consumers` est valide, puis chaque consommateur est classé.
+ * Le classement dérivé (E1-bis) : contrôles des entrées déclarées, puis kept final par unité.
  *
- * `kept_consumers` : liste de chemins suivis existants, disjoints du scope, jamais réservés ;
- * une entrée Python doit avoir été trouvée par l'analyse. Il n'accorde aucun droit d'écriture.
+ * Pour chaque entrée déclarée, dans l'ordre de R1-a : forme, puis chemin réservé, puis disjonction
+ * avec le scope — ces trois-là refusent, Python ou non ; ensuite seulement, pour une entrée non
+ * Python, chemin suivi existant (refus sinon) et, pour une entrée Python, présence parmi les
+ * consommateurs trouvés (retrait publié sinon). Un retrait ne peut donc jamais masquer un des
+ * contrôles communs. Un consommateur direct non déclaré n'est jamais un refus : il est dérivé.
  */
 export function classer(
   doc: unknown,
@@ -203,9 +242,10 @@ export function classer(
   suivis: readonly string[],
   existe: (chemin: string) => boolean,
   consumers: Readonly<Record<string, readonly string[]>>,
-): { ok: true; kept: Record<string, string[]> } | { ok: false; refus: RefusPlan; reason: string } {
+): { ok: true; kept: Record<string, string[]>; meta: Record<string, KeptUnite> } | { ok: false; refus: RefusPlan; reason: string } {
   const ensemble = new Set(suivis);
   const kept: Record<string, string[]> = {};
+  const meta: Record<string, KeptUnite> = {};
   for (const u of unites) {
     const brut = keptBrut(doc, u.id);
     const refus = (path: string | undefined, reason: string) => ({
@@ -213,37 +253,36 @@ export function classer(
       refus: { code: PLAN_KEPT_INVALIDE, unit: u.id, ...(path !== undefined ? { path } : {}), reason } as RefusPlan,
       reason: `${u.id} : kept_consumers — ${reason}`,
     });
-    if (!brut.present) { kept[u.id] = []; continue; }
-    if (!Array.isArray(brut.valeur) || brut.valeur.some((p) => typeof p !== "string" || p.trim() === "")) {
-      return refus(undefined, "n'est pas une liste de chemins");
-    }
-    const liste = (brut.valeur as string[]).map((p) => p.trim().replace(/^\.\//, ""));
-    for (const p of liste) {
-      if (isReserved(p)) return refus(p, `${p} est un chemin réservé`);
-      if (inScope(p, u.expectedWriteScope)) return refus(p, `${p} est aussi dans expected_write_scope`);
-      if (!ensemble.has(p) || !existe(p)) return refus(p, `${p} n'est pas un chemin suivi existant`);
-      if (p.endsWith(".py") && !(consumers[u.id] ?? []).includes(p)) {
-        return refus(p, `${p} n'est pas un consommateur statique direct trouvé par l'analyse`);
+    const trouves = consumers[u.id] ?? [];
+    const declared: string[] = [];
+    const dropped: { path: string; reason: string }[] = [];
+    if (brut.present) {
+      if (!Array.isArray(brut.valeur) || brut.valeur.some((p) => typeof p !== "string" || p.trim() === "")) {
+        return refus(undefined, "n'est pas une liste de chemins");
+      }
+      const liste = (brut.valeur as string[]).map((p) => p.trim().replace(/^\.\//, ""));
+      for (const p of liste) {
+        if (isReserved(p)) return refus(p, `${p} est un chemin réservé`);
+        if (inScope(p, u.expectedWriteScope)) return refus(p, `${p} est aussi dans expected_write_scope`);
+        if (!p.endsWith(".py")) {
+          if (!ensemble.has(p) || !existe(p)) return refus(p, `${p} n'est pas un chemin suivi existant`);
+          if (!declared.includes(p)) declared.push(p);
+          continue;
+        }
+        if (trouves.includes(p)) {
+          if (!declared.includes(p)) declared.push(p);
+          continue;
+        }
+        const raison = !ensemble.has(p) ? "non suivi" : !existe(p) ? "inexistant" : "non consommateur direct";
+        if (!dropped.some((d) => d.path === p)) dropped.push({ path: p, reason: raison });
       }
     }
-    kept[u.id] = liste;
+    const derived = trier(trouves.filter((c) => !inScope(c, u.expectedWriteScope)));
+    const final = trier([...declared, ...derived]);
+    kept[u.id] = final;
+    meta[u.id] = { kept: final, derived, declared, dropped };
   }
-  const missing: Record<string, string[]> = {};
-  for (const u of unites) {
-    const manque = (consumers[u.id] ?? []).filter((c) => !kept[u.id].includes(c));
-    if (manque.length > 0) missing[u.id] = manque;
-  }
-  if (Object.keys(missing).length > 0) {
-    const detail = Object.entries(missing).map(([u, l]) => `${u} : ${l.join(", ")}`).join(" ; ");
-    return {
-      ok: false,
-      refus: { code: PLAN_NON_CLASSES, missing },
-      reason:
-        `consommateurs statiques directs non classés — ${detail}. Chacun va dans expected_write_scope ` +
-        `(l'unité le modifie) ou dans kept_consumers (intact, interface préservée).`,
-    };
-  }
-  return { ok: true, kept };
+  return { ok: true, kept, meta };
 }
 
 // ------------------------------------------------------------------ git et python
@@ -318,7 +357,8 @@ const message = (e: unknown) => (e instanceof Error ? e.message.split("\n")[0] :
  * R1-a, une tentative de validation : suivis, interpréteur résolu une fois, analyse, classement.
  *
  * Aucune unité n'écrit de `.py` suivi : aucun interpréteur n'est requis, et une entrée Python
- * de `kept_consumers` ne peut pas avoir été trouvée — elle est refusée par `classer`.
+ * de `kept_consumers` ne peut pas avoir été trouvée — l'analyse n'étant pas nécessaire, `classer`
+ * la retire et la publie (E1-bis), sans refus.
  */
 export function validerConsommateurs(
   root: string,
@@ -384,5 +424,5 @@ export function validerConsommateurs(
 
   const classement = classer(doc, unites, suivis, existe, consumers);
   if (!classement.ok) return classement;
-  return { ok: true, consumers, kept: classement.kept, ...(interpreter ? { interpreter } : {}) };
+  return { ok: true, consumers, kept: classement.kept, meta: classement.meta, ...(interpreter ? { interpreter } : {}) };
 }

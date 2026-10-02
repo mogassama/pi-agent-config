@@ -729,6 +729,74 @@ function attachPlanUnguarded(dir: string, text: string, lease: Lease): RunManife
 }
 
 /**
+ * LOT-EFFICACITÉ, E1-bis : le kept dérivé et le plan, publiés sous UNE SEULE prise de la garde
+ * (plan des leviers v2 complétée, § 2.2, « Protocole adjugé de publication kept + plan »).
+ *
+ *   1. le bail et la mutabilité, comme `attachPlan` (`mutable`) ;
+ *   2. manifeste qui porte déjà un `planHash` : le même, rien n'est publié — le kept durable
+ *      n'est jamais réécrit ; un autre, refus comme `attachPlan` ;
+ *   3. pas de `planHash` mais un fichier kept présent : publication interrompue par un crash.
+ *      ARRÊT : ni réutilisation sur le seul `planHash`, ni remplacement, ni nouvelle analyse ;
+ *   4. sinon : `publierKept(hash)` (fichier temporaire, fsync, rename, fsync du répertoire), puis
+ *      le `planHash` au manifeste, écrit lui aussi avec fsync du fichier et du répertoire.
+ *
+ * `attachPlan` n'est jamais rappelée d'ici : elle reprendrait la garde.
+ */
+export class KeptInterrompuError extends RecoveryError {}
+
+export function attachPlanAvecKept(
+  dir: string,
+  text: string,
+  lease: Lease,
+  kept: { existe: () => boolean; publier: (hash: string) => void },
+): { manifest: RunManifest; publie: boolean } {
+  return withRunGuard(dir, lease.runId, () => {
+    const manifest = mutable(dir, lease, "geler le plan");
+    const hash = planHash(text);
+    if (manifest.planHash && manifest.planHash !== hash) {
+      throw new RecoveryError(
+        `le plan de ${manifest.runId} a changé depuis son attachement ` +
+          `(${manifest.planHash} → ${hash}) : ce run exécute un autre plan`,
+      );
+    }
+    if (manifest.planHash === hash) {
+      if (manifest.status === "active") return { manifest, publie: false };
+      const reprise: RunManifest = { ...manifest, status: "active" };
+      writeManifest(dir, reprise);
+      return { manifest: reprise, publie: false };
+    }
+    if (kept.existe()) {
+      throw new KeptInterrompuError(
+        `KEPT_PUBLICATION_INTERROMPUE : ${manifest.runId}-kept.json existe alors que le manifeste ne ` +
+          `porte aucun planHash (plan courant ${hash}). Publication interrompue : rien n'est attaché, ` +
+          `réutilisé, remplacé ni recalculé ; aucune lane ni délégation n'est admise. État publié pour adjudication. ` +
+          `Aucune délégation n'a été lancée.`,
+      );
+    }
+    kept.publier(hash);
+    const next: RunManifest = {
+      ...manifest,
+      status: "active",
+      plan: `${manifest.runId}-plan.json`,
+      planHash: hash,
+    };
+    assertVersionedFields(next, `écriture de ${MANIFEST}`);
+    const final = manifestPath(dir);
+    const tmp = `${final}.${process.pid}.tmp`;
+    const fd = openSync(tmp, "w");
+    try {
+      writeFileSync(fd, `${JSON.stringify(next, null, 2)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, final);
+    synchroniserChemin(dir);
+    return { manifest: next, publie: true };
+  });
+}
+
+/**
  * Réserve une séquence, durablement, avant la délégation.
  *
  * Exige la propriété : c'est la mutation la plus fréquente et la plus

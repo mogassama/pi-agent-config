@@ -52,7 +52,7 @@ export interface BuildContext {
    * LOT-REPRISES, R1-b : le périmètre gelé de l'unité d'un writer de lane — `expected_write_scope`
    * et `kept_consumers`. Porté dans la tâche et, pour `role-guard`, dans l'environnement.
    */
-  perimetre?: { unit: string; scope: string[]; kept: string[] } | null;
+  perimetre?: { unit: string; scope: string[]; kept: string[]; keptInconnu?: string } | null;
   /**
    * LOT-REPRISES, R2 : pour un reviewer d'unité, la projection des risques ouverts de l'unité lue
    * au registre autoritaire au départ — ids ouverts et ids remis — ou la raison de son
@@ -64,7 +64,7 @@ export interface BuildContext {
    * le plan validé. Portés dans la tâche et, pour le `submit`, dans l'environnement
    * (`PI_SUBAGENT_KEPT_CONSUMERS`) : un verdict bloquant exige de les avoir lus.
    */
-  gardes?: { unit: string; kept: string[] } | null;
+  gardes?: { unit: string; kept: string[] } | { unit: string; inconnu: string } | null;
 }
 
 /** LOT-REPRISES, R1-b : le début de la note de périmètre, reconnaissable dans une transcription. */
@@ -448,18 +448,23 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   const perimetre = !readOnly && ctx.perimetre ? ctx.perimetre : null;
   const notePerimetre = perimetre
     ? `${NOTE_PERIMETRE}${perimetre.unit} : ${perimetre.scope.join(", ")}. ` +
-      `Consommateurs à laisser intacts, interface préservée : ${perimetre.kept.length > 0 ? perimetre.kept.join(", ") : "aucun"}. ` +
+      `Consommateurs à laisser intacts, interface préservée : ${perimetre.keptInconnu ? `non établis (${perimetre.keptInconnu})` : perimetre.kept.length > 0 ? perimetre.kept.join(", ") : "aucun"}. ` +
       "Un edit ou un write hors de ce périmètre est refusé ; un fichier dont l'interface devrait changer " +
       "se signale dans `deviations`.\n\n"
     : "";
   // RC : les kept_consumers de l'unité, pour le reviewer seulement — et seulement s'il y en a.
   const reviewer = (agent.envelopeRole ?? agent.name) === "reviewer";
-  const gardes = reviewer && ctx.gardes && ctx.gardes.kept.length > 0 ? ctx.gardes : null;
-  const noteGardes = gardes
-    ? `${NOTE_GARDES}${gardes.unit} : ${gardes.kept.join(", ")}. ` +
-      "Un verdict needs_rework ou blocked exige de les avoir lus dans cette revue, avec l'outil read : " +
-      "chaque finding et le correctif qu'il demande doivent rester compatibles avec eux.\n\n"
-    : "";
+  // E1-bis : un kept inconnu (plan gelé dont le kept durable ne se relit pas) est transmis tel quel ;
+  // le `submit` refuse alors tout verdict bloquant (`kept_inconnu`), jamais « aucun kept ».
+  const gardes = reviewer && ctx.gardes && ("inconnu" in ctx.gardes || ctx.gardes.kept.length > 0) ? ctx.gardes : null;
+  const noteGardes = !gardes
+    ? ""
+    : "inconnu" in gardes
+      ? `${NOTE_GARDES}${gardes.unit} : non établis (${gardes.inconnu}). ` +
+        "Un verdict needs_rework ou blocked sera refusé tant qu'ils ne le sont pas.\n\n"
+      : `${NOTE_GARDES}${gardes.unit} : ${gardes.kept.join(", ")}. ` +
+        "Un verdict needs_rework ou blocked exige de les avoir lus dans cette revue, avec l'outil read : " +
+        "chaque finding et le correctif qu'il demande doivent rester compatibles avec eux.\n\n";
   args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${notePerimetre}${noteGardes}${CLOSING_INSTRUCTION}`);
 
   return {

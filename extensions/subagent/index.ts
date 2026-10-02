@@ -70,7 +70,7 @@ import {
   lirePlanAttache,
   type PlanAttache,
   allocateSeq,
-  attachPlan,
+  attachPlanAvecKept,
   describeAccess,
   inspectRun,
   openRun,
@@ -84,7 +84,8 @@ import {
 } from "../../subagent-only/run-manifest.js";
 import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
 import { validerDesignUpdates, type DesignUpdate } from "../../subagent-only/design-update.js";
-import { validerConsommateurs, type RefusPlan } from "../../subagent-only/consommateurs.js";
+import { validerConsommateurs, type KeptUnite, type RefusPlan } from "../../subagent-only/consommateurs.js";
+import { ecrireKeptDurable, KEPT_SCHEMA, keptExiste, lireKeptDurable } from "../../subagent-only/kept-durable.js";
 import {
   SchedulerInputError,
   admettre,
@@ -3042,11 +3043,88 @@ function reconstruireTentatives(lignes: string[], laneRead: LaneRead): void {
  * gelé — le relire à chaque appel inviterait à le corriger en cours de route,
  * et une prédiction réécrite après coup ne mesure plus rien.
  */
-let PLAN: (PlanResult & { refus?: RefusPlan; kept?: Record<string, string[]> }) | undefined;
+type PlanCourant = PlanResult & {
+  refus?: RefusPlan;
+  kept?: Record<string, string[]>;
+  /** E1-bis : le classement par unité, calculé avant le gel, publié dans `<runId>-kept.json`. */
+  keptMeta?: Record<string, KeptUnite>;
+  /** E1-bis : plan gelé dont le kept durable ne se relit pas — jamais une liste vide. */
+  keptInconnu?: string;
+};
+let PLAN: PlanCourant | undefined;
 /** Le texte du plan, gardé pour l'attacher au run une fois la propriété prise. */
 let PLAN_TEXT: string | undefined;
 
-function plan(): PlanResult & { refus?: RefusPlan; kept?: Record<string, string[]> } {
+/**
+ * LOT-EFFICACITÉ, E1-bis : ce que l'orchestrateur apprend du gel qui vient d'avoir lieu — le kept
+ * calculé par le runtime et les entrées retirées —, dit une fois dans le résultat qui suit, puis
+ * vidé. `details.plan_kept` en porte la forme structurée, que `run-cost --postes` compte.
+ */
+let NOTE_GEL: { texte: string; details: Record<string, unknown> } | null = null;
+
+function noteDuGel(meta: Record<string, KeptUnite>): { texte: string; details: Record<string, unknown> } {
+  const lignes = Object.entries(meta).map(([u, k]) => {
+    const retires = k.dropped.length > 0
+      ? ` ; retirés : ${k.dropped.map((d) => `${d.path} (${d.reason})`).join(", ")}`
+      : "";
+    return `kept_consumers de ${u}, calculés par le runtime : ${k.kept.length > 0 ? k.kept.join(", ") : "aucun"}${retires}.`;
+  });
+  return { texte: lignes.join("\n"), details: { plan_kept: meta } };
+}
+
+/**
+ * LOT-EFFICACITÉ, E1-bis : un fichier kept présent alors que le manifeste ne porte aucun `planHash`
+ * est une publication interrompue (plan des leviers v2 complétée, § 2.2, protocole, point 3). Rien
+ * n'est attaché, réutilisé, remplacé ni recalculé ; aucune lane ni délégation n'est admise.
+ * `undefined` : pas de cet état. Un manifeste illisible n'est pas cet état : d'autres portes le disent.
+ */
+function publicationKeptInterrompue(): string | undefined {
+  if (!RUN_ID) return undefined;
+  let manifeste: ReturnType<typeof readManifest>;
+  try {
+    manifeste = readManifest(RUN_DIR);
+  } catch {
+    return undefined;
+  }
+  if (!manifeste || manifeste.planHash) return undefined;
+  if (!keptExiste(RUN_DIR, RUN_ID)) return undefined;
+  return (
+    `KEPT_PUBLICATION_INTERROMPUE : ${RUN_ID}-kept.json existe alors que le manifeste ne porte aucun ` +
+    `planHash. Publication interrompue : rien n'est attaché, réutilisé, remplacé ni recalculé ; aucune ` +
+    `lane ni délégation n'est admise. État à soumettre pour adjudication. Aucune délégation n'a été lancée.`
+  );
+}
+
+/**
+ * LOT-EFFICACITÉ, E1-bis (adjudication de la livraison, 02-10, correction 1) : l'état du manifeste du run.
+ * Un échec de lecture ou de validation n'établit jamais l'absence de `planHash` : c'est un ARRÊT de
+ * reprise, avant toute analyse des consommateurs, publication, lane ou délégation. Seul un manifeste
+ * lisible, de ce run et sans `planHash` ouvre le chemin pré-gel.
+ */
+type EtatManifeste = { etat: "non-attache" } | { etat: "gele"; planHash: string } | { etat: "arret"; raison: string };
+const MANIFESTE_INEXPLOITABLE = "MANIFESTE_INEXPLOITABLE";
+
+function etatManifeste(): EtatManifeste {
+  let manifeste: ReturnType<typeof readManifest>;
+  try {
+    manifeste = readManifest(RUN_DIR);
+  } catch (err) {
+    return { etat: "arret", raison: err instanceof Error ? err.message : String(err) };
+  }
+  if (!manifeste) return { etat: "arret", raison: "manifeste du run absent" };
+  if (manifeste.runId !== RUN_ID) return { etat: "arret", raison: `le manifeste porte le run ${manifeste.runId}, pas ${RUN_ID}` };
+  return manifeste.planHash ? { etat: "gele", planHash: manifeste.planHash } : { etat: "non-attache" };
+}
+
+function texteArretManifeste(raison: string): string {
+  return (
+    `${MANIFESTE_INEXPLOITABLE} : ${raison}. Arrêt de reprise : l'absence de planHash n'est pas établie, ` +
+    `les consommateurs ne sont pas analysés, rien n'est publié ni attaché ; aucune lane ni délégation n'est ` +
+    `admise. État à soumettre pour adjudication. Aucune délégation n'a été lancée.`
+  );
+}
+
+function plan(): PlanCourant {
   if (PLAN?.status === "usable") return PLAN;
   const path = join(process.cwd(), RUNS_DIR, `${RUN_ID}-plan.json`);
   let text: string | undefined;
@@ -3085,12 +3163,43 @@ function plan(): PlanResult & { refus?: RefusPlan; kept?: Record<string, string[
    * attaché ni mémorisé : l'orchestrateur le corrige, et la tentative suivante le relit.
    * Le refus garde sa forme structurée (`refus`), que le résultat `task` publie.
    */
-  if (PLAN.status === "usable" && text !== undefined) {
-    const conso = validerConsommateurs(process.cwd(), JSON.parse(text), PLAN.units);
-    if (!conso.ok) {
-      PLAN = { ...PLAN, status: "invalid", reason: conso.reason, units: [], refus: conso.refus };
+  /*
+   * LOT-EFFICACITÉ, E1-bis (protocole adjugé, points 1 et 6) : le manifeste d'abord. S'il porte
+   * déjà un `planHash`, c'est une reprise : le kept durable est chargé, et l'analyse pré-gel n'est
+   * PAS rejouée — ni sur l'arbre courant, ni si python3 a disparu. Un kept qui ne se relit pas est
+   * inconnu : jamais une liste vide.
+   */
+  let gele: string | undefined;
+  if (PLAN.status === "usable" && text !== undefined && RUN_ID) {
+    const m = etatManifeste();
+    if (m.etat === "arret") {
+      PLAN = { ...PLAN, status: "invalid", reason: texteArretManifeste(m.raison), units: [] };
+    } else if (m.etat === "gele") {
+      gele = m.planHash;
+    }
+  }
+  if (PLAN.status === "usable" && text !== undefined && gele !== undefined) {
+    const lu = lireKeptDurable(RUN_DIR, RUN_ID, gele, PLAN.units.map((u) => u.id));
+    if (lu.etat === "connu") {
+      PLAN = {
+        ...PLAN,
+        kept: Object.fromEntries(Object.entries(lu.units).map(([u, k]) => [u, [...k.kept]])),
+        keptMeta: lu.units,
+      };
     } else {
-      PLAN = { ...PLAN, kept: conso.kept };
+      PLAN = { ...PLAN, keptInconnu: lu.raison };
+    }
+  } else if (PLAN.status === "usable" && text !== undefined) {
+    const interrompue = publicationKeptInterrompue();
+    if (interrompue) {
+      PLAN = { ...PLAN, status: "invalid", reason: interrompue, units: [] };
+    } else {
+      const conso = validerConsommateurs(process.cwd(), JSON.parse(text), PLAN.units);
+      if (!conso.ok) {
+        PLAN = { ...PLAN, status: "invalid", reason: conso.reason, units: [], refus: conso.refus };
+      } else {
+        PLAN = { ...PLAN, kept: conso.kept, keptMeta: conso.meta };
+      }
     }
   }
   // Le signal « chemin réservé déclaré dans un scope » appartient au plan et non
@@ -3106,12 +3215,14 @@ function plan(): PlanResult & { refus?: RefusPlan; kept?: Record<string, string[
  * Lu dans le plan gelé et validé — jamais dans la tâche : `expected_write_scope` et les
  * `kept_consumers` que R1-a a acceptés. Un rôle en lecture n'en reçoit pas.
  */
-function perimetreDe(unite: string | undefined, lectureSeule: boolean): Perimetre | null {
+function perimetreDe(unite: string | undefined, lectureSeule: boolean): (Perimetre & { keptInconnu?: string }) | null {
   if (!unite || lectureSeule) return null;
   const p = plan();
   if (p.status !== "usable") return null;
   const u = p.units.find((x) => x.id === unite);
   if (!u) return null;
+  // E1-bis : kept inconnu, le périmètre d'écriture reste imposé par R1-b — tout hors du scope est refusé.
+  if (p.keptInconnu) return { unit: u.id, scope: [...u.expectedWriteScope], kept: [], keptInconnu: p.keptInconnu };
   return { unit: u.id, scope: [...u.expectedWriteScope], kept: [...(p.kept?.[u.id] ?? [])] };
 }
 
@@ -3121,10 +3232,12 @@ function perimetreDe(unite: string | undefined, lectureSeule: boolean): Perimetr
  * Lus dans le plan gelé et validé par R1-a — jamais dans la tâche. Une unité sans kept_consumers
  * n'impose rien : `null`.
  */
-function gardesDe(unite: string | undefined): { unit: string; kept: string[] } | null {
+function gardesDe(unite: string | undefined): { unit: string; kept: string[] } | { unit: string; inconnu: string } | null {
   if (!unite) return null;
   const p = plan();
   if (p.status !== "usable") return null;
+  // E1-bis : l'état inconnu est transmis explicitement à RC — il ne devient jamais une absence de garde.
+  if (p.keptInconnu) return { unit: unite, inconnu: p.keptInconnu };
   const kept = p.kept?.[unite] ?? [];
   return kept.length > 0 ? { unit: unite, kept: [...kept] } : null;
 }
@@ -4189,7 +4302,7 @@ export default function (pi: ExtensionAPI) {
         "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
         ...(PREFLIGHT.ok
           ? [
-              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...],"kept_consumers":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime lists every tracked Python file that statically imports a module a unit will write: each must be in that unit's expected_write_scope (the unit changes it) or in its kept_consumers (left untouched, the interface it uses preserved — no write right). A plan with an unclassified consumer is refused before anything runs, the list is in the refusal, and you correct the plan before any delegation, without searching for anything.`,
+              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}]}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime computes every tracked Python file that statically imports a module a unit will write; each one outside that unit's expected_write_scope becomes a kept consumer — left untouched, the interface it uses preserved, no write right. You do not list them and you do not search for them: the result that freezes the plan names them. If a unit must change one, put it in expected_write_scope.`,
             ]
           : [
               /*
@@ -4682,6 +4795,22 @@ export default function (pi: ExtensionAPI) {
         }
 
         /*
+         * LOT-EFFICACITÉ, E1-bis (protocole adjugé, point 3) : une publication kept interrompue par
+         * un crash arrête tout — aucune lane ni délégation, un scout global compris. Rien n'est
+         * réutilisé, remplacé ni recalculé ; l'état revient à l'adjudication.
+         */
+        {
+          const interrompue = publicationKeptInterrompue();
+          if (interrompue) {
+            return {
+              content: [{ type: "text" as const, text: `Refused: ${interrompue}` }],
+              isError: true,
+              details: { kept_publication: { etat: "interrompue", run: RUN_ID } },
+            };
+          }
+        }
+
+        /*
          * Ouvre ou rejoint : décidé ICI, une fois, pour toutes les unités de l'appel
          * (PLAN-LOT4 § 4).
          *
@@ -4770,7 +4899,22 @@ export default function (pi: ExtensionAPI) {
         let seqs: number[];
         try {
           if (PLAN?.status === "usable" && PLAN_TEXT !== undefined) {
-            attachPlan(RUN_DIR, PLAN_TEXT, lease);
+            /*
+             * LOT-EFFICACITÉ, E1-bis : le kept dérivé avant le `planHash`, sous une seule prise de
+             * la garde. Un plan rechargé d'un gel antérieur n'a rien à publier : le manifeste porte
+             * déjà son `planHash`, et `attachPlanAvecKept` ne réécrit jamais le kept durable.
+             */
+            const courant = PLAN;
+            const gel = attachPlanAvecKept(RUN_DIR, PLAN_TEXT, lease, {
+              existe: () => keptExiste(RUN_DIR, RUN_ID),
+              publier: (hash) => {
+                if (!courant.keptMeta) {
+                  throw new RecoveryError(`le kept de ${RUN_ID} n'a pas été établi avant le gel : rien n'est publié`);
+                }
+                ecrireKeptDurable(RUN_DIR, RUN_ID, { schema: KEPT_SCHEMA, planHash: hash, units: courant.keptMeta });
+              },
+            });
+            if (gel.publie && courant.keptMeta) NOTE_GEL = noteDuGel(courant.keptMeta);
           }
           seqs = Array.from({ length: Math.max(1, questions.length) }, () =>
             allocateSeq(RUN_DIR, lease).seq,
@@ -5205,13 +5349,17 @@ export default function (pi: ExtensionAPI) {
            * reproposer.
            */
           const allRefused = outcomes.every((o) => o.state === "refused");
+          // E1-bis : le gel qui vient d'avoir lieu, dit une fois.
+          const gelLot = NOTE_GEL;
+          NOTE_GEL = null;
           return {
             content: [{
               type: "text" as const,
               text:
                 `[worker batch: ${ran}/${outcomes.length} exécutée(s), ` +
-                `max_parallel_lanes=${MAX_PARALLEL_LANES}]\n` + lines.join("\n"),
+                `max_parallel_lanes=${MAX_PARALLEL_LANES}]\n` + (gelLot ? `${gelLot.texte}\n` : "") + lines.join("\n"),
             }],
+            ...(gelLot ? { details: gelLot.details } : {}),
             ...(allRefused ? { isError: true } : {}),
           };
         }
@@ -6035,7 +6183,10 @@ export default function (pi: ExtensionAPI) {
         // P1-D : les fichiers observés et les tests déclarés d'un worker, pour lancer la revue sans
         // relire l'artefact.
         const travail = ligneWorker(result);
-        const under = [bilan, violation, integration, travail, action, risks].filter(Boolean).join("\n");
+        // E1-bis : le gel qui vient d'avoir lieu, dit une fois.
+        const gel = NOTE_GEL;
+        NOTE_GEL = null;
+        const under = [bilan, gel?.texte, violation, integration, travail, action, risks].filter(Boolean).join("\n");
 
         const head = result.failure
           ? `[${result.role}: ${result.failure}${result.fromTree ? `, ${result.changedFiles?.length} file(s) on disk` : ""}${via}]`
@@ -6092,6 +6243,7 @@ export default function (pi: ExtensionAPI) {
           // C3.7 : les causes de politique, structurées, seulement quand la porte les a établies.
           details: {
             ...details,
+            ...(gel ? gel.details : {}),
             ...(porteIntegration ? { integration_gate: porteIntegration } : {}),
             ...(detailsIntegration ? { integration: detailsIntegration } : {}),
           },
