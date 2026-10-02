@@ -87,6 +87,11 @@ import { validerDesignUpdates, type DesignUpdate } from "../../subagent-only/des
 import { validerConsommateurs, type KeptUnite, type RefusPlan } from "../../subagent-only/consommateurs.js";
 import { ecrireKeptDurable, KEPT_SCHEMA, keptExiste, lireKeptDurable } from "../../subagent-only/kept-durable.js";
 import {
+  candidats, injectionEligible, lireArbre, lireBlob, provenanceDe, sectionInjection, selectionner,
+  type Delegation as DelegationInjectee, type Provenance, type Selection,
+} from "../../subagent-only/injection.js";
+import { publierTransmis, TransmisError, type ChampsTransmis } from "../../subagent-only/transmis.js";
+import {
   SchedulerInputError,
   admettre,
   runLanes,
@@ -3073,6 +3078,41 @@ function noteDuGel(meta: Record<string, KeptUnite>): { texte: string; details: R
 }
 
 /**
+ * LOT-EFFICACITÉ, E2 : la revue est-elle la revue INITIALE de l'unité — aucun REVIEWED de l'unité
+ * au registre des lanes du run, toutes générations ? Un registre illisible n'est pas « aucune
+ * revue » : `false`, et la revue part sans injection.
+ */
+function aucuneRevueDe(unit: string): boolean {
+  try {
+    const lu = readLaneEvents(RUN_DIR, RUN_ID);
+    return !lu.events.some((e) => "event" in e && e.event === "REVIEWED" && (e as { work_unit?: string }).work_unit === unit);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * LOT-EFFICACITÉ, § 6 : ce que le runtime a transmis à une délégation — la provenance d'injection
+ * (E2), le contrat de test (E3) —, publié avant le spawn à côté de son artefact,
+ * `<runId>-<NN>-transmis.json` (`transmis.ts`). L'environnement vivant de l'enfant n'est pas une
+ * archive de mesure. Une trace existante illisible, invalide ou contradictoire n'est jamais écrasée :
+ * le refus rendu ici arrête avant le spawn (correction 2 de l'adjudication de la livraison, 02-10).
+ */
+function conserverTransmis(seq: number, champs: ChampsTransmis): { content: { type: "text"; text: string }[]; isError: true; details: Record<string, unknown> } | null {
+  try {
+    publierTransmis(RUN_DIR, RUN_ID, seq, champs);
+    return null;
+  } catch (err) {
+    if (!(err instanceof TransmisError)) throw err;
+    return {
+      content: [{ type: "text" as const, text: `Refused: ${err.message}. La trace n'est ni réparée ni écrasée. Aucune délégation n'a été lancée.` }],
+      isError: true,
+      details: { transmis: { etat: "inexploitable", seq, raison: err.raison } },
+    };
+  }
+}
+
+/**
  * LOT-EFFICACITÉ, E1-bis : un fichier kept présent alors que le manifeste ne porte aucun `planHash`
  * est une publication interrompue (plan des leviers v2 complétée, § 2.2, protocole, point 3). Rien
  * n'est attaché, réutilisé, remplacé ni recalculé ; aucune lane ni délégation n'est admise.
@@ -5122,9 +5162,74 @@ export default function (pi: ExtensionAPI) {
         // question and would treat a pasted concern as a second one.
         const scoutHeader = (q: string) =>
           `Find: ${q}\nScope: ${(params.scope ?? []).join(", ")}\n\n`;
+        /*
+         * LOT-EFFICACITÉ, E2 : la revue initiale d'une unité reçoit, après le diff, les fichiers
+         * qu'un reviewer lit d'ordinaire — kept, scope, cités —, entiers, à T_L, sous budget
+         * (subagent-only/injection.ts). La provenance est construite à partir des fichiers
+         * effectivement sérialisés ici, rattachée à cette délégation, et conservée (§ 6).
+         */
+        let injection: { section: string; provenance: Provenance; selection: Selection } | null = null;
+        let delegation: DelegationInjectee | null = null;
+        if (params.agent === "reviewer" && lane && snapshotDeRevue && unit) {
+          const planHashGele = (() => { try { return readManifest(RUN_DIR)?.planHash; } catch { return undefined; } })();
+          if (planHashGele) delegation = { run: RUN_ID, planHash: planHashGele, unit, seq: seqs[0] };
+          const forRisks = Array.isArray(params.for_risks) ? params.for_risks.length : 0;
+          const eligible = injectionEligible({
+            reviewer: true,
+            lane: true,
+            degrade: paquetDeRevue.degraded,
+            initiale: aucuneRevueDe(unit),
+            forRisks,
+          });
+          if (eligible && delegation) {
+            try {
+              const arbre = lireArbre(process.cwd(), snapshotDeRevue.tree);
+              const avant = new Set(lireArbre(process.cwd(), snapshotDeRevue.fromTree).keys());
+              const g = gardesDe(unit);
+              const u = plan().units.find((x) => x.id === unit);
+              const liste = candidats({
+                kept: g && "kept" in g ? g.kept : [],
+                scope: u ? u.expectedWriteScope : [],
+                arbre,
+                avant,
+                tache: typeof params.task === "string" ? params.task : "",
+              });
+              const selection = selectionner(liste, arbre, avant, lireBlob(process.cwd()));
+              if (selection.injectes.length > 0) {
+                injection = {
+                  section: sectionInjection(snapshotDeRevue.tree, selection.injectes),
+                  provenance: provenanceDe(delegation, snapshotDeRevue.tree, selection.injectes),
+                  selection,
+                };
+              }
+            } catch {
+              // Une observation git impossible ne bloque pas la revue : elle part sans injection,
+              // et le reviewer lit comme avant. Aucune provenance n'est transmise.
+              injection = null;
+            }
+          }
+        }
         const tasks = questions.length
           ? questions.map((q) => `${pkg.text}${scoutHeader(q)}${params.task}`)
-          : [`${cont}${pkg.text}${params.task}`];
+          : [`${cont}${pkg.text}${injection?.section ?? ""}${params.task}`];
+        if (params.agent === "reviewer" && lane && unit) {
+          // § 6 : ce que le runtime a transmis à cette délégation, publié avant son spawn.
+          const refusTransmis = conserverTransmis(seqs[0], {
+            agent: params.agent,
+            unit,
+            ...(injection
+              ? {
+                  injection: {
+                    provenance: injection.provenance,
+                    exclus: injection.selection.exclus,
+                    octets_injectes: injection.selection.octetsInjectes,
+                    surcout_octets: Buffer.byteLength(injection.section, "utf-8") - injection.selection.octetsInjectes,
+                  },
+                }
+              : { injection: null }),
+          });
+          if (refusTransmis) return refusTransmis;
+        }
 
         // Publish run state for the footer. getExtensionStatuses() is the
         // documented channel between extensions; a shared module import would
@@ -5459,6 +5564,8 @@ export default function (pi: ExtensionAPI) {
                     ? projectionDesRisques(lane, unit, forRisks)
                     : null,
                   gardes: lane && (agent.envelopeRole ?? agent.name) === "reviewer" ? gardesDe(unit) : null,
+                  injection: injection?.provenance ?? null,
+                  delegation,
                 },
                 seq: seqs[i],
                 signal: bothSignals(signal),

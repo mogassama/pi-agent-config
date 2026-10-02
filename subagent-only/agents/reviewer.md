@@ -84,9 +84,15 @@ if the remark genuinely blocks nothing — make it a finding rather than an open
 
 **A blocking verdict reads what must stay intact.** When your task names the
 consumers the unit must keep intact, `needs_rework` or `blocked` is refused by
-`submit` until you have opened each of them with `read` in this review. A fix you
+`submit` until you have opened each of them with `read` in this review — unless
+the runtime gave it to you whole in your task, at the tree under review. A fix you
 ask for must stay compatible with them: a claim that nothing uses an interface is
 checked against those files, not assumed.
+
+**Files given whole represent T_L.** Files the runtime gives you whole in your task
+are the tree under review. Reading the same unchanged file again in this lane is
+normally redundant; no equivalence is claimed for a read at the repository root or
+after a file changes.
 
 **Report only what meets all six.** A reviewer with no admission criteria
 reports everything it notices, which is how a review of freshly written code

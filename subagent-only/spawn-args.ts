@@ -19,6 +19,7 @@
  * child. That is intended — the role prompt is the child's whole instruction.
  */
 
+import type { Delegation, Provenance } from "./injection.ts";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
@@ -65,6 +66,13 @@ export interface BuildContext {
    * (`PI_SUBAGENT_KEPT_CONSUMERS`) : un verdict bloquant exige de les avoir lus.
    */
   gardes?: { unit: string; kept: string[] } | { unit: string; inconnu: string } | null;
+  /**
+   * LOT-EFFICACITÉ, E2 : pour le reviewer d'une revue initiale, la provenance des fichiers injectés
+   * dans sa tâche — portée au seul reviewer, par `PI_SUBAGENT_INJECTED`.
+   */
+  injection?: Provenance | null;
+  /** E2 : la délégation courante (run, planHash, unité, séquence), contre laquelle l'enfant valide la provenance. */
+  delegation?: Delegation | null;
 }
 
 /** LOT-REPRISES, R1-b : le début de la note de périmètre, reconnaissable dans une transcription. */
@@ -463,7 +471,8 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
       ? `${NOTE_GARDES}${gardes.unit} : non établis (${gardes.inconnu}). ` +
         "Un verdict needs_rework ou blocked sera refusé tant qu'ils ne le sont pas.\n\n"
       : `${NOTE_GARDES}${gardes.unit} : ${gardes.kept.join(", ")}. ` +
-        "Un verdict needs_rework ou blocked exige de les avoir lus dans cette revue, avec l'outil read : " +
+        "Un verdict needs_rework ou blocked exige de les avoir lus dans cette revue, avec l'outil read" +
+        (injectes(ctx, gardes.kept) ? ", sauf ceux que le runtime t'a fournis entiers ci-dessus" : "") + " : " +
         "chaque finding et le correctif qu'il demande doivent rester compatibles avec eux.\n\n";
   args.push(`Task: ${task}\n\n${dataNote(ctx.cwd ?? process.cwd(), task)}${noteTest}${notePerimetre}${noteGardes}${CLOSING_INSTRUCTION}`);
 
@@ -477,6 +486,9 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
         ? { PI_SUBAGENT_OPEN_RISKS: JSON.stringify(ctx.risquesOuverts) }
         : {}),
       ...(gardes ? { PI_SUBAGENT_KEPT_CONSUMERS: JSON.stringify(gardes) } : {}),
+      // E2 : la provenance et la délégation, au seul reviewer ; jamais héritées (dispatch les retire).
+      ...(reviewer && ctx.injection ? { PI_SUBAGENT_INJECTED: JSON.stringify(ctx.injection) } : {}),
+      ...(reviewer && ctx.delegation ? { PI_SUBAGENT_DELEGATION: JSON.stringify(ctx.delegation) } : {}),
     },
     injectedChars,
     estimatedInputTokens: Math.round((injectedChars / 4) * 0.82),
@@ -501,4 +513,9 @@ export function describePlan(plan: SpawnPlan): string {
     }
   }
   return out.join(" ");
+}
+
+/** E2 : au moins un kept de l'unité est-il dans la provenance transmise ? */
+function injectes(ctx: BuildContext, kept: readonly string[]): boolean {
+  return !!ctx.injection && ctx.injection.files.some((f) => kept.includes(f.path));
 }

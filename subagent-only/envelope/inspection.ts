@@ -20,6 +20,8 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
+import { controlerInjecte, type Controle, type InjectionLue, type Provenance } from "../injection.ts";
+
 export const REVIEW_BLOCKING_WITHOUT_KEPT_CONSUMERS = "REVIEW_BLOCKING_WITHOUT_KEPT_CONSUMERS";
 
 /** Les verdicts qui peuvent envoyer un worker : les seuls soumis à la preuve. */
@@ -124,4 +126,61 @@ export function texteDuRefusInspection(r: RefusInspection): string {
     "recorded. Read them, check that each finding and the fix it asks for stay compatible with them — " +
     "withdraw or change a finding they contradict — then call submit again."
   );
+}
+
+/**
+ * LOT-EFFICACITÉ, E2 — sémantique RC A (plan des leviers v2 complétée, § 3.3) : un kept_consumer
+ * est inspecté s'il a été lu par un `read` réussi, comme avant, OU s'il figure dans la provenance
+ * d'injection VALIDE de cette délégation et que le blob Git des octets bruts lus au `submit`, dans
+ * le worktree de l'enfant, égale le blob transmis. L'injection ne lève jamais un kept inconnu.
+ *
+ * Chaque `submit` bloquant porte l'observation structurée (`details.inspection`), refusé ou non :
+ * c'est ce que le relevé vérifie, sans reconstituer le worktree d'après coup.
+ */
+export interface ObservationInspection {
+  verdict: string;
+  unit: string | null;
+  par_read: string[];
+  par_injection: string[];
+  controles: Controle[];
+  injection: { etat: InjectionLue["etat"]; raison?: string; provenance?: Omit<Provenance, "files"> };
+  kept_inconnu?: string;
+}
+
+export function jugerBloquant(
+  soumission: { verdict?: unknown },
+  gardes: Gardes | null,
+  inspectes: ReadonlySet<string>,
+  cwd: string,
+  injection: InjectionLue,
+  resoudre: Resoudre = realpathSync,
+  lireOctets?: (reel: string) => Buffer,
+): { refus: RefusInspection | null; observation: ObservationInspection | null } {
+  if (!BLOQUANTS.has(String(soumission.verdict))) return { refus: null, observation: null };
+  const vue: ObservationInspection["injection"] = injection.etat === "valide"
+    ? { etat: "valide", provenance: { run: injection.provenance.run, planHash: injection.provenance.planHash, unit: injection.provenance.unit, seq: injection.provenance.seq, tree: injection.provenance.tree } }
+    : injection.etat === "invalide" ? { etat: "invalide", raison: injection.raison } : { etat: "absente" };
+  const base = { verdict: String(soumission.verdict), par_read: [] as string[], par_injection: [] as string[], controles: [] as Controle[], injection: vue };
+  if (!gardes) return { refus: null, observation: { ...base, unit: null } };
+  if ("inconnu" in gardes) {
+    return { refus: refusBloquant(soumission, gardes, inspectes, cwd, resoudre), observation: { ...base, unit: null, kept_inconnu: gardes.inconnu } };
+  }
+  const retenus = new Set(inspectes);
+  const parRead: string[] = [];
+  const parInjection: string[] = [];
+  const controles: Controle[] = [];
+  for (const k of gardes.kept) {
+    const reel = cheminReelDansWorktree(k, cwd, resoudre);
+    if (reel !== null && inspectes.has(reel)) { parRead.push(k); continue; }
+    if (injection.etat !== "valide" || injection.provenance.unit !== gardes.unit) continue;
+    const f = injection.provenance.files.find((x) => x.path === k);
+    if (!f) continue;
+    const c = controlerInjecte(k, f.blob, (p) => cheminReelDansWorktree(p, cwd, resoudre), lireOctets);
+    controles.push(c);
+    if (c.ok && reel !== null) { retenus.add(reel); parInjection.push(k); }
+  }
+  return {
+    refus: refusBloquant(soumission, gardes, retenus, cwd, resoudre),
+    observation: { ...base, unit: gardes.unit, par_read: parRead, par_injection: parInjection, controles },
+  };
 }

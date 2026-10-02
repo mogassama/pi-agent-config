@@ -29,6 +29,7 @@ import {
   recordAttempt,
   type RoleName,
 } from "./run-state.js";
+import { environnementEnfant } from "./injection.js";
 
 /**
  * What a delegation returned.
@@ -40,6 +41,7 @@ import {
  * the next drift on its own: every count is optional, so a `RunResult` missing
  * a field added to `EnvelopeCounts` stays structurally assignable to it.
  */
+
 export interface RunResult extends EnvelopeCounts {
   role: string;
   status: "ok" | "blocked" | "failed";
@@ -310,7 +312,7 @@ async function runOnce(
 
   const child = spawn(opts.piPath ?? "pi", plan.args, {
     cwd,
-    env: { ...process.env, ...plan.env },
+    env: environnementEnfant(process.env, plan.env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 

@@ -22,7 +22,10 @@ export interface AppelDispatch {
   /** LOT-REPRISES, R2 : la projection des risques portée à un reviewer, telle que reçue. */
   risquesOuverts?: { ids: string[]; remis: string[] } | { inconnu: string } | null;
   /** LOT-REPRISES-CORRECTIF, RC : les kept_consumers portés à un reviewer, tels que reçus. */
-  gardes?: { unit: string; kept: string[] } | null;
+  gardes?: { unit: string; kept: string[] } | { unit: string; inconnu: string } | null;
+  /** LOT-EFFICACITÉ, E2 : la provenance d'injection et la délégation portées à un reviewer. */
+  injection?: { run: string; planHash: string; unit: string; seq: number; tree: string; files: { path: string; blob: string; size: number }[] } | null;
+  delegation?: { run: string; planHash: string; unit: string; seq: number } | null;
 }
 
 /** Les appels reçus, dans l'ordre. Le harnais le vide entre deux scénarios. */
@@ -43,7 +46,7 @@ export function reinitialiser(): void {
 export async function dispatch(
   agent: { name?: string },
   task: string,
-  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"]; gardes?: AppelDispatch["gardes"] }; seq?: number },
+  opts: { ctx?: { cwd?: string; testCommand?: string | null; perimetre?: AppelDispatch["perimetre"]; risquesOuverts?: AppelDispatch["risquesOuverts"]; gardes?: AppelDispatch["gardes"]; injection?: AppelDispatch["injection"]; delegation?: AppelDispatch["delegation"] }; seq?: number },
 ): Promise<RunResult> {
   const appel: AppelDispatch = {
     agent: agent?.name ?? "?",
@@ -54,6 +57,8 @@ export async function dispatch(
     perimetre: opts?.ctx?.perimetre,
     risquesOuverts: opts?.ctx?.risquesOuverts,
     gardes: opts?.ctx?.gardes,
+    injection: opts?.ctx?.injection,
+    delegation: opts?.ctx?.delegation,
   };
   APPELS.push(appel);
   /*

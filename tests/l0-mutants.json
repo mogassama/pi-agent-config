@@ -1689,5 +1689,101 @@
       }
     ],
     "runs": 20
+  },
+  {
+    "test": "L0 REG E2-paquet — la revue initiale reçoit kept, scope et cités entiers à T_L, au seul reviewer, et ce qui est transmis est conservé",
+    "file": "extensions/subagent/index.ts",
+    "find": "            initiale: aucuneRevueDe(unit),",
+    "replace": "            initiale: true, // mutant E2 (a) : injection sur une revue non initiale"
+  },
+  {
+    "test": "L0 REG E2-regle — la revue initiale reçoit kept, scope et cités, dédupliqués, exclus nommés, sous budget, sans troncature",
+    "file": "subagent-only/injection.ts",
+    "find": "    if (total + octets.length > budget) { exclure(`budget (${total} + ${octets.length} > ${budget} octets)`); continue; }",
+    "replace": "    // mutant E2 (b) : budget retiré"
+  },
+  {
+    "test": "L0 REG E2-octets-bruts — un kept injecté compte au submit si le blob de ses octets bruts égale le blob transmis, et seulement alors",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "    if (c.ok && reel !== null) { retenus.add(reel); parInjection.push(k); }",
+    "replace": "    if (reel !== null) { retenus.add(reel); parInjection.push(k); } // mutant E2 (c) : kept compté sur le seul chemin, sans blob"
+  },
+  {
+    "test": "L0 REG E2-provenance — la provenance n'est retenue que pour la délégation, l'unité, le plan et le tree courants",
+    "file": "subagent-only/injection.ts",
+    "find": "    return { etat: \"invalide\", raison: \"provenance de forme invalide\" };",
+    "replace": "    void 0; // mutant E2 (d) : provenance acceptée sans contrôle de forme"
+  },
+  {
+    "test": "L0 REG E2-regle — la revue initiale reçoit kept, scope et cités, dédupliqués, exclus nommés, sous budget, sans troncature",
+    "file": "subagent-only/injection.ts",
+    "find": "    if (octets.length > maxFichier) { exclure(`trop gros (${octets.length} octets > ${maxFichier})`); continue; }",
+    "replace": "    if (octets.length > maxFichier) octets = octets.subarray(0, maxFichier); // mutant E2 (e) : fichier tronqué au lieu d'être sauté"
+  },
+  {
+    "test": "L0 REG E2-environnement — une provenance héritée de l'environnement du parent n'est jamais transmise à un enfant",
+    "file": "subagent-only/injection.ts",
+    "find": "  for (const v of VARIABLES_PAR_SPAWN) delete env[v];",
+    "replace": "  void VARIABLES_PAR_SPAWN; // mutant E2 (f) : provenance héritée conservée au spawn"
+  },
+  {
+    "test": "L0 REG E2-provenance — la provenance n'est retenue que pour la délégation, l'unité, le plan et le tree courants",
+    "file": "subagent-only/injection.ts",
+    "find": "    return { etat: \"invalide\", raison: \"provenance d'une autre délégation, unité ou plan\" };",
+    "replace": "    void 0; // mutant E2 (g) : contrôle d'identité de la provenance retiré"
+  },
+  {
+    "test": "L0 REG E2-submit — le vrai submit compte un kept injecté au bon blob, exige read sinon, et publie son observation",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "          const juge = jugerBloquant(params as Record<string, unknown>, inspection.gardes, inspection.inspectes, inspection.cwd, inspection.injection);",
+    "replace": "          const juge = jugerBloquant(params as Record<string, unknown>, inspection.gardes, inspection.inspectes, inspection.cwd, lireInjection(process.env.PI_SUBAGENT_INJECTED, process.env.PI_SUBAGENT_DELEGATION, () => workingTree(inspection!.cwd))); // mutant E2 (h) : provenance relue au submit"
+  },
+  {
+    "test": "L0 REG E2-octets-bruts — un kept injecté compte au submit si le blob de ses octets bruts égale le blob transmis, et seulement alors",
+    "file": "subagent-only/injection.ts",
+    "find": "    return { path, attendu, lu: null, ok: false, erreur: `lecture : ${err instanceof Error ? err.message.split(\"\\n\")[0] : String(err)}` };",
+    "replace": "    return { path, attendu, lu: attendu, ok: true }; // mutant E2 (i) : une erreur de lecture comptée comme inspection"
+  },
+  {
+    "test": "L0 REG E2-octets-bruts — un kept injecté compte au submit si le blob de ses octets bruts égale le blob transmis, et seulement alors",
+    "file": "subagent-only/injection.ts",
+    "find": "    lu = blobDesOctets(octets, attendu.length);",
+    "replace": "    lu = execFileSync(\"git\", [\"hash-object\", reel], { cwd: reel.replace(/\\/[^/]*$/, \"\"), encoding: \"utf-8\" }).trim(); // mutant E2 (j) : comparaison après filtre Git"
+  },
+  {
+    "test": "L0 REG E2-octets-bruts — un kept injecté compte au submit si le blob de ses octets bruts égale le blob transmis, et seulement alors",
+    "file": "subagent-only/envelope/inspection.ts",
+    "find": "    return { refus: refusBloquant(soumission, gardes, inspectes, cwd, resoudre), observation: { ...base, unit: null, kept_inconnu: gardes.inconnu } };",
+    "replace": "    return { refus: injection.etat === \"valide\" ? null : refusBloquant(soumission, gardes, inspectes, cwd, resoudre), observation: { ...base, unit: null, kept_inconnu: gardes.inconnu } }; // mutant E2 (k) : l'injection lève un kept inconnu"
+  },
+  {
+    "test": "L0 REG E2-trace — le contrôle au submit est conservé et reste vérifiable après la disparition du worktree",
+    "file": "subagent-only/envelope/envelope.ts",
+    "find": "              details: { refus: juge.refus, ...(juge.observation ? { inspection: juge.observation } : {}) },",
+    "replace": "              details: { refus: juge.refus }, // mutant E2 (l) : observation omise sur un submit refusé"
+  },
+  {
+    "test": "L0 REG E2-transmis — la trace de transmission se crée, se complète, mais une trace illisible ou contradictoire n'est jamais écrasée et arrête avant le spawn",
+    "file": "subagent-only/transmis.ts",
+    "find": "    throw new TransmisError(chemin, `trace existante illisible (${err instanceof Error ? err.message : String(err)})`);",
+    "replace": "    return {}; // mutant E2 (m) : une erreur de lecture remplacée par {}"
+  },
+  {
+    "test": "L0 REG E2-transmis-ecriture — la trace se publie atomiquement et ne remplace jamais un champ, une identité ou une trace d'une autre délégation",
+    "file": "subagent-only/transmis.ts",
+    "find": "        throw new TransmisError(chemin, `trace existante contradictoire sur ${k}`);",
+    "replace": "        void 0; // mutant E2 (n) : un champ contradictoire remplacé sans refus"
+  },
+  {
+    "test": "L0 REG E2-transmis-ecriture — la trace se publie atomiquement et ne remplace jamais un champ, une identité ou une trace d'une autre délégation",
+    "file": "subagent-only/transmis.ts",
+    "find": "    if (!(k in d) || typeof d[k] !== \"string\" || d[k] === \"\") {",
+    "replace": "    if (k in d && (typeof d[k] !== \"string\" || d[k] === \"\")) { // mutant E2 (o) : la présence de agent et unit n'est plus exigée"
+  },
+  {
+    "test": "L0 REG E2-transmis — la trace de transmission se crée, se complète, mais une trace illisible ou contradictoire n'est jamais écrasée et arrête avant le spawn",
+    "file": "subagent-only/transmis.ts",
+    "find": "    if (!(k in d) || typeof d[k] !== \"string\" || d[k] === \"\") {",
+    "replace": "    if (k in d && (typeof d[k] !== \"string\" || d[k] === \"\")) { // mutant E2 (o) : la présence de agent et unit n'est plus exigée"
   }
 ]

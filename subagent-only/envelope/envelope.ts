@@ -22,7 +22,9 @@ import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 
 import { lireProjection, refusApprobation, texteDuRefus, type Projection } from "./approbation.ts";
-import { inspecte, lireGardes, refusBloquant, texteDuRefusInspection, type Gardes } from "./inspection.ts";
+import { inspecte, jugerBloquant, lireGardes, texteDuRefusInspection, type Gardes } from "./inspection.ts";
+import { lireInjection, type InjectionLue } from "../injection.ts";
+import { workingTree } from "../tree.ts";
 
 // ---------------------------------------------------------------- envelope
 
@@ -256,6 +258,8 @@ interface Inspection {
   gardes: Gardes | null;
   inspectes: ReadonlySet<string>;
   cwd: string;
+  /** E2 : la provenance d'injection, capturée et validée une fois, à l'initialisation. */
+  injection: InjectionLue;
 }
 
 function buildSubmitTool(role: RoleName, projection: Projection | null = null, inspection: Inspection | null = null) {
@@ -307,11 +311,19 @@ function buildSubmitTool(role: RoleName, projection: Projection | null = null, i
          * `details.refus` : aucune enveloppe, aucune `REVIEWED`, aucun finding publié.
          */
         if (inspection) {
-          const refusRc = refusBloquant(params as Record<string, unknown>, inspection.gardes, inspection.inspectes, inspection.cwd);
-          if (refusRc) {
+          const juge = jugerBloquant(params as Record<string, unknown>, inspection.gardes, inspection.inspectes, inspection.cwd, inspection.injection);
+          if (juge.refus) {
             return {
-              content: [{ type: "text" as const, text: texteDuRefusInspection(refusRc) }],
-              details: { refus: refusRc },
+              content: [{ type: "text" as const, text: texteDuRefusInspection(juge.refus) }],
+              details: { refus: juge.refus, ...(juge.observation ? { inspection: juge.observation } : {}) },
+            };
+          }
+          // E2 : un submit bloquant accepté porte aussi son observation, conservée dans l'artefact.
+          if (juge.observation) {
+            return {
+              content: [{ type: "text" as const, text: params.summary }],
+              details: { role, ...params, inspection: juge.observation },
+              terminate: true,
             };
           }
         }
@@ -346,10 +358,17 @@ export default function (pi: ExtensionAPI) {
   let inspection: Inspection | null = null;
   if (role === "reviewer") {
     const gardes = lireGardes(process.env.PI_SUBAGENT_KEPT_CONSUMERS);
+    const cwd = process.cwd();
+    const inspectes = new Set<string>();
+    /*
+     * E2 : la provenance est capturée ICI, une fois, et validée contre la délégation courante et
+     * contre le tree de ce worktree. Elle n'est jamais relue au submit depuis une source que le
+     * modèle pourrait modifier. Tout reviewer porte son état d'inspection : chaque submit bloquant
+     * publie son observation, kept ou non.
+     */
+    const injection = lireInjection(process.env.PI_SUBAGENT_INJECTED, process.env.PI_SUBAGENT_DELEGATION, () => workingTree(cwd));
+    inspection = { gardes, inspectes, cwd, injection };
     if (gardes) {
-      const cwd = process.cwd();
-      const inspectes = new Set<string>();
-      inspection = { gardes, inspectes, cwd };
       pi.on("tool_result", async (event) => {
         const reel = inspecte(event, cwd);
         if (reel) inspectes.add(reel);
