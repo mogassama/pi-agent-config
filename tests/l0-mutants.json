@@ -1594,5 +1594,11 @@
     "file": "subagent-only/spawn-args.ts",
     "find": "  const gardes = reviewer && ctx.gardes && ctx.gardes.kept.length > 0 ? ctx.gardes : null;",
     "replace": "  const gardes = ctx.gardes && ctx.gardes.kept.length > 0 ? ctx.gardes : null; // mutant RC-transmission : tout rôle"
+  },
+  {
+    "test": "L0 REG E4-stderr — une sonde git qui échoue normalement n'écrit rien sur la sortie d'erreur du processus",
+    "file": "subagent-only/worktree.ts",
+    "find": "    stdio: [\"pipe\", \"pipe\", \"pipe\"],\n",
+    "replace": "    // mutant E4 : stdio retiré, la sortie d'erreur de git est recopiée sur celle du processus\n"
   }
 ]

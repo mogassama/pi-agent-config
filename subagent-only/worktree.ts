@@ -69,12 +69,20 @@ export interface LaneMerge {
   frozenCommit?: string;
 }
 
+/*
+ * LOT-EFFICACITÉ, E4 : `stdio` explicite dans `git()`. Sans lui, `execFileSync` capture la sortie
+ * d'erreur de git ET la recopie sur celle du processus : chaque sonde qui échoue normalement —
+ * `rev-parse --verify` d'une branche que `cleanup --apply` vient de retirer, appelé par `isMerged`
+ * depuis `observeLanes` — écrivait `fatal: Needed a single revision` dans le journal de fin de run
+ * (D6). La sortie d'erreur reste dans l'erreur levée, que `tryGit` lit déjà ; rien d'autre ne change.
+ */
 function git(cwd: string, args: string[]): string {
   // La feuille qui lance : `tryGit` passe par ici et n'incrémente pas lui-même.
   recordGitInvocation();
   return execFileSync("git", args, {
     cwd,
     encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
     timeout: 30_000,
     maxBuffer: 8 * 1024 * 1024,
   });
