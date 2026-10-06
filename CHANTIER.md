@@ -1,20 +1,51 @@
-# Chantier — état au 19 août 2026
+# Chantier — état au 6 octobre 2026
 
 *Registre de la configuration pi. Ce qui est fait quitte « à faire », ce qui a été
 tranché ne garde que sa raison, ce qu'une mesure a réfuté le dit.*
 
-Branche `feat/subagent-extension`.
+Branche `feat/subagent-extension`. `SUIVI.md` tient le journal et la liste de ce qui reste ;
+ce fichier tient l'architecture, les invariants et les décisions, avec leurs raisons.
 
 ---
 
 ## 1. Où on en est
 
-La primitive de délégation est écrite, mesurée, et **exécutée trois fois de bout
-en bout** sur le même projet de test `csv-to-bq` — 5 livrables, aucun accès GCP.
-Le chantier n'est plus dans la phase où l'on conçoit contre des hypothèses : il
-est dans celle où chaque changement se justifie par un run antérieur.
+Trois étapes, chacune justifiée par la précédente.
 
-### Les trois runs
+**Août — la primitive de délégation**, écrite puis exécutée de bout en bout sur `csv-to-bq`
+(360 lignes, 5 livrables, aucun accès GCP) : neuf runs, reproductibilité établie à 2 % sur les
+tours. **Fin août — l'échelle**, sur Spark-C (2 978 lignes en onze modules) : dix runs,
+le dernier sans aucun échec. **Septembre — le chantier `3c`** : un audit externe de l'objet
+`f9791bd`, 91 preuves écrites avant toute correction, neuf lots et deux correctifs qui rendent
+la parallélisation des writers possible sous preuves. Aucune régression d'audit ne reste
+ouverte.
+
+**État courant :** `555b202f` (arbre `8b821da4`, patch-id `7af97b68`), **lot efficacité,
+établi, gelé et poussé le 06-10** sur `1e07ae13` — quatre leviers d'efficacité et leur
+mesure, après un diagnostic adjugé et cinq livraisons. **QD-EFF-a conforme** : unité
+intégrée sans reprise, plan accepté au premier essai, 1 961 534 tokens avant coupure
+(158,6 % de la cible 1 236 742), dont 77 % pour le worker ; **adjugé conforme**.
+**QD-EFF-b conforme** (1 286 817 tokens) ; **moyenne 1 624 176, 131,3 % de la cible : cible
+non atteinte**, chaque rôle restant en moyenne sous 110 % de sa baseline. **Jugement final
+le 06-10 : P1 non atteint, lot non réussi** ; **lot clos le 06-10** (D-bis r2 conforme). *Ensuite :* portage du suivi, puis couche d'adaptation et montée de pi par paliers,
+QD de référence, puis phases 0, 3 et 2, trois items par lot par défaut ; davantage seulement
+sur plan adjugé, avec un objectif commun, une qualification bornée et un retour arrière défini. Cible inchangée, atteignabilité non établie. Avant lui : `1e07ae13`,
+objet final de **LOT-REPRISES-CORRECTIF, qualifié et clos le 01-10** — périmètre
+d'écriture du plan gelé avant toute délégation (R1), pas de revue `approved` avec un
+risque ouvert (R2), cycles de reprise mesurés (R3), revue bloquante tenue d'inspecter les
+consommateurs conservés (RC) ; efficacité non qualifiée, moyenne 1 994 464. Puis
+`cc88bb20` (LOT-REPRISES), `383a5f36` (lot ITE, phase P1 — **lot ITE clos le 30-09**, P0
+qualifié, cible P1 non qualifiée, moyenne 4 220 484), `85c5519` (lot ITE, P0 — unité
+intégrée terminale, plan terminal irrévocable, garde de mutation de l'orchestrateur,
+`bin/run-cost`), `a562579` (lot post-pilote) et `83eb62a` (`PORTES-GEL` v4). **Le pilote
+— premier run Spark-C à `maxParallel=2` — est fait, clos et qualifié** : onze unités
+intégrées le 27-09, puis le critère `design_update` établi le 29-09. Ce qui suit est rangé par phases dans `SUIVI.md`.
+
+Le chantier n'est plus dans la phase où l'on conçoit contre des hypothèses : il
+est dans celle où chaque changement se justifie par un run antérieur, **ou par une preuve
+rouge pour sa raison** avant d'être corrigée.
+
+### Les trois premiers runs (août)
 
 | | `3ed33e` | `ac451a` | `f0797e` |
 |:--|--:|--:|--:|
@@ -55,16 +86,17 @@ tout, et rejugeait tout.
 **19 skills** — 11 orientées relecture avec un `## Review delta`, 1 de mécanique
 (`code-review`), 7 réservées à l'orchestrateur.
 
-**3 agents** dans `subagent-only/agents/` :
+**5 agents** dans `subagent-only/agents/` :
 
 | Rôle | Modèle | Session | Outils | `maxTurns` |
 |:--|:--|:--|:--|--:|
 | `worker` | `openai-codex/gpt-5.6-terra` (abonnement), `thinking: high`, repli sur `sol` | éphémère | read, grep, find, ls, bash, edit, write, submit | **30** |
+| `integration-worker` | `openai-codex/gpt-5.6-terra`, `thinking: high`, repli sur `sol` — résout un conflit de merge entre une lane approuvée et la base d'intégration, n'implémente rien | éphémère | read, grep, find, ls, bash, edit, write, submit | 30 |
 | `reviewer` | `anthropic/claude-sonnet-5` (API) | éphémère | **read, ls, submit** | **12** |
-| `scout` | `deepseek/deepseek-v4-flash` | éphémère | read, grep, find, ls, bash, submit | 12 |
-| `advisor` | `xai/grok-4.6`, `thinking: xhigh` — **hors service** | éphémère | read, ls, submit | 8 |
+| `scout` | `deepseek/deepseek-flash` (depuis `83eb62a`), `thinking: low` | éphémère | read, grep, find, ls, submit — **sans `bash` depuis le 26 août** | 12 |
+| `advisor` | `xai/grok-4.6`, `thinking: xhigh` — **en service depuis le 24 août** | éphémère | read, grep, find, ls, submit | 8 |
 
-*Les quatre nombres de cette table et le seuil d'inline du diff ont tous été
+*Les nombres de cette table et le seuil d'inline du diff ont tous été
 calibrés sur `csv-to-bq` — 360 lignes — et ont tous dû être relevés pour un
 projet huit fois plus gros. Ce sont les seules valeurs de la configuration qui
 portent une taille de projet.*
@@ -74,13 +106,17 @@ session persistante** : le régime a été coupé après `3ed33e`, et `spawn-arg
 passe `--session-id` dans les deux cas — l'affinité de cache du fournisseur ne
 dépend pas de la persistance d'historique.
 
-**7 extensions locales** : `bash-guard`, `pi-bq-cost-sentinel`, `pi-check-config`,
-`pi-lint-gate`, `pi-project-brief`, `subagent`, `subagent-footer`. Deux paquets externes : `@tmustier/pi-raw-paste` (npm) et
-`monotykamary/pi-deepseek-provider` (git).
+**10 extensions locales** : `bash-guard`, `compaction-guard`, `pi-bq-cost-sentinel`, `pi-check-config`,
+`pi-lint-gate`, `pi-project-brief`, `pi-secret-gate`, `pi-session-journal`, `subagent`,
+`subagent-footer`. Deux paquets externes, **non épinglés** : `@tmustier/pi-raw-paste` (npm) et
+`monotykamary/pi-deepseek-provider` (git). pi épinglé à **0.86.0** pour le pilote.
 
 ---
 
 ## 2. Ce qui reste
+
+*La liste vit dans `SUIVI.md`, rangée par phases. Ici ne restent que les attentes de mesure
+qui gouvernent une décision d'architecture.*
 
 ### Fait depuis la version précédente de ce registre
 
@@ -99,50 +135,135 @@ dans `skills/`. Conséquence à ne pas oublier : **une modification ici doit êt
 répercutée dans la skill installée sur Claude.ai**, sinon Forge continue de
 générer des paquets qui décrivent une configuration périmée. C'est le seul fichier
 du dépôt dont la copie qui s'exécute n'est pas celle qui est versionnée.
+*Cas courant, vérifié le 27-09 :* le LOT 9 a réécrit `templates/pi/DESIGN.md` pour la
+grammaire de `design_update` (`94eae75`) ; la copie installée sur Claude.ai, restée à l'ancien modèle, est à
+remplacer —
+`SUIVI.md`, *Hors phase*.
 
 ### En attente d'une mesure précise
 
 | Quoi | Ce qui le débloque |
 |:--|:--|
-| **Le coût de contexte du worker** | `09-worker` de `f0797e` : 205 699 tokens pour 3 858 de sortie, 26,8k de contexte moyen par tour contre 12k sur les deux workers précédents. Trois causes possibles — texte de tâche gonflé par les findings de la revue, sorties de `pi-lint-gate` qui restent en contexte, relectures dans la délégation — et **trois correctifs incompatibles**. La commande d'analyse est dans `ANALYSE-f0797e`. Ne rien toucher avant |
+| **Le coût de contexte du worker** — mesure A | `09-worker` de `f0797e` : 205 699 tokens pour 3 858 de sortie, 26,8k de contexte moyen par tour contre 12k sur les deux workers précédents. Trois causes possibles — texte de tâche gonflé par les findings de la revue, sorties de `pi-lint-gate` qui restent en contexte, relectures dans la délégation — et **trois correctifs incompatibles**. *La commande d'analyse, que ce registre disait être dans `ANALYSE-f0797e`, n'a jamais été versionnée et est introuvable* ; elle est à réécrire sous `bin/`, et la mesure à faire sur le run 10 `a1c83f`. C'est la phase 0 de `SUIVI.md`. Ne rien toucher au contexte avant |
 | **Plafond de rounds de revue** | `f0797e` a fait quatre alternances worker/reviewer et s'est arrêté proprement. La défaillance que le plafond corrige n'a pas eu lieu ; l'ajouter maintenant serait du mécanisme sur une intuition |
 | **Canal `needs_decision` pour le worker** | `pi-subagents` a `contact_supervisor`, bloquant, qui laisse le worker vivant pendant qu'il attend. Non transposable en `-p` ; l'équivalent atteignable est un champ d'enveloppe. Aucun run ne l'a encore rencontré |
+| **Fiabilité du parallélisme sur un vrai projet** | Le pilote. Tout le reste — plafonds, admission, registres, reprise — est prouvé en L0 et dans les lots ; aucune suite ne dit qu'une exécution parallèle tient sur une tâche de production entière |
 
-### Le test Spark
+### ~~Le test Spark~~ — fait
 
-Prochaine exécution : un pipeline Spark de **2 978 lignes réparties en onze
-modules**. C'est le premier projet où l'écart d'échelle mord, et il change trois
-choses en même temps par rapport à `csv-to-bq` :
-
-- le reviewer reçoit un diff pour la première fois ;
-- il applique six critères d'admission neufs, qui **doivent** faire baisser le
-  nombre de findings ;
-- le projet ne tient plus dans un contexte.
-
-**Référence à comparer** : `f0797e` — 10 délégations, 47 tours, 802 051 tokens,
-~0,55 $, revues à 2 / 2 / 5 / 2 tours. **Le critère qui décide n'est aucun de
-ceux-là : c'est la conformité du livrable.** Un run moins cher qui livre un
-schéma inventé est une régression, pas une économie.
+Le « pipeline Spark de 2 978 lignes en onze modules » est Spark-C : dix runs, du premier
+à 11,0 M tokens et huit plafonds au dixième sans aucun échec. Voir `SUIVI.md`. Le critère posé
+ici tient toujours, et vaut pour le pilote : **la conformité du livrable décide, pas le coût.**
+Un run moins cher qui livre un schéma inventé est une régression, pas une économie.
 
 ---
 
 ## 3. L'architecture, et pourquoi
+
+### Trois invariants, dans l'ordre où ils s'appliquent
+
+*Posés les 13 et 26 septembre. Ils gouvernent tout ce qui s'ajoute à cette configuration ;
+chaque item de `SUIVI.md` les passe avant d'être écrit.*
+
+**1. La configuration fonctionne à l'identique avec et sans le bundle Strategic Forge.**
+Forge donne les grandes lignes, aide à préciser le projet et à le baliser ; il n'entre pas
+dans le détail, et **il n'est la source unique d'aucune règle**. `INSTRUCTIONS.md`,
+`ARCHITECTURE.md`, `DESIGN.md` et `CONVENTIONS.md` sont des artefacts de bundle : toute règle
+qui n'existe que là disparaît en régime libre. Le plancher vit donc dans `~/.pi/agent/` —
+`AGENTS.md` et les skills — et le bundle ne fait que **spécialiser ou déroger**. Précédent
+mesuré : le bundle Spark-C a ajouté quatre dérogations à `CONVENTIONS.md` après six
+défauts ; une dérogation suppose une règle antérieure.
+
+*Et un enfant n'hérite de rien :* le worker ne voit jamais `AGENTS.md`.
+
+```text
+AGENTS.md            orchestrateur seulement — jamais injecté à un enfant
+skills (authoring)   atteint le worker
+skills (Review delta) atteint le reviewer
+bundle               spécialise, déroge, borne — n'institue jamais
+```
+
+*Test :* retirer le bundle par la pensée. Si une règle disparaît, elle est au mauvais
+endroit. Le bundle peut déplacer **quand** une question est répondue, jamais **si** elle est
+posée.
+
+**2. Ce qui est permanent est du code ; la prose ne porte que ce qui appelle un jugement.**
+Critère : réussit ou échoue sans qu'un modèle ait son mot à dire. Une règle en prose, mesuré
+ici, **est suivie une fois sur trois**.
+
+```text
+code        invariant et mécaniquement décidable → extension, garde, hook, runtime
+prose armé  demande du jugement, infraction détectable → prose + déclencheur
+prose       jugement irréductible → skill, moitié authoring ou Review delta
+```
+
+*Garde-fou :* ne jamais brancher une garde sur un champ que le modèle remplit lui-même. Un
+contrôle de code se dérive du diff ou de l'arbre, pas d'une déclaration d'enveloppe.
+
+**3. Ce qui est voulu s'active tout seul.** Pas d'option à cocher, pas de commande à se
+rappeler pour le cas nominal ; une commande n'existe que pour **forcer** ou **consulter**.
+C'est le deuxième invariant appliqué aux fonctionnalités : une option qu'il faut penser à
+activer est une règle en prose. *Deux exceptions, à écrire comme telles :* un choix de
+l'opérateur n'est pas un comportement (passer en sous-agents, lancer une campagne, pousser) ;
+un mode qui multiplie le coût peut rester sur demande (`best-of-n`).
+
+```text
+où           hors bundle                          1er invariant
+forme        code si permanent                    2e invariant
+déclencheur  le runtime, jamais l'opérateur       3e invariant
+             pour le cas nominal
+```
+
+### La parallélisation : des lanes isolées, un registre qui fait autorité
+
+*Posée par le chantier `3c`, lots 1 à 9 et deux correctifs, du 11 au 26 septembre. Chaque
+propriété ci-dessous est tenue par une preuve L0 et un mutant permanent.*
+
+**Une lane par unité de travail.** Un writer travaille dans un worktree et une branche
+propres à sa lane ; une lane porte une génération, et une unité n'a jamais deux lanes
+ouvertes. Une seule admission sert le chemin simple et le lot. Le merge qui échoue sur un
+conflit va à l'`integration-worker`, qui résout et n'implémente rien.
+
+**Le registre durable fait autorité, pas la mémoire ni la réponse d'un appel.** Chaque run
+tient sous `.pi-subagent-runs/` un registre de lanes et un registre d'intégrations en JSONL,
+et un manifeste qui témoigne de leur existence. Tout ce qui décide — revue, violation,
+risque, gel, merge — s'écrit d'abord dans le registre, puis se lit par la projection
+autoritaire. Un risque se clé par `(run, unité, id)`, indépendamment de la génération.
+
+**Inconnu n'est pas vide.** Avant toute consommation, la lecture établit un état C4 :
+`KNOWN`, `EMPTY`, `UNKNOWN`, `LOST`, `MIGRATION_REQUIRED`, `RUN_WITHOUT_WITNESS`. Seuls les
+deux premiers sont exploitables ; tout le reste refuse, **avant tout effet externe** — ni
+séquence réservée, ni worktree, ni enfant, ni événement.
+
+**La propriété du run est un bail.** Deux verrous, l'espace puis le run, toujours dans cet
+ordre ; un vestige de transition se nomme au lieu de bloquer en silence. Perdre le bail
+révoque toute la capacité en mémoire — une révocation n'est pas une libération.
+
+**Une seule façon de finir.** Le setter général ne termine plus un run ; la fin est une
+transition unique, publiée par lien puis retrait, reprise sans être réécrite. `completed`
+est refusé tant que sept contrôles ne passent pas.
+
+**Une seule chaîne d'intégration**, commune au merge ordinaire, à l'atterrissage et à la
+reprise : `REVIEWED` sur l'arbre réellement montré → `FROZEN`, dont le commit est le seul
+candidat au merge, revérifié juste avant → intégration git prouvée structurellement →
+`MERGED` → phase Statut, où le runtime seul applique le `design_update` du plan gelé →
+`INTEGRATED` final → nettoyage. La section critique couvre toute la transition ; les trois
+fenêtres de crash se reprennent. Un échec du commit de Statut laisse `MERGED` et restaure
+l'effet produit, rien de plus large.
 
 ### Un enfant n'hérite de rien
 
 Chaque délégation lance un processus `pi` neuf : ni AGENTS.md, ni historique, ni
 appels d'outils antérieurs, ni `APPEND_SYSTEM.md`.
 
-**Une exception, explicite et mesurée** : `.pi/BRIEF.md` est injecté en
-`--append-system-prompt` aux rôles qui déclarent `projectBrief: false` — — l'audit du brief a retiré le worker de la liste, l'orchestrateur en est le seul lecteur
-aujourd'hui le worker seul. Sans lui, un worker à qui AGENTS.md interdit de
-supposer une arborescence obéit en dépensant des tours à la découvrir, et un tour
-coûte une relecture complète de contexte. Le scout trouve la structure en
-cherchant ; le reviewer juge contre un barème, et les spécificités de projet
-appartiennent au texte de tâche.
-
-*Ce registre affirmait le contraire jusqu'au 19 août. C'était faux depuis que
-`buildSpawnPlan` injecte le brief.*
+**Une exception a existé, elle est retirée.** `.pi/BRIEF.md` était injecté en
+`--append-system-prompt` au worker. L'audit du brief l'a retiré : `projectBrief` vaut `false`
+par défaut, les deux rôles qui écrivent le déclarent explicitement, aucun enfant ne reçoit le
+brief, et **l'orchestrateur en est le seul lecteur**. *La raison qui justifiait l'injection, conservée :* sans le brief, un worker à qui
+AGENTS.md interdit de supposer une arborescence obéit en dépensant des tours à la découvrir,
+et un tour coûte une relecture complète de contexte. Le scout trouve la structure en
+cherchant ; le reviewer juge contre un barème, et les spécificités de projet appartiennent au
+texte de tâche.
 
 Le fork de `pi-subagents` valait **17 041 tokens, dont 2 frais** — presque tout en
 lecture de cache. L'argument économique contre lui ne tenait donc pas ; ce qui le
@@ -199,6 +320,10 @@ en grossissant à chaque livrable. Les fichiers non suivis sont diffés contre
 au worker. Au-delà de 15 fichiers ou 32 kO, la tâche porte la liste et le reviewer
 lit — seuil plus bas que les 50 kO d'oh-my-pi, parce que ce reviewer est plafonné
 à six tours et le leur ne l'est pas.
+
+*Depuis le LOT 6 (23 septembre), sous lanes :* le reviewer reçoit le delta git **entier**
+depuis la dernière revue durable de la lane, et `REVIEWED` enregistre l'arbre réellement
+montré — une écriture faite pendant la revue n'est plus comptée comme couverte.
 
 Le diff est ce qui rend le critère « introduit par ce changement » applicable. Sans
 frontière de patch, « préexistant » n'a pas de définition et le critère n'est pas
@@ -315,6 +440,46 @@ sur `f0797e` : une guideline trop large — « is anything complete » au lieu d
 what was just written complete » — a envoyé un scout inventorier un dépôt ne
 contenant que le bundle.
 
+### Ce que le chantier `3c` a appris — onze lots, cinq règles
+
+*Chacune a coûté au moins une livraison refusée. Le détail source reste dans la Partie 1
+de `SUIVI-en-attente.md`, boîte d'attente privée hors dépôt, désignée par [A] dans
+`SUIVI.md`. Aucune archive correspondante n'est versionnée dans ce portage.*
+
+**Un contrôle correct, placé après ce qu'il doit couvrir, ne couvre rien.** Le `catch` plus
+bas que l'acquisition de propriété, la garde d'abandon après la branche terminale (LOT 1) ;
+le pont qui retombe en mémoire sur un registre illisible (LOT 7) ; l'ancien gel lu dans le
+registre brut, le second commit possible après `FROZEN` (LOT 8) ; la garde C4 posée après les
+effets externes de délégation, un registre qui échappe à la garde (correctif C4). **Dix
+occurrences en dix lots.** Le dernier plan en a fait une classe de falsification : remettre
+le contrôle au mauvais endroit doit faire rougir une preuve.
+
+> **Inconnu n'est pas vide.** Une absence, un état illisible, une version inconnue se
+> refusent ; ils ne se traitent jamais comme le cas nominal.
+
+**Une preuve doit être rouge pour SA raison.** Précondition impossible, refus obtenu pour
+une cause étrangère, témoin absent, observation qui lève avant l'assertion : quinze
+révisions de L0, toutes sur ce point. Et le symétrique : une preuve peut **verdir** pour une
+raison étrangère quand une autre correction lui retire son chemin — la matrice preuves ×
+corrections le voit, la suite non. Une falsification qui retire une entrée au lieu de la
+garde mord par une autre porte et masque un câblage non couvert.
+
+**Un instrument échoue en imprimant un résultat crédible.** La porte S4 a rendu trois fois
+un vert creux ; une extraction a lu 27 preuves sur `PROPRIÉTÉ` là où il y en avait 45 ;
+`|| true` change un échec en texte conforme. Une porte se juge sur son code de sortie **et**
+sa sortie, et une contre-épreuve doit échouer pour la raison visée. *Et il dépend de la
+machine qui le lance :* un tri sans locale fixée a donné deux empreintes pour les mêmes
+diagnostics, VM et Mac (06-10). Toute liste comparée ou empreinte se calcule sous
+`LC_ALL=C`, et une simulation se rejoue aussi en locale UTF-8.
+
+**Seuls l'arbre et les compteurs installés font foi.** Un arbre soumis a différé de l'arbre
+installé ; un relevé post-commit a été pris avant les commits. Le relevé se fait après, dans
+un fichier, et se vérifie avant d'être envoyé.
+
+**Un instrument qui vit hors du dépôt se perd.** La porte S4, la baseline `tsc --strict`, la
+commande d'analyse de `f0797e` : trois fois. Ce qui prouve se versionne et se teste comme ce
+qui est prouvé.
+
 ---
 
 ## 5. Décisions à ne pas rouvrir sans élément nouveau
@@ -326,11 +491,18 @@ contenant que le bundle.
 | **Aucune session persistante** | Mesuré sur `3ed33e` : 24 relectures d'un contenu identique déjà en session, 79 % du coût worker en historique reporté. L'affinité de cache ne la justifie pas — `--session-id` est passé dans les deux régimes |
 | **Le reviewer n'a ni `bash` ni `grep` ni `find`** | Il juge des fichiers, le scout les trouve, l'orchestrateur décide lesquels. `bash` serait un shell non gardé dans le rôle dont tout le contrat est de ne rien modifier — `reviewer.md` ne liste que `envelope`. oh-my-pi donne `bash` **et interdit explicitement** de s'en servir pour `git diff` |
 | **Le reviewer n'édite pas** | Trois raisons : la sortie est le poste dominant ; `pi-check-config` interdit qu'une famille juge et exécute son propre travail, et un reviewer qui édite est un auteur ; le plancher de vérification (`pi-lint-gate`, `bash-guard`) est chez le worker, donc son code n'y passerait jamais |
-| **Pas de parallélisation** | Les seuils d'oh-my-pi classent un projet sous 100 lignes ou ≤2 fichiers dans le bucket « 1 agent ». Le déclencheur n'est pas la taille du projet mais celle du diff : quand une revue unique ne tient plus en six tours **après** avoir reçu le diff |
+| **Parallélisation des writers : rouverte, faite sous preuves** | *Raison d'origine :* les seuils d'oh-my-pi classent un projet sous 100 lignes ou ≤ 2 fichiers dans le bucket « 1 agent » ; le déclencheur n'est pas la taille du projet mais celle du diff. Écartée encore le 24 août sur le run 8 — quatre délégations disjointes, 10 % du temps mur, quatre mécanismes à réécrire. Rouverte en septembre sur un autre élément que la taille : l'isolation par lane et des registres durables, qui rendent la reprise et l'intégration prouvables. Faite en neuf lots et deux correctifs (§ 3). *Ce qui ne se rouvre pas :* le gain est le mur d'horloge, pas le coût — la parallélisation ne retire pas un token ; et le premier run parallèle réel reste à faire |
 | **On ne retire pas `maxTurns` du worker** | `pi-subagents` l'interdit, sur une architecture où le worker peut escalader en cours de route. Ici, le plafond est compensé par la consigne de conclure et la récupération du dernier message ; le retirer rendrait le mode d'échec à 112k tokens sans filet |
 | **Les deux skills d'architecture ne fusionnent pas** | Le fichier GCP implémente, il ne réénonce jamais |
-| **Échelle ponytail coupée en deux** | Barreau 1 chez l'orchestrateur ; barreaux 2-6 dans `python-engineering`. Un worker à qui on donne ce barreau refuse du périmètre |
+| **Échelle ponytail coupée en deux** | Barreau 1 chez l'orchestrateur ; barreaux 2-6 dans `python-engineering`. Un worker à qui on donne ce barreau refuse du périmètre. **Revirement tranché le 13-09**, élément nouveau : bibliothèques pratiques plutôt que natives (`loguru`, `pendulum`), liste nommée + principe + confirmation, dans `python-engineering` seul pour que worker et reviewer jugent contre le même texte. Renverse le barreau 1 « bibliothèque standard d'abord » ; **pas encore appliqué** |
 | **`bin/check-envelope` supprimé** | La validation se fait avant l'écriture, par pi, sur les arguments d'outil |
+| **Pas de binaire OMP** | On part de pi et on prend outil par outil ce qui sert : six choses sur trente et une. OMP réalise en Rust ce que nous faisons en TypeScript appelant git — de la vitesse, pas de la garantie, pour le prix de ce que nous avons de plus rare : aucune étape d'installation |
+| **`codebase-memory-mcp` : des morceaux, pas une reproduction** | Plus gros que tout le chantier `3c`. Et un graphe dans un `.md` n'est pas un graphe : un fichier se lit en entier, exactement le coût que le graphe existe pour éviter |
+| **`AGENTS.md` n'est pas tronqué** | `project_doc_max_bytes` est un réglage de Codex CLI, pas de pi, qui concatène sans plafond. ~9 000 tokens chargés à chaque session, conservés à part par la compaction : coût connu et stable |
+| **Pas d'advisor à chaque tour** | Cinq conditions cumulatives, deux invocations depuis le 24 août, et un reviewer déjà dur. L'advisor intervient quand les autres ne trouvent pas réponse à une question complexe |
+| **Ordre test/code : une seule règle** | *Le test précède le code dès que le comportement attendu est connu ; sinon l'étape qui précède est la lecture de la source de vérité.* Le test écrit après épouse le code (`3ed33e`, schéma à quatre colonnes, tout vert) ; le pire défaut mesuré (`orders.csv` jamais lu) n'était rattrapable par aucun des deux paradigmes. Vit dans la moitié authoring des skills, pas dans `AGENTS.md` |
+| **Worker et scout restent dans le cloud** | Bascule locale évaluée le 24-09 et abandonnée sur la performance et sur le coût. Seule condition de réouverture : un besoin de confidentialité |
+| **Le reviewer reste sur Sonnet** | Deux portes mesurées contre des références connues (§ 6). Un juge moins cher qui ne conteste jamais rend le dispositif inutile |
 
 ---
 
@@ -346,17 +518,20 @@ aux défauts vérifiés à la main, même prompt et même plafond des deux côt�
   d'enveloppe quand on le repasse en `high`. 71 % moins cher, et il ne voit pas.
 - **DeepSeek V4 Pro** fait jeu égal fichier par fichier — quatre sur cinq chacun, zéro faux
   positif des deux côtés sur le témoin — puis s'effondre à l'échelle : **un finding sur onze
-  revues** sur Balance Âgée, contre quatorze sur dix-sept pour Sonnet, même bundle.
+  revues** sur Spark-C, contre quatorze sur dix-sept pour Sonnet, même bundle.
 
 **Qwen n'a jamais été atteint** : trois clés, trois régions, un 403 `AccessDenied.Unpurchased`
 qui n'a pas bougé. Piste abandonnée, pas réfutée.
 
-**L'advisor n'ira pas sur Sonnet.** Écrit, hors service, pointant sur `grok-4.6` — un
+**L'advisor n'ira pas sur Sonnet.** Écrit, **en service depuis le 24 août**, sur `grok-4.6` — un
 quatrième laboratoire, indépendant du worker et du reviewer, sur le seul rôle sans barème.
 DeepSeek est écarté d'office : ne jamais contester est exactement le mode de défaillance qui
 rend un arbitre inutile.
 
 ### Le plan initial, pour mémoire
+
+*Clos : Qwen n'a jamais été atteint, le reviewer est resté sur Sonnet, l'advisor est en
+service. Gardé pour la raison de chaque porte.*
 
 **Le principe, repris d'oh-my-pi** : le meilleur modèle va où l'erreur coûte le
 plus cher, pas où il tourne le plus souvent. Le reviewer applique un barème écrit
@@ -416,6 +591,9 @@ coûté une correction sur DeepSeek — `cacheWrite` gratuit contre 1,25× l'ent
 portail de qualité plus faible.
 
 ### L'advisor — ce qui existe déjà et ce qui manquera le jour J
+
+*Fait le 24 août : l'advisor est en service, `AGENTS.md` le place sur la seule route
+d'escalade du régime libre. Gardé pour la raison des trois changements.*
 
 L'infrastructure est prête : créer `subagent-only/agents/advisor.md` suffit à le
 faire apparaître dans l'énumération du paramètre `agent`, `loadAgents` lisant le
@@ -477,6 +655,8 @@ un finding de sa levée à sa clôture — reste non écrit, parce que sa forme 
 d'une décision non prise : est-ce que l'orchestrateur *doit* clore un finding avant
 de passer au livrable suivant, ou est-ce qu'un registre consultable suffit ? La
 première réponse est un mécanisme contraignant, la seconde un fichier.
+*Placé le 26-09 en phase 5 de `SUIVI.md`, avant le banc :* sans lui, un banc compte des
+findings sans pouvoir en juger la justesse.
 
 **Rien ne relie une revue à la tâche qu'elle juge.** L'artefact ne porte pas de
 `parentArtifact`, ni la liste des skills injectées — seulement `injectedTokens`.
@@ -519,3 +699,89 @@ clé API concernée a été révoquée.
 et sa ligne de routage n'existent que si `--session-dir` a été passé. Les refus de
 la garde sont désormais journalisés, mais le reste appartient à la session — c'est
 un défaut par défaut dans le lanceur de test, pas un changement de code.
+
+**Des instruments de preuve vivent hors du dépôt** — la porte S4 v7 et la baseline
+`tsc --strict` sont reconstruites depuis le répertoire d'audit local. Tant qu'ils n'y sont
+pas, une preuve dépend d'un script joint et non d'un fichier relu. Suivi en phase 3 de
+`SUIVI.md`.
+
+**Le push n'est pas gardé en machine.** Le commit l'est — jeton à usage unique,
+`pre-commit`, `reference-transaction`. Une adjudication « commit oui, push non » ne vit que
+dans un message, et c'est ce qui a permis le seul écart de protocole du chantier `3c`.
+
+---
+
+## 9. Méthode — comment un changement entre dans le dépôt
+
+*Née au LOT 2, tenue jusqu'au correctif C4. Les règles ci-dessous décrivent le protocole
+historique complet. Pour les lots futurs, les orientations adjugées le 06-10 s'appliquent
+selon le niveau déclaré dans leur plan et adjugé avec lui.*
+
+**Niveaux A, B, C.** A couvre intégration, registres, lanes, gardes de sûreté, contrats C0,
+adaptation pi et tout instrument dont le résultat autorise établissement, gel, push ou
+conformité technique : protocole complet. B couvre le code et les instruments hors de ces
+chemins, dans un périmètre déjà autorisé : plan court et livraison en une adjudication,
+portes complètes, mutants des preuves nouvelles ou modifiées, sans simulation de chaîne
+obligatoire. C couvre seulement la documentation passive et le portage du suivi : relecture
+de Sol, puis commit documentaire autorisé, sans établissement ni QD ; contrats, consignes
+actives et settings en sont exclus.
+
+**Mutants à l'établissement.** Suite complète sur le candidat final. Aux commits
+intermédiaires, sélection mécanique, versionnée et éprouvée par falsification : mutants
+nouveaux ou modifiés, cibles et preuves touchées, dépendances déclarées. Une correspondance
+inconnue impose la suite complète ; aucun mutant requis ne disparaît silencieusement.
+
+**Revue adverse avant livraison.** Un relecteur indépendant de la construction joint ses
+constats : entrées obligatoires absentes, illisibles, non objets, plurielles ou contradictoires
+refusées ou indéterminées ; absences optionnelles explicitement prévues ; provenance complète ;
+contrôle avant l'effet ; preuve rouge pour sa raison ; mutant retirant la garde visée ;
+ordre canonique des listes (`LC_ALL=C` pour `sort` et `comm`), simulations aussi en locale
+UTF-8 attestée ; contrats avec le SDK réel ; journaux conservés sans écrasement.
+
+Ces orientations ne remplacent pas l'adjudication des plans et n'autorisent à elles seules
+aucune modification, migration, qualification ou poussée.
+
+**Cadrer, planifier, geler, puis écrire.** Un lot est cadré par questions, puis planifié ;
+le plan est gelé par son empreinte avant la première ligne de code, avec son périmètre de
+fichiers exact. Tout chemin hors périmètre, toute modification des contrats `C0` ou de
+l'instrument revient à adjudication avant écriture.
+
+**Preuves avant correctifs.** Une régression est d'abord écrite rouge sur une assertion de
+propriété, puis corrigée, puis gardée par un mutant permanent qui doit la faire rougir.
+
+**Livrer par étapes identifiées.** Au plus trois étapes et un seuil S4 par livraison ; par
+étape, un patch, son `patch-id` et l'arbre attendu. L'installeur applique en
+`git am --no-3way`, vérifie chaque arbre, refuse les fichiers non suivis, exige un code nul
+pour chaque porte, et rend OK ou l'écart. Un refus partiel gèle les étapes validées.
+
+**Deux machines, un résultat.** Les portes se jouent en bac à sable (Linux, Node 22), puis
+chez Mo (macOS, Node 26) ; la version de Node est enregistrée, une divergence de propriété
+arrête le lot.
+
+**Trois rôles, séparés.** Claude construit dans son bac ; Sol adjuge le plan, la livraison,
+l'installation et le push ; **Mo seul commite et pousse**, sur autorisation explicite.
+
+**Une règle du bundle qui exige un geste de l'opérateur passe au protocole d'exploitation.**
+Appris au pilote du 27-09 : « `/compact` à ~50 % ou après chaque livrable » était écrit dans
+le bundle, mais `/compact` est une commande opérateur — l'orchestrateur ne pouvait pas
+l'appliquer, et le contexte est monté à 211 k sans compaction. Règle adjugée pour toute
+exécution de qualification : `/compact` par l'opérateur après chaque unité intégrée, visible
+dans la chronologie, sans unité créée pour le provoquer. Une phrase dans le bundle ne suffit
+plus ; le protocole prévoit un point de contrôle entre unités. *Et quand le geste est
+permanent, il devient du code :* `compaction-guard`, gelé le 29-09, a pris le relais —
+compaction automatique à 50 % de la fenêtre, reprise du run par l'extension quand la
+compaction l'interrompt ; `/compact` manuel reste un recours, pas une cadence.
+
+**La fin d'un run suit un ordre fixe** — report, cleanup en lecture seule, `cleanup
+--apply` sous le bail, report de contrôle, `run completed` en dernier, vérification finale.
+Au pilote, l'ordre inverse a laissé le run « actif » après onze unités intégrées : un trou
+de protocole, pas un défaut du runtime.
+
+**Une lecture ne laisse pas de trace.** Une lecture git menée à distance a laissé un
+`.git/index.lock` vide dans un dépôt de qualification (29-09) : toute sonde git en lecture
+se lance désormais avec `git --no-optional-locks`.
+
+**Une porte prouve qu'elle a regardé.** Trois fois, un instrument a rendu vert sans rien
+mesurer — S4 en septembre, puis la porte 17 du lot ITE deux fois, dont une sur zéro fichier
+compilé à cause d'un `sed` BSD. La leçon, à appliquer à toute nouvelle porte : rapporter ce
+qu'elle a examiné (fichiers compilés, entrées lues) et traiter un compte nul comme un échec.
