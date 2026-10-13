@@ -1,0 +1,28 @@
+// Item 3 fixture (MATRICES § D, type Flux; § G, précision FLUX and Q8). Appended by
+// tests/l0-pi-surface.test.ts to subagent-only/test-command.ts in a temporary copy: the flux list of § D
+// is a fixed set of files. test-command.ts already imports CHAMPS_FLUX and FLUX from ./pi-adapt.ts.
+
+// ── case: direct ──
+export const fluxDirect = (e: any): boolean => e.type === "agent_start";
+
+// ── case: optionnel ──
+export const fluxOptionnel = (e: any): boolean => e?.type !== "agent_start";
+
+// ── case: gauche ──
+export const fluxGauche = (e: any): boolean => "agent_start" === e.type;
+
+// ── case: lecture-resolue ──
+export const fluxResolu = (e: any): boolean => e[CHAMPS_FLUX.type] === "agent_start";
+
+// ── case: lecture-resolue-optionnelle ──
+export const fluxResoluOptionnel = (e: any): boolean => e?.[CHAMPS_FLUX.type] === "agent_start";
+
+// ── case: valeur-resolue ──
+export const fluxValeur = (e: any): boolean => e.type === FLUX.message;
+
+// ── case: bloc ──
+import { BLOC_TEXTE } from "./pi-adapt.ts";
+export const fluxBloc = (b: any): boolean => b?.[CHAMPS_FLUX.type] === BLOC_TEXTE;
+
+// ── case: non-resolu ──
+export const fluxInconnu = (e: any): boolean => e.type === FLUX.inexistant;

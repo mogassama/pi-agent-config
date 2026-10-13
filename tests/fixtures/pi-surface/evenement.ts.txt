@@ -1,0 +1,13 @@
+// Item 3 fixture (MATRICES § D, type Événement). Each case is copied as a new file into a scanned tree
+// of a temporary copy by tests/l0-pi-surface.test.ts.
+
+// ── case: evenement ──
+export default function (api: any): void {
+  api.on("evenement_inconnu", () => {});
+}
+
+// ── case: non-litteral ──
+const NOM_EVENEMENT = "turn_end";
+export default function (api: any): void {
+  api.on(NOM_EVENEMENT, () => {});
+}

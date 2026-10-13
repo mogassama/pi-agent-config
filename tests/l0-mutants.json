@@ -979,8 +979,8 @@
   },
   {
     "test": "L0 REG ITE-C-outils — un plan terminal réduit l'orchestrateur à la lecture native vérifiée, et tool_call fait autorité",
-    "file": "extensions/subagent/index.ts",
-    "find": "  return outil?.sourceInfo?.source === \"builtin\" && outil.sourceInfo.path === `<builtin:${nom}>`;",
+    "file": "subagent-only/pi-adapt.ts",
+    "find": "  return outil?.sourceInfo?.source === SOURCE_NATIVE && outil.sourceInfo.path === cheminNatif(nom);",
     "replace": "  return outil !== undefined; // mutant ITE-C-outils (c) : le nom seul vaut provenance"
   },
   {
@@ -1105,8 +1105,8 @@
   },
   {
     "test": "L0 REG ITE-B-provenance — un outil de lecture redéfini par une extension est observé comme les autres",
-    "file": "extensions/subagent/index.ts",
-    "find": "  return outil?.sourceInfo?.source === \"builtin\" && outil.sourceInfo.path === `<builtin:${nom}>`;",
+    "file": "subagent-only/pi-adapt.ts",
+    "find": "  return outil?.sourceInfo?.source === SOURCE_NATIVE && outil.sourceInfo.path === cheminNatif(nom);",
     "replace": "  return outil !== undefined; // mutant ITE-B-provenance : le nom seul vaut provenance"
   },
   {
@@ -1148,8 +1148,8 @@
   {
     "test": "L0 REG ITE-P1A-extraction — la commande retenue est celle d'une exécution observée et réussie, appariée par son identifiant",
     "file": "subagent-only/test-command.ts",
-    "find": "    const cmd = commandes.get(e.toolCallId);\n    if (cmd === undefined || e.isError !== false) continue;",
-    "replace": "    const cmd = commandes.get(e.toolCallId) ?? [...commandes.values()].pop() ?? \"uv run pytest\"; // mutant ITE-P1A-extraction (b) : fin non appariée\n    if (e.isError !== false) continue;"
+    "find": "    const cmd = commandes.get(e[CHAMPS_FLUX.toolCallId] as string);\n    if (cmd === undefined || e[CHAMPS_FLUX.isError] !== false) continue;",
+    "replace": "    const cmd = commandes.get(e[CHAMPS_FLUX.toolCallId] as string) ?? [...commandes.values()].pop() ?? \"uv run pytest\"; // mutant ITE-P1A-extraction (b) : fin non appariée\n    if (e[CHAMPS_FLUX.isError] !== false) continue;"
   },
   {
     "test": "L0 REG ITE-P1A-succes-reel — un appel sans erreur dont la sortie ne montre pas un succès réel des tests ne porte rien",
@@ -1821,5 +1821,365 @@
     "file": "extensions/subagent/index.ts",
     "find": "  const etablie = commandeDuRun(RUN_ID);",
     "replace": "  const etablie = commandeDuRun(RUN_ID) ?? (PLAN?.testDeclare?.etat === \"transmis\" ? PLAN.testDeclare.commande : null); // mutant E3 (f) : déclarée promue en établie sans exécution"
+  },
+  {
+    "test": "L0 PRES PI-ADAPT-N3 — le prédicat de provenance du candidat rend la table de vérité de la base, getAllTools absent et levant compris",
+    "file": "subagent-only/pi-adapt.ts",
+    "find": "  return outil?.sourceInfo?.source === SOURCE_NATIVE && outil.sourceInfo.path === cheminNatif(nom);",
+    "replace": "  return outil?.sourceInfo?.source === SOURCE_NATIVE; // mutant M1 : le prédicat accepte tout chemin si source = builtin"
+  },
+  {
+    "test": "L0 PRES PI-ADAPT-N2 — dispatch rejoue les quatre transcriptions synthétiques avec les projections de la base",
+    "file": "subagent-only/pi-adapt.ts",
+    "find": "  finDeTour: \"turn_end\",",
+    "replace": "  finDeTour: \"turn_finished\", // mutant M4 : nom d'événement du flux altéré dans la couche"
+  },
+  {
+    "test": "L0 PRES PI-ADAPT-N1 — les vingt SpawnPlan et describePlan du candidat sont ceux de la base",
+    "file": "subagent-only/pi-adapt.ts",
+    "find": "  sansSkills: \"--no-skills\",",
+    "replace": "  sansSkills: \"--no-skill\", // mutant M5 : drapeau altéré dans la couche"
+  },
+  {
+    "test": "L0 COUV PI-SURF-REGISTRE — le registre décrit exactement les surfaces du dépôt balayé",
+    "file": "tests/pi-surface.json",
+    "find": "\"nom\": \"setSessionName\"",
+    "replace": "\"nom\": \"setSessionNameRetire\""
+  },
+  {
+    "test": "L0 COUV PI-SURF-IMPORT — un import SDK non déclaré, copié dans une extension, est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"import\", `${im.source}:${im.importe}`)",
+    "replace": "void 0"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ESPACE — un membre lu sur un espace de noms importé, à travers parenthèses et casts, est un import du membre",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "else if (s.genre === \"espace\") surface(\"import\", `${s.paquet}:${c.membres[0]}`);",
+    "replace": "else if (s.genre === \"espace\") void 0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CHARGEMENT — un chargement dynamique d'un chemin SDK littéral dans l'outillage est une surface test-only",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (sdk && cx.testOnly) { surface(\"chargement\", sdk.v); continue; }",
+    "replace": "if (sdk && cx.testOnly) { continue; }"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CHARGEMENT-VARIABLE — un chargement dynamique sans littéral est inclassable jusqu'à son exclusion exacte",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "    inclassable(\"chargement\", \"\", i, f);",
+    "replace": "    void f;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CHARGEMENT-REQUIRE — l'appel d'un nom lié à createRequire, alias local compris, est un chargement dynamique",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "&& T[x0 + 1]?.v === \"(\") charge = true;",
+    "replace": "&& T[x0 + 1]?.v === \"(\") charge = false;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CHARGEMENT-PRODUCTION — un chargement dynamique du SDK hors de l'outillage est inclassable et ne s'admet pas",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (sdk && cx.testOnly) { surface(",
+    "replace": "if (sdk) { surface("
+  },
+  {
+    "test": "L0 COUV PI-SURF-SOURCE — une chaîne portant export default dans l'outillage est un site déclaré par son empreinte",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (brut.includes(\"export default\")) out.sources.push(",
+    "replace": "if (brut.includes(\"export default\") && false) out.sources.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-SOURCE-ALTEREE — un texte embarqué changé n'est pas admis par le seul maintien de l'ancrage et du compte",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "`${x.fichier}\\0${x.ancrage}\\0${x.sha256}`",
+    "replace": "`${x.fichier}\\0${x.ancrage}`"
+  },
+  {
+    "test": "L0 COUV PI-SURF-GABARIT — les interpolations d'un gabarit embarqué restent balayées",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (T[i].k !== \"id\" || !nomsSuivis.has(T[i].v)) continue;",
+    "replace": "if (T[i].k !== \"id\" || !nomsSuivis.has(T[i].v) || T[parent[i]]?.k === \"tplH\" || T[parent[i]]?.k === \"tplM\") continue;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ILLISIBLE — un fichier que le reconnaisseur ne sait pas lire est inclassable, sans succès silencieux",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const x of r.illisibles) res.push(",
+    "replace": "for (const x of r.illisibles.slice(r.illisibles.length)) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-RECEPTEUR — le paramètre de l'export par défaut est un récepteur à déclarer",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (f.exportDefault && f.params[0]) {",
+    "replace": "if (false && f.exportDefault && f.params[0]) {"
+  },
+  {
+    "test": "L0 COUV PI-SURF-METHODE — une méthode non déclarée appelée sur le récepteur est signalée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"methode\", c.membres[0]);",
+    "replace": "void 0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-METHODE-LECTURE — une lecture de membre du récepteur sans appel est la même surface méthode",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"methode\", c.membres[0]);",
+    "replace": "if (c.appel) surface(\"methode\", c.membres[0]);"
+  },
+  {
+    "test": "L0 COUV PI-SURF-METHODE-OPTIONNELLE — les formes optionnelles du récepteur sont reconnues",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "while ((T[k]?.v === \".\" || T[k]?.v === \"?.\") && T[k + 1]?.k === \"id\")",
+    "replace": "while (T[k]?.v === \".\" && T[k + 1]?.k === \"id\")"
+  },
+  {
+    "test": "L0 COUV PI-SURF-EVENEMENT — un événement non déclaré passé à on est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"evenement\", a0.v);",
+    "replace": "void a0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-EVENEMENT-NON-LITTERAL — un nom d'événement non littéral est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "else inclassable(\"evenement\", l.id, x, paire[o]);",
+    "replace": "else void o;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CTX — un membre de ctx non déclaré est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (let k = 2; k <= tout.length; k++) surface(\"ctx\", tout.slice(0, k).join(\".\"));",
+    "replace": "for (let k = 2; k <= tout.length; k++) void k;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CTX-PREFIXE — chaque préfixe statique d'une lecture de ctx est une surface",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (let k = 2; k <= tout.length; k++) surface(\"ctx\", tout.slice(0, k).join(\".\"));",
+    "replace": "surface(\"ctx\", tout.slice(0, 2).join(\".\"));"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CTX-IN — un littéral à gauche de in ctx vaut le membre nommé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (g?.k === \"str\") surface(\"ctx\", `${s.prefixe}.${g.v}`);",
+    "replace": "if (g?.k === \"str\") void g;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CTX-IN-VARIABLE — une variable à gauche de in ctx est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "else inclassable(\"in-ctx\", l.id, x - 2, y);",
+    "replace": "else void y;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CTX-INTERNE — un objet interne nommé ctx n'est admis que par l'exclusion de sa liaison",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (s.genre === \"ctx\" && s.interne) {",
+    "replace": "if (s.genre === \"ctx\" && s.interne && false) {"
+  },
+  {
+    "test": "L0 COUV PI-SURF-CTX-INTERNE-COMPTE — une exclusion de ctx interne à compte différent ou sans liaison échoue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (vus[0].refs < c.compte) res.push(",
+    "replace": "if (vus[0].refs < c.compte && false) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-DESTRUCTURATION — un membre obtenu par destructuration du récepteur est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"destructuration\", prefixe + p.cle);",
+    "replace": "void p;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-DESTRUCTURATION-CTX — la destructuration de ctx vaut ses membres",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"ctx\", `${prefixe}.${p.cle}`);",
+    "replace": "void p;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-DESTRUCTURATION-RESTE — une destructuration non résolue du récepteur est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (props.some((p) => p.reste || p.cle === null)) { inclassable(\"destructuration\", l.id, o, y); return false; }",
+    "replace": "if (props.some((p) => p.reste || p.cle === null) && false) { return false; }"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ACCES-CALCULE — un accès calculé au récepteur est inclassable, signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "inclassable(\"acces-calcule\", l.id, x, finCalcule(y));",
+    "replace": "void 0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ACCES-CALCULE-OPTIONNEL — un accès calculé optionnel au récepteur est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": " || (T[y + 1]?.v === \"?.\" && T[y + 2]?.v === \"[\")",
+    "replace": ""
+  },
+  {
+    "test": "L0 COUV PI-SURF-ACCES-CALCULE-CTX — un accès calculé à ctx est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "inclassable(\"acces-calcule\", l.id, x, finCalcule(y));",
+    "replace": "void 0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ACCES-CALCULE-ESPACE — un accès calculé à un espace de noms SDK est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "inclassable(\"acces-calcule\", l.id, x, finCalcule(y));",
+    "replace": "void 0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-EXCLUSION — une exclusion de site exacte, liste vérifiée, admet le seul site identifié",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "      admis = e.compte;",
+    "replace": "      admis = 0;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-EXCLUSION-COMPTE — une occurrence de plus ou de moins que le compte de l'exclusion échoue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const s of sites.slice(admis))",
+    "replace": "for (const s of sites.slice(admis ? Infinity : 0))"
+  },
+  {
+    "test": "L0 COUV PI-SURF-EXCLUSION-COMPTE — une occurrence de plus ou de moins que le compte de l'exclusion échoue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const [k, e] of exclusions) if (!groupes.has(k)) res.push(",
+    "replace": "for (const [k, e] of exclusions) if (!groupes.has(k) && false) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-EXCLUSION-LISTE — une exclusion dont la liste énumérée diffère du source n'admet pas le site",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (!vals || JSON.stringify(vals) !== JSON.stringify(e.liste.valeurs))",
+    "replace": "if (false)"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ALIAS-AFF — R-AFF : l'affectation du récepteur à un nom est un alias à déclarer",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (s.genre === \"recepteur\") return alias(x, \"R-AFF\", s);",
+    "replace": "if (s.genre === \"recepteur\") return false;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ALIAS-PARAM — R-PARAM : un paramètre annoté ExtensionAPI importé du SDK est un alias à déclarer",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (!annoteExtensionAPI(tok)) continue;",
+    "replace": "if (true) continue;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ALIAS-CTX — R-CTX : l'affectation de ctx.ui à un nom est un alias qui garde son préfixe",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "return alias(x, \"R-CTX\", s, \"ctx.ui\");",
+    "replace": "return false;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-ALIAS-HOMONYME — un nom homonyme d'un alias dans une autre portée n'hérite pas de sa liaison",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const p of tri) if (p.debut <= tok",
+    "replace": "for (const p of tri.slice().reverse()) if (p.debut <= tok"
+  },
+  {
+    "test": "L0 COUV PI-SURF-TRANSMISSION — la transmission du récepteur à un paramètre non annoté est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "inclassable(\"transmission\", l.id, o - 1, paire[o]);",
+    "replace": "void o;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-TRANSMISSION-POSITION — la transmission du récepteur à la mauvaise position est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "fn?.params.find((p) => p.index === idx && !p.reste)",
+    "replace": "fn?.params.find((p) => p.index === fn.params.length - 1 && !p.reste)"
+  },
+  {
+    "test": "L0 COUV PI-SURF-STOCKAGE — le récepteur stocké dans une propriété d'objet est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (s.genre !== \"ctx\") inclassable(\"stockage\", l.id, x, y);",
+    "replace": "if (s.genre !== \"ctx\") void y;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-VALEUR — le récepteur rendu comme valeur est inclassable",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "    if (s.genre === \"ctx\") return false;\n    inclassable(\"residuel\", l.id, x, y);",
+    "replace": "    if (s.genre === \"ctx\") return false;\n    void y;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-DRAPEAU — un drapeau CLI non déclaré ajouté à spawn-args.ts est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "surface(\"drapeau\", t.v);",
+    "replace": "void t;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX — un type d'événement du flux non déclaré comparé à .type est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "{ debut = i; fin = i + 1; }",
+    "replace": "{ continue; }"
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-OPTIONNEL — la forme ?.type du flux est reconnue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "(T[i].v === \".\" || T[i].v === \"?.\") && T[i + 1]?.k === \"id\" && T[i + 1].v === \"type\"",
+    "replace": "T[i].v === \".\" && T[i + 1]?.k === \"id\" && T[i + 1].v === \"type\""
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-GAUCHE — un littéral à gauche de la comparaison au type est reconnu",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (!OPS.has(T[g]?.v ?? \"\")) continue;",
+    "replace": "if (OPS.has(T[g]?.v ?? \"\") || true) continue;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-LECTURE-RESOLUE — la lecture [CHAMPS_FLUX.type] est résolue et reconnue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (v !== \"type\") continue;",
+    "replace": "if (v !== \"type\" || true) continue;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-LECTURE-RESOLUE-OPTIONNELLE — la lecture ?.[CHAMPS_FLUX.type] est résolue et reconnue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "else if (T[i].v === \"[\" && T[i + 1]?.v === \"CHAMPS_FLUX\"",
+    "replace": "else if (T[i].v === \"[\" && T[i - 1]?.v !== \"?.\" && T[i + 1]?.v === \"CHAMPS_FLUX\""
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-VALEUR-RESOLUE — une comparaison à FLUX.<clé> est résolue vers sa valeur déclarée dans pi-adapt.ts",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "return resolue(\"FLUX\", k) && v !== undefined ?",
+    "replace": "return false ?"
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-BLOC — une comparaison à BLOC_TEXTE importé de pi-adapt.ts est résolue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "return resolue(\"BLOC_TEXTE\", k) && v !== undefined ?",
+    "replace": "return false ?"
+  },
+  {
+    "test": "L0 COUV PI-SURF-FLUX-NON-RESOLU — une constante du flux non déclarée est inclassable, jamais ignorée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "else inclassable(\"flux\", \"\", i, i + 2);",
+    "replace": "else void cle;"
+  },
+  {
+    "test": "L0 COUV PI-SURF-PYTHON — une clé déclarée retirée d'un lecteur Python est signalée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const c of p.cles) if (!lits.has(c.cle)) res.push(",
+    "replace": "for (const c of p.cles) if (!lits.has(c.cle) && false) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-MJS — les modules .mjs de tests/pi-contrats sont balayés",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "...fichiersSous(racine, \"tests/pi-contrats\", /\\.(ts|mjs)$/),",
+    "replace": "...fichiersSous(racine, \"tests/pi-contrats\", /\\.ts$/),"
+  },
+  {
+    "test": "L0 COUV PI-SURF-OUTILLAGE — un fichier d'outillage non nommé au registre est signalé",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const f of [...reels].sort()) if (!declares.has(f)) res.push(",
+    "replace": "for (const f of [...reels].sort()) if (!declares.has(f) && false) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-CONTRAT — une entrée sous contrat qui nomme un contrat inexistant échoue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const id of ids ?? []) if (!oracle.has(id)) res.push(",
+    "replace": "for (const id of ids ?? []) if (!oracle.has(id) && false) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-ENTREE-NON-RECONNUE — une entrée du registre qui n'est plus reconnue échoue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "for (const f of [...fs].sort()) if (!v || !v.has(f)) res.push(",
+    "replace": "for (const f of [...fs].sort()) if ((!v || !v.has(f)) && false) res.push("
+  },
+  {
+    "test": "L0 COUV PI-SURF-BALAYAGE-VIDE — une liste de fichiers balayés vide échoue",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "if (fichiersTs(racine).length === 0) res.push(",
+    "replace": "if (fichiersTs(racine).length === -1) res.push("
   }
 ]

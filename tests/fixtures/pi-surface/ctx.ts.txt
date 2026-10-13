@@ -1,0 +1,28 @@
+// Item 3 fixture (MATRICES § D, type Membre de ctx; § G, Q4). Each case is copied as a new file into a
+// scanned tree of a temporary copy by tests/l0-pi-surface.test.ts.
+
+// ── case: membre ──
+export default function (api: any): void {
+  api.on("turn_end", (_e: unknown, ctx: any) => ctx.membreInconnu);
+}
+
+// ── case: prefixe ──
+export default function (api: any): void {
+  api.on("turn_end", (_e: unknown, ctx: any) => ctx.ui.membreUiInconnu("x"));
+}
+
+// ── case: in-litteral ──
+export default function (api: any): void {
+  api.on("turn_end", (_e: unknown, ctx: any) => "membreSonde" in ctx);
+}
+
+// ── case: in-variable ──
+const NOM_MEMBRE = "cwd";
+export default function (api: any): void {
+  api.on("turn_end", (_e: unknown, ctx: any) => NOM_MEMBRE in ctx);
+}
+
+// ── case: interne ──
+export function epreuveInterne(ctx: { a: number }): number {
+  return ctx.a + ctx.a;
+}

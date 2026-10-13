@@ -1,0 +1,74 @@
+// Item 3 fixture (MATRICES § D, receiver aliases; § G, Q3: R-AFF, R-PARAM, R-CTX and transmission).
+// Each case is copied as a new file into a scanned tree of a temporary copy by tests/l0-pi-surface.test.ts.
+
+// ── case: aff ──
+export default function (api: any): void {
+  const API = api as unknown;
+  (API as any).registerTool({});
+}
+
+// ── case: param ──
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+function aide(x: ExtensionAPI): void {
+  x.exec("true", []);
+}
+export default function (api: ExtensionAPI): void {
+  aide(api);
+}
+
+// ── case: ctx ──
+export default function (api: any): void {
+  api.on("session_start", (_e: unknown, ctx: any) => {
+    const vue = ctx.ui;
+    vue.notify("épreuve", "info");
+  });
+}
+
+// ── case: homonyme ──
+export default function (api: any): void {
+  const API = api;
+  API.registerTool({});
+  function ailleurs(): void {
+    const API = { autre(): void {} };
+    API.autre();
+  }
+  ailleurs();
+}
+
+// ── case: homonyme-sans-masque ──
+export default function (api: any): void {
+  const API = api;
+  API.registerTool({});
+  function ailleurs(): void {
+    API.autre();
+  }
+  ailleurs();
+}
+
+// ── case: transmission-non-annotee ──
+function aideLibre(x: unknown): void {
+  void x;
+}
+export default function (api: any): void {
+  aideLibre(api);
+}
+
+// ── case: transmission-position ──
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+function aideDeux(n: unknown, x: ExtensionAPI): void {
+  void n;
+  x.exec("true", []);
+}
+export default function (api: ExtensionAPI): void {
+  aideDeux(api, 1 as any);
+}
+
+// ── case: stockage ──
+export default function (api: any): object {
+  return { api };
+}
+
+// ── case: valeur ──
+export default function (api: any): unknown {
+  return api;
+}

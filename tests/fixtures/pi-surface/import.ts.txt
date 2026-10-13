@@ -1,0 +1,50 @@
+// Item 3 fixture (MATRICES § D, type Import; § G, Q2, Q5, Q6). Never scanned in place: each case is
+// copied by tests/l0-pi-surface.test.ts into a scanned tree of a temporary copy of the repository.
+
+// ── case: import-nomme ──
+import { getSessionStats } from "@earendil-works/pi-coding-agent";
+export const relu = getSessionStats;
+
+// ── case: espace ──
+import * as kit from "@earendil-works/pi-tui";
+export const largeur = (kit as unknown as { autreFonction(x: string): number }).autreFonction("x");
+
+// ── case: chargement ──
+export async function charger(): Promise<unknown> {
+  return import("@earendil-works/pi-ai/dist/epreuve.js");
+}
+
+// ── case: chargement-variable ──
+export async function chargerCible(cible: string): Promise<unknown> {
+  return import(cible);
+}
+
+// ── case: chargement-require ──
+import { createRequire as fabriquer } from "node:module";
+const charge = fabriquer(import.meta.url);
+export const lireModule = (cible: string): unknown => charge(cible);
+
+// ── case: chargement-production ──
+export async function chargerPaquet(): Promise<unknown> {
+  return import("@earendil-works/pi-ai");
+}
+
+// ── case: source ──
+export const SOURCE_EPREUVE = `export default function () {
+  return 1;
+}
+`;
+
+// ── case: source-alteree ──
+export const SOURCE_EPREUVE = `export default function () {
+  return 2;
+}
+`;
+
+// ── case: gabarit ──
+export default function (api: any): string {
+  return `export default ${api.methodeGabarit()};\n`;
+}
+
+// ── case: tronque ──
+export const TEXTE_EPREUVE = "texte complet";

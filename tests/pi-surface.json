@@ -1,0 +1,2225 @@
+{
+  "description": "Registre de surface de LOT-PI-ADAPT, item 3 (PLAN § 3, MATRICES § D et § G). Trois statuts : sous-contrat (identifiants de clause), dans-la-couche (subagent-only/pi-adapt.ts), hors-couche (raison). Vérifié par tests/l0-pi-surface.test.ts ; jamais régénéré par le test.",
+  "pi": "0.86.0",
+  "surfaces": [
+    {
+      "type": "chargement",
+      "nom": "node_modules/@earendil-works/pi-ai/dist/utils/transcript.js",
+      "statut": "hors-couche",
+      "raison": "module interne de pi-ai lu par les vérificateurs pour reproduire le rendu du prompt (F.1, 66dda35a) ; test-only ; ni export public ni surface de production",
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/verificateurs.test.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.compact",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.5",
+        "C8.2",
+        "C2.8"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/compaction-guard/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.cwd",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.1"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.getContextUsage",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/compaction-guard/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.getSessionStats",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.6"
+      ],
+      "raison": "contrat négatif : membre absent en 0.86.0 ; lu par le footer, écart connu (constat 4), hors lot (Q5)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent-footer/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.hasUI",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.1"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/compaction-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.isIdle",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/compaction-guard/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.model",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent-footer/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.model.id",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.5",
+        "C6.6"
+      ],
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.sessionManager",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-session-journal/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.sessionManager.getEntries",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-session-journal/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.sessionManager.getSessionId",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C6.5"
+      ],
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.signal",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.thinkingLevel",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C5.3"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent-footer/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.ui",
+      "statut": "hors-couche",
+      "raison": "interface utilisateur : en -p, hasUI est faux (C5.1) ; les appels UI ne sont pas exercés et le rendu TUI n'est pas qualifié (C2.10, K4)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/compaction-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "extensions/subagent/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.ui.input",
+      "statut": "hors-couche",
+      "raison": "interface utilisateur : en -p, hasUI est faux (C5.1) ; les appels UI ne sont pas exercés et le rendu TUI n'est pas qualifié (C2.10, K4)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-bq-cost-sentinel/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.ui.notify",
+      "statut": "hors-couche",
+      "raison": "interface utilisateur : en -p, hasUI est faux (C5.1) ; les appels UI ne sont pas exercés et le rendu TUI n'est pas qualifié (C2.10, K4)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/compaction-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "extensions/subagent/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.ui.select",
+      "statut": "hors-couche",
+      "raison": "interface utilisateur : en -p, hasUI est faux (C5.1) ; les appels UI ne sont pas exercés et le rendu TUI n'est pas qualifié (C2.10, K4)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-project-brief/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.ui.setFooter",
+      "statut": "hors-couche",
+      "raison": "interface utilisateur : en -p, hasUI est faux (C5.1) ; les appels UI ne sont pas exercés et le rendu TUI n'est pas qualifié (C2.10, K4) ; installation du footer exclue de C2.10 (K4)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent-footer/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.ui.setStatus",
+      "statut": "hors-couche",
+      "raison": "interface utilisateur : en -p, hasUI est faux (C5.1) ; les appels UI ne sont pas exercés et le rendu TUI n'est pas qualifié (C2.10, K4)",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent/index.ts"
+      ]
+    },
+    {
+      "type": "ctx",
+      "nom": "ctx.waitForIdle",
+      "statut": "hors-couche",
+      "raison": "moyen d'observation de l'instrument (sonde, barrières K6/K9) ; test-only, pas une surface de production qualifiée",
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--append-system-prompt",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.3",
+        "C6.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--mode",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.7"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--model",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--no-context-files",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.8"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--no-extensions",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--no-session",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--no-skills",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.8"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--session-id",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--thinking",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "--tools",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.1"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "-e",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "drapeau",
+      "nom": "-p",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C6.7"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts"
+      ]
+    },
+    {
+      "type": "evenement",
+      "nom": "before_agent_start",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C4.3",
+        "C2.5",
+        "C2.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "tests/pi-contrats/extensions-epreuve.ts"
+      ]
+    },
+    {
+      "type": "evenement",
+      "nom": "message_end",
+      "statut": "hors-couche",
+      "raison": "moyen d'observation de l'instrument (sonde, barrières K6/K9) ; test-only, pas une surface de production qualifiée",
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "evenement",
+      "nom": "session_compact",
+      "statut": "hors-couche",
+      "raison": "moyen d'observation de l'instrument (sonde, barrières K6/K9) ; test-only, pas une surface de production qualifiée",
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "evenement",
+      "nom": "session_shutdown",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ],
+      "exclusionsC2": {
+        "extensions/subagent/index.ts": "exclu de la qualification C2.9 (K2) : enregistrement et effet non qualifiés sous le stimulus retenu"
+      }
+    },
+    {
+      "type": "evenement",
+      "nom": "session_start",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C4.4",
+        "C2.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "extensions/subagent/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ],
+      "exclusionsC2": {
+        "extensions/subagent/index.ts": "exclu de la qualification C2.9 (K2) : enregistrement et effet non qualifiés sous le stimulus retenu",
+        "extensions/subagent-footer/index.ts": "effet UI de session_start exclu de C2.10 (K4) : installation du footer et rendu TUI non qualifiés"
+      }
+    },
+    {
+      "type": "evenement",
+      "nom": "tool_call",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C4.1",
+        "C2.1",
+        "C2.2",
+        "C2.3",
+        "C2.11"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-secret-gate/index.ts",
+        "extensions/subagent/index.ts",
+        "subagent-only/role-guard.ts",
+        "tests/pi-contrats/extensions-epreuve.ts",
+        "tests/pi-contrats/sonde.ts"
+      ],
+      "exclusionsC2": {
+        "extensions/subagent/index.ts": "exclu de la qualification C2.9 (K2) : enregistrement et effet non qualifiés sous le stimulus retenu"
+      }
+    },
+    {
+      "type": "evenement",
+      "nom": "tool_execution_end",
+      "statut": "hors-couche",
+      "raison": "seul abonné extensions/subagent, exclu de la qualification C2.9 (K2) : enregistrement et effet non qualifiés sous le stimulus retenu ; le flux tool_execution_end des enfants relève de C7.5, pas de cet événement",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts"
+      ]
+    },
+    {
+      "type": "evenement",
+      "nom": "tool_result",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C4.2",
+        "C2.4",
+        "C2.5",
+        "C2.11"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/subagent/index.ts",
+        "subagent-only/envelope/envelope.ts",
+        "subagent-only/role-guard.ts",
+        "tests/pi-contrats/extensions-epreuve.ts"
+      ],
+      "exclusionsC2": {
+        "extensions/subagent/index.ts": "exclu de la qualification C2.9 (K2) : enregistrement et effet non qualifiés sous le stimulus retenu"
+      }
+    },
+    {
+      "type": "evenement",
+      "nom": "turn_end",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C4.4",
+        "C2.4",
+        "C2.8",
+        "C2.11"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/compaction-guard/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "subagent-only/role-guard.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "flux",
+      "nom": "message",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.3"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts"
+      ]
+    },
+    {
+      "type": "flux",
+      "nom": "message_end",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts"
+      ]
+    },
+    {
+      "type": "flux",
+      "nom": "text",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts"
+      ]
+    },
+    {
+      "type": "flux",
+      "nom": "tool_execution_end",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/test-command.ts"
+      ]
+    },
+    {
+      "type": "flux",
+      "nom": "tool_execution_start",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/test-command.ts"
+      ]
+    },
+    {
+      "type": "flux",
+      "nom": "turn_end",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts"
+      ]
+    },
+    {
+      "type": "flux-constante",
+      "nom": "BLOC_TEXTE",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "text"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.content",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "content"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.isError",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "isError"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.role",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "role"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.text",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "text"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.toolCallId",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "toolCallId"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.toolName",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "toolName"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.type",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.8"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "type"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "CHAMPS_FLUX.usage",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "usage"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "FLUX.debutOutil",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "tool_execution_start"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "FLUX.finDeMessage",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "message_end"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "FLUX.finDeTour",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "turn_end"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "FLUX.finOutil",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts",
+        "subagent-only/test-command.ts"
+      ],
+      "valeur": "tool_execution_end"
+    },
+    {
+      "type": "flux-constante",
+      "nom": "FLUX.message",
+      "statut": "dans-la-couche",
+      "contrats": [
+        "C7.3"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "subagent-only/dispatch.ts",
+        "subagent-only/pi-adapt.ts"
+      ],
+      "valeur": "message"
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-ai:createAssistantMessageEventStream",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.9"
+      ],
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/fournisseur-scripte.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:*",
+      "statut": "hors-couche",
+      "raison": "import étoile de la sonde (test-only) ; seuls les membres lus sont enregistrés, l'étoile ne qualifie pas les exports du paquet (Q2)",
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:ExtensionAPI",
+      "statut": "hors-couche",
+      "raison": "import de type seul, effacé à l'exécution ; les membres lus sur le récepteur sont enregistrés et rattachés séparément",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-secret-gate/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "extensions/subagent/index.ts",
+        "subagent-only/envelope/envelope.ts",
+        "subagent-only/role-guard.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:defineTool",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.1"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts",
+        "subagent-only/envelope/envelope.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:getAgentDir",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.5"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:isEditToolResult",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.3"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-lint-gate/index.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:isToolCallEventType",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.2",
+        "C1.10"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-secret-gate/index.ts",
+        "extensions/subagent/index.ts",
+        "subagent-only/role-guard.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:isWriteToolResult",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-coding-agent:withFileMutationQueue",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-tui:*",
+      "statut": "hors-couche",
+      "raison": "import étoile de la sonde (test-only) ; seuls les membres lus sont enregistrés, l'étoile ne qualifie pas les exports du paquet (Q2)",
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-tui:truncateToWidth",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.7"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent-footer/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "import",
+      "nom": "@earendil-works/pi-tui:visibleWidth",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.8"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent-footer/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "exec",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.3",
+        "C2.4",
+        "C2.7"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-session-journal/index.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "getActiveTools",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C6.1"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "getAllTools",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C3.1"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "getCommands",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.3",
+        "C2.7",
+        "C2.9",
+        "C2.10"
+      ],
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "on",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C4.1",
+        "C4.2",
+        "C4.3",
+        "C4.4"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/bash-guard/index.ts",
+        "extensions/compaction-guard/index.ts",
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/pi-secret-gate/index.ts",
+        "extensions/pi-session-journal/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "extensions/subagent/index.ts",
+        "subagent-only/envelope/envelope.ts",
+        "subagent-only/role-guard.ts",
+        "tests/pi-contrats/extensions-epreuve.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "registerCommand",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.3",
+        "C2.5",
+        "C2.7",
+        "C2.9",
+        "C2.10"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-project-brief/index.ts",
+        "extensions/subagent-footer/index.ts",
+        "extensions/subagent/index.ts",
+        "tests/pi-contrats/extensions-epreuve.ts",
+        "tests/pi-contrats/sonde.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "registerProvider",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C1.9",
+        "C6.6"
+      ],
+      "testOnly": true,
+      "fichiers": [
+        "tests/pi-contrats/fournisseur-scripte.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "registerTool",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.9",
+        "C2.12",
+        "C3.2"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts",
+        "subagent-only/envelope/envelope.ts",
+        "tests/pi-contrats/extensions-epreuve.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "sendMessage",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.8"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/compaction-guard/index.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "sendUserMessage",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.7"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-bq-cost-sentinel/index.ts",
+        "extensions/pi-check-config/index.ts",
+        "extensions/pi-lint-gate/index.ts",
+        "extensions/pi-project-brief/index.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "setActiveTools",
+      "statut": "hors-couche",
+      "raison": "écrit par P0-B (extensions/subagent) en état terminal ; aucun scénario retenu ne l'exerce ; présence relevée à l'inventaire, comportement non qualifié",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts"
+      ]
+    },
+    {
+      "type": "methode",
+      "nom": "setSessionName",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.6"
+      ],
+      "testOnly": false,
+      "fichiers": [
+        "extensions/pi-session-journal/index.ts"
+      ]
+    }
+  ],
+  "recepteurs": [
+    {
+      "fichier": "extensions/bash-guard/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/compaction-guard/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:compactionGuard#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-bq-cost-sentinel/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-check-config/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-check-config/index.ts",
+      "regle": "R-PARAM",
+      "nom": "pi",
+      "liaison": "param:parseFrontmatters#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-lint-gate/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "R-PARAM",
+      "nom": "pi",
+      "liaison": "param:buildDigest#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "R-PARAM",
+      "nom": "api",
+      "liaison": "param:default>generate#0:api"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "R-PARAM",
+      "nom": "pi",
+      "liaison": "param:freshness#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "R-PARAM",
+      "nom": "pi",
+      "liaison": "param:sh#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "R-PARAM",
+      "nom": "_pi",
+      "liaison": "param:treeFingerprint#0:_pi"
+    },
+    {
+      "fichier": "extensions/pi-project-brief/index.ts",
+      "regle": "R-PARAM",
+      "nom": "pi",
+      "liaison": "param:untrackedData#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-secret-gate/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-session-journal/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/pi-session-journal/index.ts",
+      "regle": "R-CTX",
+      "nom": "candidat",
+      "liaison": "var:notifierSansJeter:candidat",
+      "source": "param:notifierSansJeter#0:ctx",
+      "prefixe": "ctx"
+    },
+    {
+      "fichier": "extensions/subagent-footer/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/subagent/index.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/subagent/index.ts",
+      "regle": "R-CTX",
+      "nom": "ui",
+      "liaison": "var:default:ui",
+      "source": "param:default>pi.on(\"session_start\")#1#1:ctx",
+      "prefixe": "ctx.ui"
+    },
+    {
+      "fichier": "extensions/subagent/index.ts",
+      "regle": "R-AFF",
+      "nom": "PI_API",
+      "liaison": "var:module:PI_API",
+      "source": "param:default#0:pi"
+    },
+    {
+      "fichier": "extensions/subagent/index.ts",
+      "regle": "R-CTX",
+      "nom": "RUN_UI",
+      "liaison": "var:module:RUN_UI",
+      "source": "param:default>pi.on(\"session_start\")#1#1:ctx",
+      "prefixe": "ctx.ui"
+    },
+    {
+      "fichier": "subagent-only/envelope/envelope.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "subagent-only/role-guard.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "tests/pi-contrats/extensions-epreuve.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "tests/pi-contrats/fournisseur-scripte.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    },
+    {
+      "fichier": "tests/pi-contrats/sonde.ts",
+      "regle": "export-default",
+      "nom": "pi",
+      "liaison": "param:default#0:pi"
+    }
+  ],
+  "exclusions": [
+    {
+      "fichier": "tests/pi-contrats/extensions-epreuve.ts",
+      "type": "chargement",
+      "liaison": "",
+      "forme": "import(scenario.horsRacine!)",
+      "ancrage": "const m = await import(scenario.horsRacine!);",
+      "compte": 1,
+      "ligne": 130,
+      "testOnly": true,
+      "raison": "stimulus de la contre-épreuve M2.11 : module .ts posé hors de la racine du candidat ; référence d'épreuve, pas une clause C"
+    },
+    {
+      "fichier": "tests/pi-contrats/extensions-epreuve.ts",
+      "type": "chargement",
+      "liaison": "",
+      "forme": "req(scenario.piAi!)",
+      "ancrage": "const m = req(scenario.piAi!);",
+      "compte": 1,
+      "ligne": 135,
+      "testOnly": true,
+      "raison": "stimulus de la contre-épreuve M2.16 : chargement par Node de dist/index.js de pi-ai installé ; référence d'épreuve, pas une clause C"
+    },
+    {
+      "fichier": "tests/pi-contrats/extensions-epreuve.ts",
+      "type": "chargement",
+      "liaison": "",
+      "forme": "req(scenario.fauxNode!)",
+      "ancrage": "req(scenario.fauxNode!);",
+      "compte": 1,
+      "ligne": 146,
+      "testOnly": true,
+      "raison": "témoin de module natif des voies aveugles (étape 0, identité) : addon factice chargé par require ; référence d'épreuve, pas une clause C"
+    },
+    {
+      "fichier": "tests/pi-contrats/sonde.ts",
+      "type": "in-ctx",
+      "liaison": "param:membres#0:ctx",
+      "forme": "m in ctx",
+      "ancrage": "for (const m of MEMBRES) o[m] = { present: ctx != null && m in ctx, type: ctx == null ? \"absent\" : typeof ctx[m] };",
+      "compte": 1,
+      "ligne": 88,
+      "testOnly": true,
+      "raison": "sonde, membres(ctx) : présence de chaque membre de MEMBRES dans ctx, absence comprise (C5, dont le membre négatif getSessionStats)",
+      "contrats": [
+        "C5.1",
+        "C5.2",
+        "C5.3",
+        "C5.4",
+        "C5.5",
+        "C5.6"
+      ],
+      "liste": {
+        "constante": "MEMBRES",
+        "valeurs": [
+          "cwd",
+          "hasUI",
+          "signal",
+          "thinkingLevel",
+          "model",
+          "getContextUsage",
+          "compact",
+          "isIdle",
+          "sessionManager",
+          "getSessionStats"
+        ]
+      }
+    },
+    {
+      "fichier": "tests/pi-contrats/sonde.ts",
+      "type": "acces-calcule",
+      "liaison": "param:membres#0:ctx",
+      "forme": "ctx[m]",
+      "ancrage": "for (const m of MEMBRES) o[m] = { present: ctx != null && m in ctx, type: ctx == null ? \"absent\" : typeof ctx[m] };",
+      "compte": 1,
+      "ligne": 88,
+      "testOnly": true,
+      "raison": "sonde, membres(ctx) : type de chaque membre de MEMBRES (C5, dont le membre négatif getSessionStats)",
+      "contrats": [
+        "C5.1",
+        "C5.2",
+        "C5.3",
+        "C5.4",
+        "C5.5",
+        "C5.6"
+      ],
+      "liste": {
+        "constante": "MEMBRES",
+        "valeurs": [
+          "cwd",
+          "hasUI",
+          "signal",
+          "thinkingLevel",
+          "model",
+          "getContextUsage",
+          "compact",
+          "isIdle",
+          "sessionManager",
+          "getSessionStats"
+        ]
+      }
+    },
+    {
+      "fichier": "tests/pi-contrats/sonde.ts",
+      "type": "acces-calcule",
+      "liaison": "import:sdk",
+      "forme": "(sdk as any)[k]",
+      "ancrage": "exports: EXPORTS.map((k) => [k, typeof (sdk as any)[k]]),",
+      "compte": 1,
+      "ligne": 221,
+      "testOnly": true,
+      "raison": "sonde : type de chaque export de EXPORTS (C1.1 à C1.6)",
+      "contrats": [
+        "C1.1",
+        "C1.2",
+        "C1.3",
+        "C1.4",
+        "C1.5",
+        "C1.6"
+      ],
+      "liste": {
+        "constante": "EXPORTS",
+        "valeurs": [
+          "defineTool",
+          "isToolCallEventType",
+          "isEditToolResult",
+          "isWriteToolResult",
+          "getAgentDir",
+          "withFileMutationQueue"
+        ]
+      }
+    },
+    {
+      "fichier": "tests/pi-contrats/sonde.ts",
+      "type": "acces-calcule",
+      "liaison": "import:tui",
+      "forme": "(tui as any)[k]",
+      "ancrage": "tui: [\"truncateToWidth\", \"visibleWidth\"].map((k) => [k, typeof (tui as any)[k]]),",
+      "compte": 1,
+      "ligne": 222,
+      "testOnly": true,
+      "raison": "sonde : type des deux fonctions de pi-tui de la liste littérale (C1.7, C1.8)",
+      "contrats": [
+        "C1.7",
+        "C1.8"
+      ],
+      "liste": {
+        "valeurs": [
+          "truncateToWidth",
+          "visibleWidth"
+        ]
+      }
+    }
+  ],
+  "ctxInternes": [
+    {
+      "fichier": "subagent-only/spawn-args.ts",
+      "liaison": "param:resolveExtension#1:ctx",
+      "compte": 7,
+      "raison": "BuildContext de buildSpawnPlan : options de construction du lancement d'un enfant, pas le contexte de pi"
+    },
+    {
+      "fichier": "subagent-only/spawn-args.ts",
+      "liaison": "param:resolveSkill#1:ctx",
+      "compte": 2,
+      "raison": "BuildContext de buildSpawnPlan, pas le contexte de pi"
+    },
+    {
+      "fichier": "subagent-only/spawn-args.ts",
+      "liaison": "param:buildSpawnPlan#2:ctx",
+      "compte": 24,
+      "raison": "BuildContext : agentDir, cwd, runId, injection, délégation, gardes ; construit par l'extension, pas par pi"
+    },
+    {
+      "fichier": "subagent-only/spawn-args.ts",
+      "liaison": "param:injectes#0:ctx",
+      "compte": 2,
+      "raison": "BuildContext de buildSpawnPlan, pas le contexte de pi"
+    },
+    {
+      "fichier": "subagent-only/scheduler.ts",
+      "liaison": "param:admit#1:ctx",
+      "compte": 2,
+      "raison": "Admission de l'ordonnanceur des lanes : unités, intégrées, jonctions ; objet interne"
+    },
+    {
+      "fichier": "subagent-only/scheduler.ts",
+      "liaison": "param:admettre#1:ctx",
+      "compte": 4,
+      "raison": "Admission de l'ordonnanceur des lanes ; objet interne"
+    },
+    {
+      "fichier": "subagent-only/scheduler.ts",
+      "liaison": "param:runLanes#1:ctx",
+      "compte": 4,
+      "raison": "Admission de l'ordonnanceur des lanes ; objet interne"
+    },
+    {
+      "fichier": "subagent-only/role-rules.ts",
+      "liaison": "param:decideRoleGuard#2:ctx",
+      "compte": 12,
+      "raison": "RoleContext de role-guard : rôle, racine, cwd, périmètre, lecture seule ; construit depuis l'environnement de l'enfant, pas par pi"
+    },
+    {
+      "fichier": "subagent-only/role-rules.ts",
+      "liaison": "param:noteDeRegroupement#0:ctx",
+      "compte": 2,
+      "raison": "{ role, readOnly } de role-guard ; objet interne"
+    },
+    {
+      "fichier": "tests/pi-contrats/harnais.ts",
+      "liaison": "param:analyserCaptures#1:ctx",
+      "compte": 4,
+      "raison": "contexte d'analyse du harnais (pi, identité, chemins, argv, simulateurs, virtuels), destructuration comprise ; outillage test-only"
+    },
+    {
+      "fichier": "tests/pi-contrats/lecteur-interprete.ts",
+      "liaison": "param:lireBrutesConservees#1:ctx",
+      "compte": 1,
+      "raison": "ContexteDeclare du lecteur R3 (simulateurs déclarés) ; outillage test-only"
+    },
+    {
+      "fichier": "tests/pi-contrats/lecteur-interprete.ts",
+      "liaison": "param:altererInterprete#0:ctx",
+      "compte": 3,
+      "raison": "ContexteDeclare du lecteur R3 ; outillage test-only"
+    },
+    {
+      "fichier": "tests/pi-contrats/lecteur-interprete.ts",
+      "liaison": "var:lecteurInterprete:ctx",
+      "compte": 1,
+      "raison": "ContexteDeclare du lecteur R3 ; outillage test-only"
+    }
+  ],
+  "sourcesEmbarquees": [
+    {
+      "fichier": "tests/pi-contrats/extensions-epreuve.ts",
+      "ancrage": "const data = (await import(\"data:text/javascript,export default 41\")).default;",
+      "compte": 1,
+      "sha256": "fff1e0e1a84818100364ccc514aa37dd15f3ede0d558e57f51bd98bea7febe38",
+      "ligne": 160,
+      "testOnly": true,
+      "raison": "module d'épreuve embarqué data:text/javascript (témoins des voies aveugles) ; pas une extension pi"
+    },
+    {
+      "fichier": "tests/pi-contrats/harnais.ts",
+      "ancrage": "if (s.casser) writeFileSync(join(iso.chemins.candidat, s.casser), \"export default function (pi: any) { pi.on( ;\\n\");",
+      "compte": 1,
+      "sha256": "136dec0bbd466fc512ebf8fe4bba2ff162b204beb15cbf26a98315ed53a36bb1",
+      "ligne": 323,
+      "testOnly": true,
+      "raison": "extension cassée des contre-épreuves communes de chargement C2 (erreur de syntaxe volontaire)"
+    },
+    {
+      "fichier": "tests/pi-contrats/harnais.ts",
+      "ancrage": "writeFileSync(join(tmp, \"hors.ts\"), \"export default 7;\\n\");",
+      "compte": 1,
+      "sha256": "46de099f124b0208612f172e612734eeade6b787bf53e7c8950aff3b017f1550",
+      "ligne": 1033,
+      "testOnly": true,
+      "raison": "module hors.ts de la contre-épreuve M2.11, posé hors de la racine du candidat"
+    },
+    {
+      "fichier": "tests/pi-contrats/harnais.ts",
+      "ancrage": "writeFileSync(cassee, \"export default function (pi: any) { pi.on( ;\\n\");",
+      "compte": 1,
+      "sha256": "136dec0bbd466fc512ebf8fe4bba2ff162b204beb15cbf26a98315ed53a36bb1",
+      "ligne": 1548,
+      "testOnly": true,
+      "raison": "extension cassée de l'étape 0 (diagnostic de chargement observable)"
+    },
+    {
+      "fichier": "tests/pi-contrats/scenarios.ts",
+      "ancrage": "const PIEGE_EXTENSION = `export default function (pi: any) {\\n  pi.registerCommand(\"contrats-piege\", { description: \"piège C6.2\", handler: async () => undefined });\\n}\\n`;",
+      "compte": 1,
+      "sha256": "abfeb1c4ff34e91a6a1c21e134e9576e4062bbcd9414f34c681ab862b9113eb6",
+      "ligne": 946,
+      "testOnly": true,
+      "raison": "extension piège posée sous PI_CODING_AGENT_DIR/extensions pour C6.2 et sa contre-épreuve sans -ne (A3, non qualifiante)"
+    }
+  ],
+  "python": [
+    {
+      "fichier": "bin/run-cost",
+      "cles": [
+        {
+          "cle": "type",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.8",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "timestamp",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1",
+            "C8.3"
+          ]
+        },
+        {
+          "cle": "message",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "role",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "content",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.5",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "text",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.5",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "usage",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "input",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "output",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "cacheRead",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "cacheWrite",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "toolName",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "toolCallId",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "args",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "command",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "path",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "isError",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.5"
+          ]
+        },
+        {
+          "cle": "result",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.5"
+          ]
+        },
+        {
+          "cle": "details",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.5",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "id",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "name",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "arguments",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "cwd",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.1"
+          ]
+        },
+        {
+          "cle": "session",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.1"
+          ]
+        },
+        {
+          "cle": "message_end",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "tool_execution_start",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "tool_execution_end",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.5"
+          ]
+        },
+        {
+          "cle": "compaction",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.2"
+          ]
+        },
+        {
+          "cle": "assistant",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "toolResult",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "toolCall",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "bash",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        }
+      ]
+    },
+    {
+      "fichier": "bin/subagent-trace",
+      "cles": [
+        {
+          "cle": "type",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.8"
+          ]
+        },
+        {
+          "cle": "message",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "role",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "usage",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "input",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "output",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "reasoning",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "cacheRead",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "cacheWrite",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "toolName",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "args",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "command",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "message_end",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "turn_end",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.6"
+          ]
+        },
+        {
+          "cle": "tool_execution_start",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "assistant",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.2"
+          ]
+        },
+        {
+          "cle": "bash",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        }
+      ]
+    },
+    {
+      "fichier": "bin/subagent-shadow",
+      "cles": [
+        {
+          "cle": "type",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.8",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "toolCall",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "toolResult",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "toolCallId",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4",
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "toolName",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        },
+        {
+          "cle": "name",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "input",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "arguments",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C8.1"
+          ]
+        },
+        {
+          "cle": "args",
+          "statut": "sous-contrat",
+          "contrats": [
+            "C7.4"
+          ]
+        }
+      ]
+    }
+  ],
+  "outillage": [
+    {
+      "fichier": "bin/pi-contrats",
+      "role": "instrument de l'item 1 : lance Node directement, sans shell",
+      "analyse": "non-analyse"
+    },
+    {
+      "fichier": "tests/pi-contrats/contrats.test.ts",
+      "role": "contrats C1 à C8, hors du balayage de bin/test-guards",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/extensions-epreuve.ts",
+      "role": "extension d'épreuve : seconde chaîne tool_result, variantes de contre-épreuve",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/falsifier.sh",
+      "role": "M2, M6 et contre-épreuves réelles",
+      "analyse": "non-analyse"
+    },
+    {
+      "fichier": "tests/pi-contrats/fournisseur-scripte.ts",
+      "role": "extension d'épreuve : fournisseur scripté et journal de ce qu'il reçoit",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/generer-identite.ts",
+      "role": "dérive les manifestes depuis les tarballs épinglés",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/harnais.ts",
+      "role": "orchestration d'une exécution ; états satisfait, violé, indéterminé",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/identite-0.86.0.json",
+      "role": "identité 0.86.0 : paquets, versions, empreintes, manifestes",
+      "analyse": "non-analyse"
+    },
+    {
+      "fichier": "tests/pi-contrats/identite-0.99.0.json",
+      "role": "identité de la contre-épreuve 0.99.0",
+      "analyse": "non-analyse"
+    },
+    {
+      "fichier": "tests/pi-contrats/identite.ts",
+      "role": "résolution de l'exécutable, identités et manifestes",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/isolement.ts",
+      "role": "environnement temporaire, contrôle des chemins, inventaire N6",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/lecteur-interprete.ts",
+      "role": "lecteur R3 (--lecteur-interprete, --lecteur-item1), sans lancement de pi",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/modes.ts",
+      "role": "modes typés de bin/pi-contrats, chargés par le lanceur",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/scenarios.ts",
+      "role": "stimuli et observations attendues, une entrée par clause",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/sonde.ts",
+      "role": "extension d'épreuve : observations dans le processus",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/substituer-harnais.mjs",
+      "role": "crochet du seul contrôle de lecteur R3 (témoin et mutant), adjugé par 00f81424",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/trace-resolution.mjs",
+      "role": "crochets module.registerHooks ; refus hors ensemble contrôlé",
+      "analyse": "balaye"
+    },
+    {
+      "fichier": "tests/pi-contrats/verificateurs.test.ts",
+      "role": "contre-épreuves des vérificateurs sur observations altérées",
+      "analyse": "balaye"
+    }
+  ],
+  "limites": [
+    {
+      "id": "Q9-champs",
+      "texte": "Le reconnaisseur ne découvre pas les champs généraux des événements, les champs des descripteurs de registerTool/registerCommand, les arguments d'execute, les imports de typebox ni les comparaisons sur role, toolName et stopReason (Q9)."
+    },
+    {
+      "id": "Q5-jiti",
+      "texte": "La table d'alias de jiti et les jiti.import de sonde.ts et fournisseur-scripte.ts sont des limites déclarées ; ils ne deviennent pas des imports découverts par la grammaire et ne valent pas permission de négliger un chargement jiti futur (Q5).",
+      "sites": [
+        {
+          "fichier": "tests/pi-contrats/verificateurs.test.ts",
+          "ancrage": "\"@earendil-works/pi-coding-agent\": join(pi, \"dist/index.js\"),"
+        },
+        {
+          "fichier": "tests/pi-contrats/verificateurs.test.ts",
+          "ancrage": "\"@earendil-works/pi-tui\": join(N, \"pi-tui/dist/index.js\"),"
+        },
+        {
+          "fichier": "tests/pi-contrats/verificateurs.test.ts",
+          "ancrage": "\"@earendil-works/pi-ai\": join(N, \"pi-ai/dist/compat.js\"),"
+        },
+        {
+          "fichier": "tests/pi-contrats/verificateurs.test.ts",
+          "ancrage": "const sonde: any = await jiti.import(join(ICI_CONTRATS, \"sonde.ts\"), { default: true });"
+        },
+        {
+          "fichier": "tests/pi-contrats/verificateurs.test.ts",
+          "ancrage": "const mod: any = await jiti.import(join(ICI_CONTRATS, \"fournisseur-scripte.ts\"), { default: true });"
+        }
+      ]
+    },
+    {
+      "id": "Q6-texte",
+      "texte": "Le corps d'une source embarquée n'est pas analysé comme une unité TypeScript ; seules les interpolations des gabarits restent balayées (Q6)."
+    },
+    {
+      "id": "Q7-non-analyses",
+      "texte": "bin/pi-contrats, tests/pi-contrats/falsifier.sh et les deux identités JSON sont déclarés à l'outillage sans être analysés par cette grammaire (Q7)."
+    },
+    {
+      "id": "Q8-multiplicite",
+      "texte": "La multiplicité d'une surface ordinaire dans un même fichier n'est pas contrôlée ; seuls les fichiers le sont. Les exclusions de site gardent leurs comptes exacts (Q8)."
+    },
+    {
+      "id": "python",
+      "texte": "Pour bin/run-cost, bin/subagent-trace et bin/subagent-shadow, seule la présence des clés déclarées, comme littéraux de chaîne hors commentaires et hors chaînes triples, est vérifiée ; ce n'est pas une détection des nouvelles surfaces (MATRICES § D)."
+    },
+    {
+      "id": "ctx-flux",
+      "texte": "Les utilisations de ctx autres que les lectures de membres, in, la destructuration et les alias R-CTX ne sont pas analysées ; la règle de transmission ne constitue pas une analyse générale des flux de données de ctx (Q3)."
+    },
+    {
+      "id": "q3-etoile",
+      "texte": "Un import étoile reste enregistré ; il ne vaut pas qualification de tous les exports du paquet (Q2)."
+    }
+  ]
+}

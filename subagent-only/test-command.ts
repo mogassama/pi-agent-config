@@ -36,6 +36,7 @@
  * Pur : ni pi, ni git. Le câblage est dans `extensions/subagent/index.ts`.
  */
 import { readFileSync } from "node:fs";
+import { CHAMPS_FLUX, commandeDeDebutOutil, contenuDeFinOutil, FLUX, OUTIL_BASH } from "./pi-adapt.ts";
 
 /** La phrase ajoutée à la tâche des writers suivants du même run (plan P1 v2 §2, P1-A). */
 export const NOTE_COMMANDE_DE_TEST = "Commande de test établie dans ce run : ";
@@ -332,7 +333,7 @@ function texte(contenu: unknown): string {
   if (typeof contenu === "string") return contenu;
   if (!Array.isArray(contenu)) return "";
   return contenu
-    .map((x) => (x && typeof x === "object" && typeof (x as { text?: unknown }).text === "string" ? (x as { text: string }).text : ""))
+    .map((x) => (x && typeof x === "object" && typeof (x as Record<string, unknown>)[CHAMPS_FLUX.text] === "string" ? (x as Record<string, unknown>)[CHAMPS_FLUX.text] as string : ""))
     .join("");
 }
 
@@ -358,19 +359,20 @@ export function commandeDeTestDetail(lignes: readonly string[]): CommandeRetenue
     } catch {
       return null;
     }
-    if (e.toolName !== "bash" || typeof e.toolCallId !== "string") continue;
-    if (e.type === "tool_execution_start") {
-      const cmd = (e.args as { command?: unknown } | undefined)?.command;
-      if (typeof cmd === "string") commandes.set(e.toolCallId, cmd);
+    // The tool name, event names and nested fields are pi's (pi-adapt.ts, C7).
+    if (e[CHAMPS_FLUX.toolName] !== OUTIL_BASH || typeof e[CHAMPS_FLUX.toolCallId] !== "string") continue;
+    if (e[CHAMPS_FLUX.type] === FLUX.debutOutil) {
+      const cmd = commandeDeDebutOutil(e);
+      if (typeof cmd === "string") commandes.set(e[CHAMPS_FLUX.toolCallId] as string, cmd);
       continue;
     }
-    if (e.type !== "tool_execution_end") continue;
-    const cmd = commandes.get(e.toolCallId);
-    if (cmd === undefined || e.isError !== false) continue;
+    if (e[CHAMPS_FLUX.type] !== FLUX.finOutil) continue;
+    const cmd = commandes.get(e[CHAMPS_FLUX.toolCallId] as string);
+    if (cmd === undefined || e[CHAMPS_FLUX.isError] !== false) continue;
     const a = analyse(cmd);
     if (!a) continue;
     const executeur = a.executeur;
-    const sortie = texte((e.result as { content?: unknown } | undefined)?.content);
+    const sortie = texte(contenuDeFinOutil(e));
     // Un résumé qui compte des tests désélectionnés dit la portée mieux que les arguments.
     const portee: Portee = executeur.nom === "pytest" && /\bdeselected\b/.test(PYTEST_RESUME.exec(sortie)?.[1] ?? "")
       ? "partielle"

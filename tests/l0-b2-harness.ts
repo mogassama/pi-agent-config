@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
 import { releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
 import { openLanes } from "../subagent-only/worktree.ts";
+import { cheminNatif, SOURCE_NATIVE } from "../subagent-only/pi-adapt.ts";
 
 export const RUNS = ".pi-subagent-runs";
 const REPO = join(import.meta.dirname, "..");
@@ -113,12 +114,12 @@ export interface Harnais {
 
 /**
  * Les outils de la session, tels que pi 0.86 les expose (`getAllTools`, `getActiveTools`,
- * `setActiveTools`) — lot ITE, P0-C. Les natifs portent la provenance `<builtin:NOM>` ; `task`
+ * `setActiveTools`) — lot ITE, P0-C. Les natifs portent la provenance `<builtin:NOM>`, lue dans la couche (C3) ; `task`
  * est celui de l'extension. Une preuve peut redéfinir un outil (provenance locale) ou rétablir
  * la liste active ; `monter` remet l'état par défaut, `recharger` le garde.
  */
 export interface OutilPi { name: string; sourceInfo: { source: string; path: string } }
-const natif = (name: string): OutilPi => ({ name, sourceInfo: { source: "builtin", path: `<builtin:${name}>` } });
+const natif = (name: string): OutilPi => ({ name, sourceInfo: { source: SOURCE_NATIVE, path: cheminNatif(name) } });
 export const OUTILS_PI: { tous: OutilPi[]; actifs: string[]; appelsSetActive: string[][] } = {
   tous: [],
   actifs: [],

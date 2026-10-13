@@ -25,6 +25,7 @@ import { join } from "node:path";
 import type { AgentDefinition } from "./agents.js";
 import { sliceSkillFile } from "./slicer.js";
 import { NOTE_COMMANDE_DE_TEST, NOTE_COMMANDE_DECLAREE } from "./test-command.js";
+import { BUILTIN_PROVIDERS, DRAPEAUX, entreesPaquet, extensionLocale, PROVIDER_PACKAGE, racineGit, racineNpm } from "./pi-adapt.ts";
 
 export interface BuildContext {
   /** ~/.pi/agent */
@@ -118,7 +119,7 @@ export interface SpawnPlan {
  * hardcoded path is something one only fixes twice.
  */
 function gitPackageRoots(agentDir: string, name: string): string[] {
-  const base = join(agentDir, "git");
+  const base = racineGit(agentDir);
   const roots: string[] = [];
   let hosts: string[];
   try {
@@ -142,12 +143,9 @@ function gitPackageRoots(agentDir: string, name: string): string[] {
 }
 
 export function resolveExtension(name: string, ctx: BuildContext): string {
-  const npmRoot = join(ctx.agentDir, "npm", "node_modules", name);
-  const entries = (root: string) => [
-    join(root, "index.ts"),
-    join(root, "src", "index.ts"),
-    join(root, "dist", "index.js"),
-  ];
+  // Where pi puts packages is pi's: pi-adapt.ts (C6).
+  const npmRoot = racineNpm(ctx.agentDir, name);
+  const entries = entreesPaquet;
   // Ours, and beside this file rather than under extensions/: a child-side
   // extension is not one the orchestrator should discover and load.
   const LOCAL: Record<string, string[]> = {
@@ -158,7 +156,7 @@ export function resolveExtension(name: string, ctx: BuildContext): string {
     name in LOCAL
       ? LOCAL[name]
       : [
-          join(ctx.agentDir, "extensions", name, "index.ts"),
+          extensionLocale(ctx.agentDir, name),
           // npm-installed packages live on disk under <agentDir>/npm/node_modules
           // (core/package-manager.js:1677), so -e reaches them even though
           // discovery — which -ne disables — is how they normally load.
@@ -180,49 +178,10 @@ export function resolveExtension(name: string, ctx: BuildContext): string {
  * something one forgets on every new role, and the failure only surfaces at
  * run time.
  *
- * Providers built into pi need nothing.
+ * Providers built into pi need nothing. Which ones are, and which package
+ * supplies the others, are pi-adapt's BUILTIN_PROVIDERS and PROVIDER_PACKAGE
+ * (C6), moved there with their values unchanged.
  */
-const BUILTIN_PROVIDERS = new Set([
-  "anthropic",
-  "google",
-  "openai",
-  "openai-codex",
-  "kimi-coding",
-  "xai",
-  "groq",
-  "openrouter",
-  // Native to pi and configured by an API key, not by an extension: `pi` lists
-  // it under the providers it can configure itself, with `models_json_key`. It
-  // failed the check because this set was written from the providers in use at
-  // the time and a provider absent from it is treated as needing a package —
-  // which sends the fix in the wrong direction, since there is no package to
-  // name. Two lists, two questions: does pi know this provider, and if not
-  // which extension supplies it.
-  "qwen-paygo",
-  "qwen",
-]);
-
-/**
- * Providers that need an extension loaded before their models exist.
- *
- * Empty as of 3 August 2026: claude-bridge was removed. It routed through
- * Claude Code, which passes the claude_code preset unconditionally
- * (pi-claude-bridge/src/index.ts:1249) — ~26k tokens of another agent's
- * behavioural instructions, in a child whose whole point is to receive only
- * what we hand it. The native anthropic provider costs ~0.11 $ per review and
- * gives the system prompt back.
- *
- * The mechanism earned its place on 18 August 2026: moving the scout to
- * DeepSeek failed at load time with exactly the error it was written to give,
- * before a single delegation was spawned.
- */
-const PROVIDER_PACKAGE: Record<string, string> = {
-  // Declared in settings.json as a git source; pi installs it under
-  // <agentDir>/npm/node_modules/ like any other package, so resolveExtension
-  // finds it by its package.json name.
-  deepseek: "pi-deepseek-provider",
-};
-
 export function providerExtensionFor(model: string): string | null {
   const provider = model.includes("/") ? model.split("/")[0] : "";
   if (!provider || BUILTIN_PROVIDERS.has(provider)) return null;
@@ -373,20 +332,21 @@ function dataNote(cwd: string, task: string): string {
 }
 
 export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildContext): SpawnPlan {
-  const args: string[] = ["--mode", "json", "-p"];
+  // Every flag is pi's: pi-adapt.ts (C6). The order of the arguments is this function's.
+  const args: string[] = [DRAPEAUX.mode, DRAPEAUX.modeJson, DRAPEAUX.impression];
 
   // Session regime. `ephemeral` keeps provider cache affinity without letting
   // history accumulate; `persistent` keeps continuity across steps of one task.
-  args.push("--session-id", `${ctx.runId}-${agent.name}`);
-  if (agent.session === "ephemeral") args.push("--no-session");
+  args.push(DRAPEAUX.sessionId, `${ctx.runId}-${agent.name}`);
+  if (agent.session === "ephemeral") args.push(DRAPEAUX.sansSession);
 
-  args.push("--model", agent.model);
-  if (agent.thinking) args.push("--thinking", agent.thinking);
-  args.push("--tools", agent.tools.join(","));
+  args.push(DRAPEAUX.modele, agent.model);
+  if (agent.thinking) args.push(DRAPEAUX.reflexion, agent.thinking);
+  args.push(DRAPEAUX.outils, agent.tools.join(","));
 
   // Discovery off across the board. Anything the child gets, it gets by name.
-  if (!agent.contextFiles) args.push("--no-context-files");
-  args.push("--no-skills", "--no-extensions");
+  if (!agent.contextFiles) args.push(DRAPEAUX.sansFichiersContexte);
+  args.push(DRAPEAUX.sansSkills, DRAPEAUX.sansExtensions);
 
   // Provider first: without it the model does not exist and nothing else matters.
   const providerExt = providerExtensionFor(agent.model);
@@ -401,12 +361,12 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
   // Same reasoning as the provider extension above: derived, not remembered.
   const extensions = declared.includes("role-guard") ? declared : [...declared, "role-guard"];
 
-  for (const ext of extensions) args.push("-e", resolveExtension(ext, ctx));
+  for (const ext of extensions) args.push(DRAPEAUX.extension, resolveExtension(ext, ctx));
 
   // Role prompt first: it frames everything that follows, including the
   // instruction not to go hunting for configuration files that -nc removed.
   let injectedChars = agent.prompt.length;
-  args.push("--append-system-prompt", agent.prompt);
+  args.push(DRAPEAUX.ajoutPromptSysteme, agent.prompt);
 
   // Project brief before any skill: what is true of this repository frames the
   // conventions, not the other way round. Silent when absent — a project with
@@ -418,7 +378,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
       const brief = readFileSync(p, "utf-8").trim();
       if (!brief) break;
       injectedChars += brief.length;
-      args.push("--append-system-prompt", brief);
+      args.push(DRAPEAUX.ajoutPromptSysteme, brief);
       break;
     }
   }
@@ -429,7 +389,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
     const slice = sliceSkillFile(resolveSkill(skill, ctx), "authoring");
     if (!slice.text) continue;
     injectedChars += slice.text.length;
-    args.push("--append-system-prompt", slice.text);
+    args.push(DRAPEAUX.ajoutPromptSysteme, slice.text);
   }
 
   const withoutDelta: string[] = [];
@@ -438,7 +398,7 @@ export function buildSpawnPlan(agent: AgentDefinition, task: string, ctx: BuildC
     if (!slice.text) continue;
     if (agent.sliceMode === "full" && !slice.hasDelta) withoutDelta.push(skill);
     injectedChars += slice.text.length;
-    args.push("--append-system-prompt", slice.text);
+    args.push(DRAPEAUX.ajoutPromptSysteme, slice.text);
   }
 
   // The closing instruction is appended here, not left to whoever composed the
@@ -517,7 +477,7 @@ export function describePlan(plan: SpawnPlan): string {
   const out: string[] = [];
   for (let i = 0; i < plan.args.length; i++) {
     const a = plan.args[i];
-    if (a === "--append-system-prompt") {
+    if (a === DRAPEAUX.ajoutPromptSysteme) {
       const v = plan.args[++i];
       out.push(`${a} <${v.length} chars: ${v.slice(0, 48).replace(/\n/g, " ")}…>`);
     } else {

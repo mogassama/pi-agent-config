@@ -15,20 +15,40 @@
  * L'enveloppe à émettre est lue dans `PI_FAKE_ENVELOPE`. `PI_FAKE_EXTRA` ajoute
  * des lignes brutes avant elle — messages, tours, erreurs de fournisseur — pour
  * les scénarios qui en ont besoin.
+ *
+ * Mode relecture (LOT-PI-ADAPT, N2) : `PI_FAKE_REPLAY` désigne une transcription
+ * enregistrée (`--mode json` d'un vrai pi). Son contenu est écrit sur stdout octet
+ * pour octet, rien d'autre, puis le processus sort avec `PI_FAKE_EXIT` (0 par
+ * défaut), le code de sortie déclaré de l'enregistrement. Les deux autres
+ * variables sont alors ignorées.
  */
 
-const ligne = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
+import { readFileSync } from "node:fs";
 
-for (const brut of JSON.parse(process.env.PI_FAKE_EXTRA ?? "[]")) ligne(brut);
-
-const enveloppe = process.env.PI_FAKE_ENVELOPE;
-if (enveloppe) {
-  ligne({
-    type: "tool_execution_end",
-    toolName: "submit",
-    result: { details: JSON.parse(enveloppe) },
-  });
+const relecture = process.env.PI_FAKE_REPLAY;
+if (relecture) {
+  // `exitCode` plutôt que `exit()` : une transcription de plusieurs mégaoctets écrite
+  // dans un tube ne doit pas être tronquée par une sortie avant vidage.
+  process.stdout.write(readFileSync(relecture));
+  process.exitCode = Number(process.env.PI_FAKE_EXIT ?? "0");
+} else {
+  emettre();
 }
 
-ligne({ type: "turn_end" });
-process.exit(Number(process.env.PI_FAKE_EXIT ?? "0"));
+function emettre() {
+  const ligne = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
+
+  for (const brut of JSON.parse(process.env.PI_FAKE_EXTRA ?? "[]")) ligne(brut);
+
+  const enveloppe = process.env.PI_FAKE_ENVELOPE;
+  if (enveloppe) {
+    ligne({
+      type: "tool_execution_end",
+      toolName: "submit",
+      result: { details: JSON.parse(enveloppe) },
+    });
+  }
+
+  ligne({ type: "turn_end" });
+  process.exit(Number(process.env.PI_FAKE_EXIT ?? "0"));
+}

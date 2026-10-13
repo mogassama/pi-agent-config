@@ -173,6 +173,7 @@ import {
 import { aggregateFanout, streakOf } from "../../subagent-only/fanout.js";
 import { openReviewBoundary } from "../../subagent-only/review-boundary.js";
 import { BUNDLE_FILES, bundleRoot, type Perimetre } from "../../subagent-only/role-rules.js";
+import { OUTILS_LECTURE_NATIFS, provenanceNativeLecture, type OutilConnu } from "../../subagent-only/pi-adapt.js";
 import { serialize, STATUS_KEY } from "../../subagent-only/run-state.js";
 import { terminalite, unitesTerminales, type Terminalite } from "../../subagent-only/terminal.js";
 import {
@@ -1762,23 +1763,22 @@ function refusDeGarde() {
  */
 
 /** L'API de pi, pour ce que ce bloc en utilise. Posée au chargement de l'extension. */
-interface OutilConnu { name: string; sourceInfo?: { source?: string; path?: string } }
 let PI_API: {
   setActiveTools?: (noms: string[]) => void;
   getActiveTools?: () => string[];
   getAllTools?: () => OutilConnu[];
 } | undefined;
 
-/** Les seuls outils qu'un plan terminal laisse à l'orchestrateur — s'ils sont bien ceux de pi. */
-const OUTILS_LECTURE = ["read", "grep", "find", "ls"];
+/** Les seuls outils qu'un plan terminal laisse à l'orchestrateur — s'ils sont bien ceux de pi (C3, pi-adapt). */
+const OUTILS_LECTURE = OUTILS_LECTURE_NATIFS;
 
 /**
  * Un outil de lecture dont l'implémentation chargée est la native de pi.
  *
- * Le nom seul ne prouve rien : une extension peut enregistrer un `read` qui écrit. pi 0.86 donne à
- * chaque outil natif la provenance synthétique `<builtin:NOM>`, source `builtin`, et l'extension
- * qui redéfinit un nom remplace cette provenance par la sienne. Sans `getAllTools`, rien n'est
- * vérifiable : aucun outil n'est exempté.
+ * Le nom seul ne prouve rien : une extension peut enregistrer un `read` qui écrit. Ce que pi 0.86
+ * donne à un outil natif, et la décision, sont dans la couche (`provenanceNativeLecture`, C3).
+ * Ici, la liste des outils : sans `getAllTools`, ou s'il lève, rien n'est vérifiable et aucun outil
+ * n'est exempté.
  */
 function outilLectureVerifie(nom: string): boolean {
   if (!OUTILS_LECTURE.includes(nom)) return false;
@@ -1788,8 +1788,7 @@ function outilLectureVerifie(nom: string): boolean {
   } catch {
     return false;
   }
-  const outil = tous?.find((o) => o.name === nom);
-  return outil?.sourceInfo?.source === "builtin" && outil.sourceInfo.path === `<builtin:${nom}>`;
+  return provenanceNativeLecture(nom, tous);
 }
 
 type EtatP0 =

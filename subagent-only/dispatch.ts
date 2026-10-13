@@ -30,6 +30,7 @@ import {
   type RoleName,
 } from "./run-state.js";
 import { environnementEnfant } from "./injection.js";
+import { BLOC_TEXTE, CHAMPS_FLUX, detailsDeFinOutil, erreurFournisseurDe, FLUX, messageDe, ROLE_ASSISTANT, usageDe } from "./pi-adapt.ts";
 
 /**
  * What a delegation returned.
@@ -193,36 +194,38 @@ function consume(line: string, state: StreamState): void {
     return; // non-JSON lines on stdout are not our business
   }
 
-  if (e.type === "turn_end") state.turns++;
+  // Event names, roles and nested fields are pi's: they live in pi-adapt.ts (C7).
+  if (e[CHAMPS_FLUX.type] === FLUX.finDeTour) state.turns++;
 
-  if (e.type === "message" || e.type === "message_end") {
-    const m = e.message ?? e;
-    if (m?.role === "assistant" && Array.isArray(m.content)) {
-      const said = m.content
-        .filter((b: any) => b?.type === "text" && typeof b.text === "string")
-        .map((b: any) => String(b.text).trim())
+  if (e[CHAMPS_FLUX.type] === FLUX.message || e[CHAMPS_FLUX.type] === FLUX.finDeMessage) {
+    const m = messageDe(e);
+    if (m?.[CHAMPS_FLUX.role] === ROLE_ASSISTANT && Array.isArray(m[CHAMPS_FLUX.content])) {
+      const said = m[CHAMPS_FLUX.content]
+        .filter((b: any) => b?.[CHAMPS_FLUX.type] === BLOC_TEXTE && typeof b[CHAMPS_FLUX.text] === "string")
+        .map((b: any) => String(b[CHAMPS_FLUX.text]).trim())
         .filter(Boolean)
         .join("\n");
       if (said) state.lastText = said;
     }
 
-    if (m?.role === "assistant" && m.usage) {
-      state.usage.input += m.usage.input ?? 0;
-      state.usage.output += m.usage.output ?? 0;
-      state.usage.reasoning += m.usage.reasoning ?? 0;
-      state.usage.cacheRead += m.usage.cacheRead ?? 0;
-      state.usage.cacheWrite += m.usage.cacheWrite ?? 0;
-      state.usage.total += m.usage.totalTokens ?? 0;
+    if (m?.[CHAMPS_FLUX.role] === ROLE_ASSISTANT && m[CHAMPS_FLUX.usage]) {
+      const u = usageDe(m[CHAMPS_FLUX.usage]);
+      state.usage.input += u.input;
+      state.usage.output += u.output;
+      state.usage.reasoning += u.reasoning;
+      state.usage.cacheRead += u.cacheRead;
+      state.usage.cacheWrite += u.cacheWrite;
+      state.usage.total += u.total;
     }
   }
 
-  if (e.type === "message_end" || e.type === "turn_end") {
-    const m = e.message ?? e;
-    if (m?.stopReason === "error" && m.errorMessage) state.providerError = String(m.errorMessage);
+  if (e[CHAMPS_FLUX.type] === FLUX.finDeMessage || e[CHAMPS_FLUX.type] === FLUX.finDeTour) {
+    const erreur = erreurFournisseurDe(messageDe(e));
+    if (erreur !== undefined) state.providerError = erreur;
   }
 
-  if (e.type === "tool_execution_end" && e.toolName === "submit") {
-    const details = e.result?.details;
+  if (e[CHAMPS_FLUX.type] === FLUX.finOutil && e[CHAMPS_FLUX.toolName] === "submit") {
+    const details = detailsDeFinOutil(e) as any;
     // LOT-REPRISES, R2 : un `submit` refusé dans l'enfant (`details.refus`) n'est pas une
     // enveloppe ; l'enfant continue, et seule une soumission acceptée en devient une.
     if (details && !(typeof details === "object" && "refus" in details)) state.submit = details as Record<string, unknown>;

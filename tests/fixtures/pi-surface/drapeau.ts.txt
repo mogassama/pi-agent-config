@@ -1,0 +1,5 @@
+// Item 3 fixture (MATRICES § D, type Drapeau CLI). Appended by tests/l0-pi-surface.test.ts to
+// subagent-only/spawn-args.ts in a temporary copy: the flag list of § D is a fixed set of files.
+
+// ── case: drapeau ──
+export const DRAPEAU_EPREUVE = "--drapeau-inconnu";
