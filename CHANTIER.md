@@ -1,4 +1,4 @@
-# Chantier — état au 6 octobre 2026
+# Chantier — état au 14 octobre 2026
 
 *Registre de la configuration pi. Ce qui est fait quitte « à faire », ce qui a été
 tranché ne garde que sa raison, ce qu'une mesure a réfuté le dit.*
@@ -20,14 +20,34 @@ le dernier sans aucun échec. **Septembre — le chantier `3c`** : un audit exte
 la parallélisation des writers possible sous preuves. Aucune régression d'audit ne reste
 ouverte.
 
-**État courant :** `555b202f` (arbre `8b821da4`, patch-id `7af97b68`), **lot efficacité,
+**État courant (14-10) :** branche `feat/subagent-extension`, commit publié
+`6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2, commit documentaire, parent unique `2def810f…`),
+arbre documentaire `77d12c5b89cd1ccb4eadfbe363231168955f86df`. Trois acquis, distincts :
+
+- **LOT-PI-ADAPT, clos le 13-10, niveau A, neutre sur pi 0.86.0** — commit
+  `2def810f56d96bb459716efda4d409028b14de72`, parent `b54532045e1305bd48ee93ea8fdebdcca534b847`, arbre
+  `b1a99caa0e31e96cbc5279dbca19781335ac764b` ; contrats C1–C8 contre le SDK réel, registre des surfaces
+  et couche d'adaptation `subagent-only/pi-adapt.ts`. Items 1 à 3 reçus ; **cela ne clôt pas P3**.
+  **Le candidat technique qualifié demeure cet arbre `b1a99caa…`** : ses portes historiques ne sont pas
+  présentées comme rejouées sur `77d12c5b…`.
+- **POST-1, établi** — `core.hooksPath` local activé sur les trois crochets qualifiés (voir § 9).
+- **POST-2, achevé le 14-10** — README, nouveau `docs/MONTEE-PI.md`, skill `git-collaboration` ; publié
+  sans force ni tags ; aucun nouveau run de qualification, QD ni changement de pi.
+
+*Ordre de la suite (adjugé le 08-10, repris le 14-10) :* LOT-PI-ADAPT clos, POST-1 et POST-2 achevés,
+portage POST-3 → phase 0 (mesure A et relevé de dépense) → phase 3 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9 →
+phase 9b (versions, dont montée directe de pi) → QD de référence sur l'environnement final de 9b →
+phase 10 (modèles). **Une phase par lot**, après plan adjugé. Aucune mesure A, phase suivante, montée de
+pi ni QD n'est lancée par ce portage. Détail : `SUIVI.md`.
+
+**État au 06-10, conservé :** `555b202f` (arbre `8b821da4`, patch-id `7af97b68`), **lot efficacité,
 établi, gelé et poussé le 06-10** sur `1e07ae13` — quatre leviers d'efficacité et leur
 mesure, après un diagnostic adjugé et cinq livraisons. **QD-EFF-a conforme** : unité
 intégrée sans reprise, plan accepté au premier essai, 1 961 534 tokens avant coupure
 (158,6 % de la cible 1 236 742), dont 77 % pour le worker ; **adjugé conforme**.
 **QD-EFF-b conforme** (1 286 817 tokens) ; **moyenne 1 624 176, 131,3 % de la cible : cible
 non atteinte**, chaque rôle restant en moyenne sous 110 % de sa baseline. **Jugement final
-le 06-10 : P1 non atteint, lot non réussi** ; **lot clos le 06-10** (D-bis r2 conforme). *Ensuite :* portage du suivi, puis couche d'adaptation et montée de pi par paliers,
+le 06-10 : P1 non atteint, lot non réussi** ; **lot clos le 06-10** (D-bis r2 conforme). *[Prescription du 06-10, remplacée le 08-10 — conservée pour l'historique :]* *Ensuite :* portage du suivi, puis couche d'adaptation et montée de pi par paliers,
 QD de référence, puis phases 0, 3 et 2, trois items par lot par défaut ; davantage seulement
 sur plan adjugé, avec un objectif commun, une qualification bornée et un retour arrière défini. Cible inchangée, atteignabilité non établie. Avant lui : `1e07ae13`,
 objet final de **LOT-REPRISES-CORRECTIF, qualifié et clos le 01-10** — périmètre
@@ -250,6 +270,17 @@ candidat au merge, revérifié juste avant → intégration git prouvée structu
 `INTEGRATED` final → nettoyage. La section critique couvre toute la transition ; les trois
 fenêtres de crash se reprennent. Un échec du commit de Statut laisse `MERGED` et restaure
 l'effet produit, rien de plus large.
+
+### La couche d'adaptation de pi
+
+*Posée par LOT-PI-ADAPT (clos le 13-10, niveau A, neutre sur pi 0.86.0).* Ce que la configuration
+utilise de pi est isolé derrière `subagent-only/pi-adapt.ts`, vérifié par huit contrats C1–C8 contre le
+SDK réel (`tests/pi-contrats/`), un registre des surfaces (`tests/pi-surface.json`) et son
+reconnaisseur (`tests/l0-pi-surface.test.ts`), et des tests de neutralité (`tests/l0-pi-adapt.test.ts`).
+Le registre est un inventaire des surfaces, pas une preuve exhaustive des événements, de
+`ctx.compact`, des formats JSONL ni des usages hors adaptation (P3 non clos). Le niveau A ne qualifie
+que pi 0.86.0 : la montée suit `docs/MONTEE-PI.md` et exige un plan adjugé. Les mécanismes à suivre en
+dette sont au § 8.
 
 ### Un enfant n'hérite de rien
 
@@ -503,6 +534,9 @@ qui est prouvé.
 | **Ordre test/code : une seule règle** | *Le test précède le code dès que le comportement attendu est connu ; sinon l'étape qui précède est la lecture de la source de vérité.* Le test écrit après épouse le code (`3ed33e`, schéma à quatre colonnes, tout vert) ; le pire défaut mesuré (`orders.csv` jamais lu) n'était rattrapable par aucun des deux paradigmes. Vit dans la moitié authoring des skills, pas dans `AGENTS.md` |
 | **Worker et scout restent dans le cloud** | Bascule locale évaluée le 24-09 et abandonnée sur la performance et sur le coût. Seule condition de réouverture : un besoin de confidentialité |
 | **Le reviewer reste sur Sonnet** | Deux portes mesurées contre des références connues (§ 6). Un juge moins cher qui ne conteste jamais rend le dispositif inutile |
+| **Montée de pi directe vers la cible stable publiée** *(08-10)* | Remplace les paliers 0.87.0/0.99.0 du 06-10 : version exacte et identité complète épinglées, jamais `latest` ; paliers intermédiaires seulement en diagnostic autorisé. pi 1.0.1 retire `npm-shrinkwrap.json`, donc la seule version ne fixe pas l'installation. Aucune cible n'est choisie avant le plan de montée |
+| **Une phase par lot** *(08-10)* | Remplace « trois items par lot par défaut » : plan adjugé (objectif, périmètre exact, qualification bornée, retour arrière) ; une phase trop large se découpe au plan, avant construction |
+| **La phase 3 vient avant la phase 2** *(08-10)* | Exception explicite à l'ordre numérique : ses trois priorités (registres durables, instruments hors dépôt, garde du push) précèdent, sans plafond automatique de trois items |
 
 ---
 
@@ -709,6 +743,35 @@ pas, une preuve dépend d'un script joint et non d'un fichier relu. Suivi en pha
 `pre-commit`, `reference-transaction`. Une adjudication « commit oui, push non » ne vit que
 dans un message, et c'est ce qui a permis le seul écart de protocole du chantier `3c`.
 
+*Précisé le 14-10 (POST-1).* Le jeton à usage unique relève du mécanisme TOKEN de `bash-guard`
+pour les commandes interceptées, notamment `git commit` ; il ne décrit pas les trois crochets. Depuis le 13-10,
+`core.hooksPath` local active `commit-msg`, `pre-commit` et `reference-transaction` : les deux derniers
+refusent si `PI_SUBAGENT_ROLE` est non vide (le second en phase `prepared`), une variable vide n'étant
+pas refusée. Ils ne rendent pas Git intégralement en lecture seule et ne prouvent pas à eux seuls
+l'impossibilité d'un push enfant. **La dette de garde du push reste ouverte** (phase 3 du suivi).
+
+**Dettes ouvertes à la clôture de LOT-PI-ADAPT (13-10), inscrites et non réalisées** — détail et
+conditions d'entrée de la montée dans `docs/MONTEE-PI.md` § 8 :
+
+- **D-P3-N1 / TMPDIR.** N1 n'est pas portable au TMPDIR macOS par défaut : seules les portes M4 à
+  `/Users/MoG` (10 caractères) sont qualifiées ; un témoin à 12 caractères a échoué ; aucun seuil
+  universel. Dette de phase 3.
+- **O1-7 / D-P3-PI-SURFACE-METADONNEES.** Un `.DS_Store` peut faire refuser le scanner de surfaces.
+  Dette de phase 3.
+- **O1-4.** `PI_VERSION_QUALIFIEE` est une déclaration, non la garde effective ; liaison à l'identité
+  contrôlée à planifier avant toute montée.
+- **O2-1.** Instrument interne et instrument externe distincts. L'instrument externe (18 fichiers) vit
+  sous `/Users/MoG/audits/couche-pi/qualif-mac-correctif-r4/paquet/instrument/`, lié au candidat et à
+  ses chemins ; le CLI interne n'est pas annoncé comme requalification opérationnelle de la production.
+- **O2-4 et portabilité.** Formes jiti `fallback` et `json` non revendiquées comme éprouvées ; pas de
+  portée générale Bash 3.2 ni TUI ; fournisseurs réseau non qualifiés.
+- **P3 non clos.** Plan complémentaire des surfaces restantes exigé avant la montée.
+- **Littéraux factices des tests.** `tests/guards.test.ts` et `tests/l0-a-harness.test.ts`, après une
+  alerte GitHub déclarée fermée « Used in tests » : à construire à l'exécution dans un lot distinct, non
+  urgent, à instruire (sites, nature synthétique, propriétés des tests préservées, aucune garde ni
+  détecteur affaibli). Pas de promesse d'absence de nouvelle alerte, ni de conclusion sur les secrets de
+  l'historique ; les autres dettes de sécurité historiques ci-dessus restent entières.
+
 ---
 
 ## 9. Méthode — comment un changement entre dans le dépôt
@@ -785,3 +848,19 @@ se lance désormais avec `git --no-optional-locks`.
 mesurer — S4 en septembre, puis la porte 17 du lot ITE deux fois, dont une sur zéro fichier
 compilé à cause d'un `sed` BSD. La leçon, à appliquer à toute nouvelle porte : rapporter ce
 qu'elle a examiné (fichiers compilés, entrées lues) et traiter un compte nul comme un échec.
+
+**Les commits passent par trois crochets actifs (POST-1, 13-10).** `commit-msg` exige
+`<type>[(<scope>)][!]: <subject>` — types `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`,
+`ci`, `build` ; scope optionnel ; première lettre du sujet en minuscule ; pas de point final ; **première
+ligne de sujet non vide et non commentée de 72 caractères au plus, préfixe type/scope/! et séparateur
+inclus, comptée par Bash**. L'impératif est une règle de rédaction,
+non vérifiée par regex. Exceptions de préfixe (espace final inclus) : `Merge `, `Revert `, `fixup! `,
+`squash! `, `amend! ` — jamais pour contourner un refus. Les messages du runtime `chore(subagent): …`
+n'ont aucune exemption et leurs longueurs réelles ne sont pas qualifiées. **Jamais `--no-verify`** : un
+refus est rapporté puis impose l'arrêt, sans raccourcissement ni répétition automatique. L'activation
+est locale à ce dépôt (`core.hooksPath=/Users/MoG/.pi/agent/git-hooks`) et ne vaut pas activation
+globale ; le chemin absolu ne garantit pas une isolation physique.
+
+**Une phase par lot (08-10).** Une phase ne devient un lot qu'après un plan adjugé : objectif commun,
+périmètre exact, qualification bornée, retour arrière défini. Les conditions d'entrée restent : mesure A
+avant tout changement de contexte, banc avant tout allègement, gel et pilote avant l'intégration.

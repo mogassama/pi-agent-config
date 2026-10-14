@@ -3,13 +3,22 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-Branche `feat/subagent-extension`. État courant : `c42f2d4` (correctif pré-pilote C4, arbre
+*Mise à jour du 14-10-2026 (portage POST-3).* **État courant :** branche `feat/subagent-extension`,
+commit publié `6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2, commit documentaire, parent
+unique `2def810f…`), arbre documentaire `77d12c5b89cd1ccb4eadfbe363231168955f86df`. **Le candidat
+technique qualifié demeure `2def810f56d96bb459716efda4d409028b14de72`, arbre
+`b1a99caa0e31e96cbc5279dbca19781335ac764b`** (LOT-PI-ADAPT, clos le 13-10) : ses portes ne sont pas
+présentées comme rejouées sur l'arbre documentaire.
+
+Branche `feat/subagent-extension`. Chaîne des états : `c42f2d4` (correctif pré-pilote C4, arbre
 `3a7de843`), puis `83eb62a` (`PORTES-GEL` v4, arbre `82a9b1b8`), **gelé par Sol et poussé le 27-09**, puis `a562579`
 (LOT-PP, arbre `c43749c0`), **gelé et poussé le 29-09**, puis `85c5519` (lot ITE, ITE-1c, arbre
 `78491822`), **gelé et poussé le 29-09**, puis `383a5f3` (lot ITE, P1, arbre `6b362b18`),
 **gelé et poussé le 30-09**, puis `cc88bb20` (LOT-REPRISES, non poussé seul), puis `1e07ae13`
 (LOT-REPRISES-CORRECTIF, arbre `6c03bd41`), **gelé et poussé le 01-10**, puis `555b202f` (lot
-efficacité, arbre `8b821da4`), **gelé et poussé le 06-10**.
+efficacité, arbre `8b821da4`), **gelé et poussé le 06-10**, puis `2def810f` (LOT-PI-ADAPT, arbre
+`b1a99caa`), **établi, gelé et poussé le 13-10**, puis `6a73e9ee` (POST-2, arbre `77d12c5b`),
+**établi et publié le 14-10**.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste. Les références **[A]** désignent les sections de
 `SUIVI-en-attente.md`, boîte d'attente privée tenue par Mo hors du dépôt.
@@ -74,6 +83,13 @@ Quatre modules feuilles sans import pi — `fanout.ts`, `attempts.ts`, `tree.ts`
 fonctions pures de `run-state.ts` — existent pour que les tests appellent la production au
 lieu de la recopier. Chacun a été extrait après qu'un défaut est passé sous une suite verte
 qui décrivait sa propre copie.
+
+*Portes du candidat `b1a99caa` — LOT-PI-ADAPT, qualification Mac r4 du 13-10 (pi 0.86.0, Node 26.11.1) :*
+`bin/test-guards` **1052 + 211**, `l0-check` **246**, `l0-mutants` **312** sans anomalie,
+`lanes-concurrency` 4/4. Typage retenu des campagnes : N4 comparatif en bac, 13/13 diagnostics avec
+multiplicités, aucun nouveau ni disparu ; S4 sur Mac r4, principal 127 → 125 et extensionless 33 → 33. Les comptes des paragraphes
+précédents restent historiques, datés de leur gel. *Aucune de ces portes n'a été rejouée sur l'arbre
+documentaire `77d12c5b` du 14-10.*
 
 *Lecture des compteurs, partout dans ce fichier :*
 
@@ -571,6 +587,115 @@ les compteurs installés font foi**.
       couvrir » — **dixième occurrence en dix lots** — devient une classe de falsification
       explicite : trois des seize falsifications remettent le contrôle au mauvais endroit.
 
+### LOT-PI-ADAPT, POST-1 et POST-2 — clôture, activation et documentation (13-10 → 14-10)
+
+*Trois acquis, inscrits séparément. Pièces faisant foi : les adjudications de Sol du 13-10
+(clôture ; POST-1 établi) et du 14-10 (POST-2 achevé, POST-3 ouvert), les retours d'établissement
+et de publication de POST-2, et les textes publiés. Les audits restent sous
+`/Users/MoG/audits/couche-pi/`, hors dépôt. Détail historique : [A] Partie 1, LOT-PI-ADAPT.*
+
+- [x] **LOT-PI-ADAPT — clos le 13-10, niveau A, neutre sur pi 0.86.0.** Code qualifié, établi et
+      publié par `2def810f56d96bb459716efda4d409028b14de72`, parent unique
+      `b54532045e1305bd48ee93ea8fdebdcca534b847`, arbre `b1a99caa0e31e96cbc5279dbca19781335ac764b`,
+      branche `feat/subagent-extension` sur `origin`. 256 fichiers suivis, delta 49 (41 ajouts,
+      8 modifications) ; message `feat(pi-adapt): contrats et couche d'adaptation pi 0.86.0`. Les
+      items 1 à 3 sont reçus dans le périmètre du plan ; chaîne d'établissement (E), de gel (G) et de
+      publication (P) conforme, manifeste du lot
+      `bd29e286ea08d04f5ae079985717c4dc596ec930656a2be4e8f1446ce73ff50e` (494 entrées).
+      **Cela ne clôt pas P3 ni toutes les surfaces de pi.** Texte de clôture adjugé le 13-10, repris
+      sans changement (ses mentions « POST-1 en préparation seulement » et « POST-2/POST-3 … soumis à
+      leurs décisions propres » sont dépassées par les deux entrées suivantes) :
+      ```text
+      LOT-PI-ADAPT — CLOS le 13-10-2026, niveau A, neutre sur pi 0.86.0, avec les limites adjugées
+      maintenues. Candidat qualifié en bac et sur Mac Node 26.11.1, établi par E, gelé par G et publié par
+      P conformes. Commit 2def810f56d96bb459716efda4d409028b14de72, parent unique
+      b54532045e1305bd48ee93ea8fdebdcca534b847, arbre b1a99caa0e31e96cbc5279dbca19781335ac764b ; sur
+      origin, refs/heads/feat/subagent-extension concorde au relevé après P. Aucun QD nouveau ni montée de
+      pi. Reprise d’usage ordinaire de pi 0.86.0 autorisée. POST-1 en préparation seulement ;
+      POST-2/POST-3 et nettoyage restent soumis à leurs décisions propres.
+      ```
+      *Preuves, attribuées au candidat `b1a99caa` et à ses campagnes (synthèse ; les pièces sont dans
+      les audits) :*
+      - bac Node 22.22.0 et 26.11.1 ; Mac r4 : Node 26.11.1, pi 0.86.0 ; M1–M7 atteints ;
+      - N5 : 27/27 exécutions, 85/85 verdicts ; C2 chargements 12/12, enregistrements 21/21,
+        comportements 11/11 ; aucun constat, N6 sans différence ; 2 résumés et 45 tours comptés
+        séparément ;
+      - portes du candidat : `test-guards` 1052 + 211, `l0-check` 246, `l0-mutants` 312 sans anomalie,
+        lanes 4/4 ;
+      - typage : N4 comparatif 13/13 diagnostics avec multiplicités, aucun nouveau ni disparu ; S4
+        principal 127 → 125 et extensionless 33 → 33 ; compilations ciblées des variantes d'instrument
+        bac/Mac réalisées dans le bac sous Node 22/26. **Aucun « typage global vert »**, et aucune
+        compilation ciblée prétendue sur le Mac ;
+      - D1′ : résolutions Node non chargées rattachées à jiti, cible et parent évalués dans le même fil,
+        avant ou après ; N5 Mac/n26 : C6.2 = 5, C2.9 = 44, C2.10 = 5, autres à zéro. Les échecs de
+        résolution restent séparés des délégations réussies.
+
+      *Limites maintenues ouvertes (renvoi `docs/MONTEE-PI.md`, § 8) :*
+      - **D-P3-N1 / TMPDIR** — N1 non portable au TMPDIR macOS par défaut ; seules les portes M4 à
+        `/Users/MoG` (10 caractères) sont qualifiées ; témoin à 12 caractères en échec, sans seuil
+        universel. Dette de phase 3, non bloquante pour la clôture obtenue ;
+      - **O1-7 / D-P3-PI-SURFACE-METADONNEES** — un `.DS_Store` peut produire un refus du scanner de
+        surfaces. Dette de phase 3 ;
+      - **O1-4** — `PI_VERSION_QUALIFIEE` est une déclaration, pas la garde effective ; liaison à
+        l'identité contrôlée à planifier avant toute montée. On n'en déduit pas le comportement garanti
+        des autres versions ;
+      - **O2-1** — instrument interne et instrument externe distincts. Le CLI interne n'est pas annoncé
+        comme requalification opérationnelle de la production établie. Instrument externe historique de
+        18 fichiers sous `/Users/MoG/audits/couche-pi/qualif-mac-correctif-r4/paquet/instrument/`, lié
+        au candidat et aux chemins qualifiés ; chaque cible future exige son identité et son instrument
+        qualifiés ;
+      - **O2-4 et portabilité** — formes jiti `fallback` et `json` non revendiquées comme éprouvées ;
+        autres exclusions conservées ; pas de portée générale Bash 3.2 ni TUI, pas de qualification des
+        fournisseurs réseau ;
+      - **P3 non clos** — plan complémentaire des surfaces restantes exigé avant la montée (voir
+        `MONTEE-PI`) ; le registre livré n'est pas une preuve exhaustive des événements, de
+        `ctx.compact`, des formats JSONL ni des usages hors adaptation.
+
+      *Conservation maintenue :* aucun nettoyage automatique du bac, des temporaires ou des audits du Mac
+      n'est ouvert par ce portage.
+
+- [x] **POST-1 — établi le 13-10 : activation locale des trois crochets qualifiés.** Aucun commit ni push
+      pour cette activation. Six jugements Mac **0/1/0/1/0/1** (`commit-msg`, `pre-commit`,
+      `reference-transaction` : cas ordinaire accepté, cas fautif refusé). **Configuration locale : ajout
+      de la seule clé `core.hooksPath`** — pas « configuration inchangée ». Manifeste de l'activation
+      `f0f05f93225c5b47759ac74c06ca112eb962af82cac5d7ed1c1b2fe7864f550e` (192 entrées).
+      *État actuel :* `core.hooksPath=/Users/MoG/.pi/agent/git-hooks`, local ; trois fichiers actifs
+      (`commit-msg`, `pre-commit`, `reference-transaction`), empreintes qualifiées, mode 755. Le chemin
+      absolu sélectionne les crochets principaux pour les contextes dont la configuration effective le
+      reprend ; il n'isole pas physiquement les crochets. Mac POST-1 : un worktree principal ; contexte
+      lié avec espace éprouvé seulement dans les fixtures Linux. Une activation locale ne vaut pas
+      activation globale dans les autres dépôts.
+      *`commit-msg` :* `<type>[(<scope>)][!]: <subject>` ; types `feat`, `fix`, `refactor`, `perf`,
+      `docs`, `test`, `chore`, `ci`, `build` ; scope optionnel ; première lettre du sujet en minuscule,
+      pas de point final, **première ligne de sujet non vide et non commentée de 72 caractères au plus,
+      préfixe type/scope/! et séparateur inclus, comptée par Bash**.
+      L'impératif est une règle de rédaction, non une propriété vérifiée par regex. Exceptions de préfixe
+      (espace final inclus) : `Merge `, `Revert `, `fixup! `, `squash! `, `amend! ` — à ne pas employer
+      pour contourner un refus. Les messages du runtime `chore(subagent): …` n'ont aucune exemption ;
+      leurs longueurs réelles restent non qualifiées. **Jamais `--no-verify`** : un refus est rapporté
+      puis impose l'arrêt, sans raccourcissement ni répétition automatique.
+      *`pre-commit` et `reference-transaction` :* refus si `PI_SUBAGENT_ROLE` est non vide (phase
+      `prepared` pour le second) ; une variable vide n'est pas refusée. Ils ne rendent pas Git
+      intégralement en lecture seule, ne prouvent pas à eux seuls l'impossibilité d'un push enfant et ne
+      constituent pas un jeton de commit à usage unique. Les mentions de jeton plus haut dans ce fichier
+      sont historiques ; le mécanisme TOKEN de `bash-guard` reste distinct pour les commandes qu'il
+      intercepte et n'est pas une propriété de ces crochets. **La dette de garde du push reste ouverte**
+      (phase 3).
+
+- [x] **POST-2 — achevé le 14-10 : documentation.** README, nouveau `docs/MONTEE-PI.md` et skill
+      `git-collaboration` — deux modifications, un ajout. Commit documentaire
+      `6a73e9ee1a84aad73e36756dad5556509a6019f9`, parent unique `2def810f…`, arbre
+      `77d12c5b89cd1ccb4eadfbe363231168955f86df`, message
+      `docs(pi-adapt): document closure, pi upgrade and commit hooks`, **établi** (trois crochets actifs,
+      aucun push) **puis publié** sans force ni tags : tête distante avant `2def810f…`, après
+      `6a73e9ee…`. Manifeste de la publication `475985f60ffe03bdf28319610713ff471a286e3c599c41e11f0798dfcac49333` (160 empreintes).
+      Empreintes des documents adjugés : README `1bd25cdc…`, `MONTEE-PI` `f0f6dbde…`, skill
+      `8626c327…`. **Aucun nouveau run de qualification, QD ou changement de pi** dans ce commit
+      documentaire ; la reprise d'usage ordinaire de pi 0.86.0 est autorisée. Le candidat technique
+      qualifié reste l'arbre `b1a99caa…`.
+      *Portage POST-3 (ce fichier, `CHANTIER.md`, boîte privée) :* préparé dans une livraison neuve,
+      relue par Sol ; la pose, le commit et son éventuelle publication attendent sa décision.
+
 ---
 
 ## Ce qui reste
@@ -589,6 +714,33 @@ non qualifiée. Suivent **LOT-REPRISES** et son correctif, **qualifiés et clos 
 (objet final `1e07ae13`, efficacité toujours non qualifiée). Tout chantier suivant passe par
 un nouveau lot ; le suivant recommandé par Sol est **l'efficacité P1, diagnostic d'abord**.
 
+*Ordre actuel, adjugé le 08-10 et repris au portage du 14-10 — il remplace celui du 06-10 :*
+
+```text
+LOT-PI-ADAPT clos, POST-1 et POST-2 achevés, portage POST-3
+→ phase 0 : mesure A et relevé de dépense
+→ phase 3 : dette prioritaire du chantier
+→ phase 2 → 4 → 5 → 6 → 7 → 8 → 9
+→ phase 9b : versions, dont montée directe de pi
+→ QD de référence sur l'environnement final de 9b
+→ phase 10 : modèles
+```
+
+**La phase 3 reste avant la phase 2** (exception explicite à « phases 2 à 9 dans l'ordre »). Ses trois
+priorités — protection des registres durables, instruments hors dépôt, garde du push — restent
+prioritaires, **sans plafond automatique de trois items** ; les nouvelles dettes restent à inclure
+explicitement au plan et ne deviennent pas réalisées par leur inscription.
+**Une phase par lot** (phases 2 à 10) : plan de phase adjugé (objectif commun, périmètre exact,
+qualification bornée, retour arrière), construction et qualification en bac, une livraison, puis
+corrections exactes avec diff contre la livraison reçue ; une phase trop large peut être découpée au
+plan, avant construction. *Conditions d'entrée préservées :* mesure A avant tout changement de contexte,
+banc avant tout allègement, gel et pilote avant tout ce qui touche l'intégration ; la phase 4 attend la
+décision sur `.agents/memory/` ; les phases 5 et 6 viennent après la mesure A et leurs prérequis. Les
+versions, modèles, prompts et baselines historiques restent datés. **Cette mise à jour ne lance ni
+mesure A, ni phase suivante, ni montée de pi, ni QD.**
+
+*[Remplacé le 08-10 par l'ordre ci-dessus ; conservé pour l'historique. « Trois items par lot par
+défaut » n'est plus la règle courante.]*
 *Ordre retenu le 06-10 pour la suite :* clôture du lot efficacité → inventaire et couche
 d'adaptation de pi → **montée de pi par paliers** (phase 9b, avancée) → QD de référence →
 phase 0 → phase 3 (trois items) → phase 2 → le reste dans l'ordre des phases. **Trois items
@@ -700,6 +852,9 @@ son ouverture ; un item qui ne sait pas la remplir n'est pas encore écrivable.
 
 *Un seul instrument, deux lectures : ce qui remplit le contexte, où part la dépense par
 rôle. N'attend pas le pilote ; se mène en parallèle de la phase 1.*
+
+*[14-10]* Première phase de la suite adjugée le 08-10, après la clôture de LOT-PI-ADAPT : la mesure A
+précède tout changement de contexte. **Non lancée** par le portage POST-3.
 
 - [ ] **Écrire la commande d'analyse, versionnée sous `bin/` et testée.** *29-09 : la part
       coût existe — `bin/run-cost`, livrée dans ITE-1, reproduit la baseline fonctionnelle ;
@@ -1129,6 +1284,11 @@ du pilote.* [A] Partie 2, 2B à 2D.
 durables, instruments hors dépôt, push non gardé. Les autres dettes restent au backlog
 pour des plans ultérieurs.*
 
+*Précisé le 08-10 (adjugé) et repris le 14-10 :* ces trois priorités restent prioritaires ; le plan de
+phase les distingue des autres dettes et propose explicitement celles qu'il inclut, **sans plafond
+automatique de trois items**. Les dettes ci-dessous, dont les deux issues de la clôture de
+LOT-PI-ADAPT en fin de liste, sont inscrites, non réalisées.
+
 - [ ] **`.pi-subagent-runs/` est ignoré par git et porte les registres durables.** Un
       `git clean -xfd` détruit le registre d'un run en vol ; constaté le 08-09, douze
       artefacts réels perdus. Forme indécise : déplacer hors du dépôt, ou protéger sur place.
@@ -1136,12 +1296,24 @@ pour des plans ultérieurs.*
       répertoire d'audit local, reconstruits à chaque passage. Tant qu'ils ne sont pas dans le
       dépôt, une preuve dépend d'un script joint plutôt que d'un fichier relu. À verser au
       regel. Même famille que la commande d'analyse perdue.
+      *[14-10]* Même famille aussi : l'instrument externe de qualification Mac r4 (18 fichiers) vit
+      hors dépôt, sous `/Users/MoG/audits/couche-pi/qualif-mac-correctif-r4/paquet/instrument/`, lié à
+      son candidat et à ses chemins (O2-1). Le CLI interne `bin/pi-contrats` n'est pas une
+      requalification opérationnelle de la production établie.
 - [ ] **Le manifeste de gel n'enregistre pas les outils de revue** — versions de Claude Code
       et de Codex, empreinte du prompt des relecteurs. Contourné à la main le 08-09.
 - [ ] **Le push n'est pas gardé en machine.** Le commit l'est (jeton à usage unique,
       `pre-commit`, `reference-transaction`) ; une adjudication « commit oui, push non » ne
       vit que dans un message — d'où l'écart `PUSH-B` du LOT 9. Candidat de garde, pas
       reproche.
+      *[14-10, précisé au portage POST-3]* Le jeton à usage unique relève du mécanisme TOKEN de
+      `bash-guard` pour les commandes interceptées, et non des trois crochets. Depuis POST-1 (13-10),
+      `core.hooksPath` local active
+      `commit-msg`, `pre-commit` et `reference-transaction` ; `pre-commit` refuse si
+      `PI_SUBAGENT_ROLE` est non vide, `reference-transaction` refuse en phase `prepared` sous le même
+      rôle ; une variable vide n'est pas refusée. Ils ne rendent pas Git intégralement en lecture
+      seule, ne prouvent pas à eux seuls l'impossibilité d'un push enfant et ne constituent pas un
+      jeton de commit à usage unique. **La dette de garde du push reste ouverte.**
 - [ ] **L'écrivain sous R accepte un registre v2 lisible mais `UNKNOWN`** — un `event_seq`
       dupliqué laisse passer un `REVIEWED`. Sans conséquence aujourd'hui (le producteur et la
       porte refusent en amont) ; durcissement distinct, avec falsification de l'absence
@@ -1157,6 +1329,16 @@ pour des plans ultérieurs.*
 - [ ] **Le footer ne dit pas quelle skill est sollicitée.** *La donnée manque d'abord :* la
       liste des skills dans l'artefact (voir phase 5). Afficher ce qui a été observé, ne pas
       observer pour afficher.
+- [ ] **D-P3-N1 / TMPDIR — N1 non portable au TMPDIR macOS par défaut.** *[13-10, clôture de
+      LOT-PI-ADAPT]* `tests/l0-pi-adapt.test.ts` dépend du TMPDIR : seules les portes M4 à
+      `/Users/MoG` (10 caractères) sont qualifiées ; un témoin à 12 caractères a échoué, sans seuil
+      universel ; `/private/tmp` reste hors du périmètre de portabilité établi. Dette de
+      phase 3, non bloquante pour la clôture obtenue. Devient condition d'entrée de la montée si les
+      portes tournent sous un autre TMPDIR (`MONTEE-PI` § 8). *À inclure explicitement au plan.*
+- [ ] **O1-7 / D-P3-PI-SURFACE-METADONNEES — un `.DS_Store` fait refuser le scanner de surfaces.**
+      *[13-10]* Un `.DS_Store` sous `tests/pi-contrats` peut faire refuser `tests/l0-pi-surface.test.ts`.
+      Correction future : distinguer cette métadonnée connue des sources non déclarées, sans ignorer
+      tous les non-suivis. Dette de phase 3. *À inclure explicitement au plan.*
 
 ### Phase 4 — mémoire portable, écriture seulement
 
@@ -1268,17 +1450,38 @@ Partie 2, 2E et 2H.
 
 ### Phase 9b — versions
 
-*Posée le 30-09 : juste après la clôture du lot ITE, jamais pendant un lot mesuré ; précède la
-phase 10.* **Avancée le 06-10 pour pi :** la montée de pi passe juste après la clôture du lot
-efficacité, avant la phase 0. [A] Partie 1, *Dépendances d'extensions non épinglées*, et
+*[Remplacé le 08-10, historique]* *Posée le 30-09 : juste après la clôture du lot ITE, jamais pendant un
+lot mesuré ; précède la phase 10.* **Avancée le 06-10 pour pi :** la montée de pi passe juste après la
+clôture du lot efficacité, avant la phase 0. [A] Partie 1, *Dépendances d'extensions non épinglées*, et
 LOT-EFFICACITE, 06-10.
 
-- [ ] **Inventaire et couche d'adaptation pi** — niveau A, neutre sur 0.86 : ce que la
-      configuration utilise de pi, isolé derrière une couche avant toute montée.
-- [ ] **Montée de pi par paliers** — 0.87.0 obligatoire, 0.99.0 explicite, version cible
-      épinglée ; MCP et codemode désactivés sauf adjudication contraire. Toutes les portes
-      et les contrats avec le SDK réel sont éprouvés à chaque palier ; des stubs seuls ne
-      suffisent pas. Un run QD de référence après le dernier palier conforme.
+*Ordre actuel (08-10, repris le 14-10) :* la phase 9b vient **après la phase 9**, puis le QD de référence
+sur son environnement final, puis la phase 10. La montée de pi n'est plus avancée avant la phase 0.
+**0.86.0 reste la seule version qualifiée ; aucune cible n'est choisie ni recherchée par le portage.**
+Procédure : `docs/MONTEE-PI.md`.
+
+- [x] **Inventaire et couche d'adaptation pi** — niveau A, neutre sur 0.86 : ce que la
+      configuration utilise de pi, isolé derrière une couche avant toute montée. **Clos le 13-10**
+      (LOT-PI-ADAPT, commit `2def810f`, arbre `b1a99caa`) dans son périmètre ; voir *Ce qui est fait*.
+      Ne clôt ni P3 ni la montée de pi : celle-ci reste ouverte ci-dessous.
+- [ ] **Montée de pi directe vers la cible stable publiée.** *[adjugé le 08-10, remplace les paliers du
+      06-10]* La cible est la dernière version stable publiée, **vérifiée à la constitution du plan de
+      montée**, puis désignée par sa version exacte et ses empreintes ; jamais `latest` comme identité
+      d'exécution ; une publication ultérieure ne change pas la cible adjugée. 0.87.0 et 0.99.0 ne
+      sont plus des paliers qualifiés obligatoires : diagnostic déclaré et autorisé seulement ; une
+      rupture nominale sur la cible impose ARRÊT et retour. pi 1.0.1 retire `npm-shrinkwrap.json`
+      (notes officielles, constat de Sol du 08-10) : **épingler la seule version ne suffit pas** à
+      identifier une installation reproductible ; la nouvelle identité d'instrument est soumise à Sol
+      avant qualification. MCP et codemode restent désactivés sauf adjudication contraire. Les
+      contrats avec le SDK réel, les portes et le registre servent à qualifier la cible ; des stubs
+      seuls ne suffisent pas. *Conditions d'entrée :* `docs/MONTEE-PI.md` §§ 2 et 8 — plan
+      complémentaire des surfaces restantes (P3), liaison de `PI_VERSION_QUALIFIEE` (O1-4),
+      instrument de la cible (O2-1), formes jiti (O2-4), portabilité, D-P3-N1 et D-P3-PI-SURFACE-
+      METADONNEES selon le cas, sujets de commit du runtime.
+      *Ancien libellé (06-10), remplacé :* « Montée de pi par paliers — 0.87.0 obligatoire, 0.99.0
+      explicite, version cible épinglée ; MCP et codemode désactivés sauf adjudication contraire.
+      Toutes les portes et les contrats avec le SDK réel sont éprouvés à chaque palier ; des stubs
+      seuls ne suffisent pas. Un run QD de référence après le dernier palier conforme. »
 
 - [ ] **Monter les versions laissées en attente, une à la fois** — système et outils, puis
       Node, puis pi, puis les extensions non épinglées. Tout a été qualifié sur un
@@ -1288,6 +1491,13 @@ LOT-EFFICACITE, 06-10.
       modèles. L'épinglage de pi dans les scripts se change par un commit explicite.
       *Pour pi, tranché le 06-10 (items ci-dessus).* Le QD conforme après le dernier palier
       devient la nouvelle référence de version ; les anciennes baselines restent immuables.
+      *[14-10]* « Node v26.10.0 » est l'état du 06-10, historique : LOT-PI-ADAPT a été qualifié sous
+      Node 22.22.0 et 26.11.1 (bac) et Node 26.11.1 (Mac r4), pi 0.86.0. *Pour pi, « par paliers » et
+      « dernier palier » sont remplacés le 08-10 par la montée directe ci-dessus.* Les autres montées
+      de la phase 9b restent séquencées, une version à la fois, toutes les portes applicables après
+      chacune ; une livraison commune n'autorise pas une mise à jour simultanée. Le QD de référence suit
+      la qualification de pi et la stabilisation des autres versions, sur l'environnement exact qui
+      entre en phase 10, sur autorisation propre.
 
 ### Phase 10 — modèles
 
@@ -1299,6 +1509,11 @@ LOT-EFFICACITE, 06-10.
       par sous-chaîne et ordre alphabétique, pas par version. *L'avertissement au chargement*
       (« plus récent disponible », jamais de bascule automatique) peut venir plus tôt, hors de
       tout lot mesuré.
+      *[08-10, repris le 14-10]* Une phase par lot : la livraison commune conserve les changements et
+      mesures par rôle (modèle exact, un commit par rôle lorsqu'il est autorisé, appel réel, run de
+      référence, banc avant/après). Le témoin avant changement de modèle est établi sur
+      l'environnement final de 9b, pour ne pas attribuer au modèle l'effet d'une montée de pi ou de
+      Node.
 
 ### Hors phase — faisable à tout moment
 
@@ -1399,6 +1614,14 @@ finalité (phase 0). [A] Partie 2, 2G.
 - [ ] ~~**Registre de findings**~~ — *en phase 5, avant le banc.*
 - [ ] `main` à jour : `git push --force-with-lease origin feat/subagent-extension:main`.
       *Un push :* sur adjudication de Sol, après le gel.
+- [ ] **Construire à l'exécution les littéraux factices des tests** — `tests/guards.test.ts` et
+      `tests/l0-a-harness.test.ts`. *Proposition de Mo, après une alerte GitHub déclarée fermée
+      « Used in tests ».* **Lot distinct, non urgent, à instruire** (adjugé le 14-10) : identifier les
+      sites et la nature synthétique des données, préserver les propriétés et résultats des tests, ne
+      pas assouplir une garde ni son détecteur. L'absence de toute nouvelle alerte n'est pas promise ;
+      aucune conclusion générale sur les secrets de l'historique n'est acquise par ce signalement.
+      Aucun changement de ces tests dans le portage POST-3 ; aucun scan ni purge ouverts ; les autres
+      dettes de sécurité historiques (`CHANTIER.md`, § 8) sont conservées.
 
 ---
 
@@ -1414,3 +1637,7 @@ lot ou de gel, dans un commit de documentation seul. Pour ce portage du 06-10, l
 d'attente reste entière : le commit ne vaut ni archivage ni autorisation de la vider.
 Une publication ultérieure d'archive fera l'objet d'une livraison documentaire distincte,
 après relecture de `A-RELIRE-AVANT-PUBLICATION.md` et des octets destinés au dépôt.
+
+*Portage POST-3 (14-10) :* même régime — la boîte d'attente reste entière, le commit ne vaut ni
+archivage ni autorisation de la vider. Un commit de documentation passe par le crochet `commit-msg`
+actif (POST-1) : voir le format dans *Ce qui est fait*.
