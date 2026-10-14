@@ -7,13 +7,14 @@ description: Load for git workflow tasks — security audit, staging, commit dra
  
 ## Conventional Commits — drafting aid
 
-The format is **enforced by the `commit-msg` git hook** (`git-hooks/commit-msg` in
-this repo), not by this skill. Git rejects a malformed subject whatever wrote
-it — agent, Claude Code, or a terminal. What follows is here to help draft a
-message that passes, not to be the thing that enforces it.
+The format is **enforced by the `commit-msg` git hook** (`git-hooks/commit-msg`,
+active in this repo through `core.hooksPath`), not by this skill. Git rejects a
+malformed subject whatever wrote it — agent, Claude Code, or a terminal. What
+follows is here to help draft a message that passes, not to be the thing that
+enforces it.
  
 ```
-<type>(<scope>): <subject>
+<type>[(<scope>)][!]: <subject>
  
 <body — optional>
  
@@ -42,6 +43,10 @@ no regex can tell `add` from `added`):
 - No trailing period
 - ≤72 characters
 - Imperative present tense: `add`, `fix`, `update` — not `added`, `fixes`, `updated`
+
+The hook skips subjects starting with `Merge `, `Revert `, `fixup! `, `squash! `,
+`amend! `. Runtime subjects (`chore(subagent): …`) get no exemption.
+
 **Body:** explain *why*, not *what* — the diff already shows what changed. Use bullet points.
  
 **Footer:** `BREAKING CHANGE:`, `Refs: TICKET-123`, `Co-authored-by:`.
@@ -221,6 +226,7 @@ are approved separately.
    bash-guard intercepts this and asks the operator for a single-use authorisation.
    That dialog approves the **act**; the prompt above approved the wording. Both are
    expected — do not try to avoid the second one.
+   Never `--no-verify`: if a hook refuses, report its message and stop.
 3. Return the result in one line: `[hash] committed to [branch]`.
 4. Then ask, exactly, on one line, nothing else:
    ```
