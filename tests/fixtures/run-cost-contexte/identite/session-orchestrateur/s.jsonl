@@ -1,0 +1,4 @@
+{"cwd": "/d", "id": "s0", "timestamp": "2026-01-01T00:00:00.000Z", "type": "session", "version": 3}
+{"id": "e1", "message": {"content": [{"text": "UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU", "type": "text"}], "role": "user", "timestamp": "2026-01-01T00:00:01.000Z"}, "parentId": "s0", "timestamp": "2026-01-01T00:00:01.000Z", "type": "message"}
+{"id": "e2", "message": {"content": [{"text": "AAAAAAAAAAAAAAAAAAAA", "type": "text"}], "role": "assistant", "timestamp": "2026-01-01T00:00:02.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 30, "output": 5, "totalTokens": 35}}, "parentId": "e1", "timestamp": "2026-01-01T00:00:02.000Z", "type": "message"}
+{"id": "e3", "message": {"content": [{"text": "[run f0f0f0f0f0f0f0f0] ok", "type": "text"}], "role": "toolResult", "timestamp": "2026-01-01T00:00:03.000Z", "toolCallId": "t", "toolName": "task"}, "parentId": "e2", "timestamp": "2026-01-01T00:00:03.000Z", "type": "message"}

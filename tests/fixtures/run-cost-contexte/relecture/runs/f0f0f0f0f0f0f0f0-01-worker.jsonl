@@ -1,0 +1,87 @@
+{"cwd": "/w", "id": "f0f0f0f0f0f0f0f0-worker", "timestamp": "2026-01-01T00:00:00.000Z", "type": "session", "version": 3}
+{"type": "agent_start"}
+{"message": {"content": "", "role": "system", "sections": {"preamble": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS"}, "timestamp": "2026-01-01T00:00:01.000Z"}, "type": "message_start"}
+{"message": {"content": "", "role": "system", "sections": {"preamble": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS"}, "timestamp": "2026-01-01T00:00:01.000Z"}, "type": "message_end"}
+{"message": {"content": [{"text": "tâche", "type": "text"}], "role": "user", "timestamp": "2026-01-01T00:00:02.000Z"}, "type": "message_start"}
+{"message": {"content": [{"text": "tâche", "type": "text"}], "role": "user", "timestamp": "2026-01-01T00:00:02.000Z"}, "type": "message_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 10, "offset": 1, "path": "a.py"}, "id": "c1", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:03.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 100, "output": 5, "totalTokens": 105}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 10, "offset": 1, "path": "a.py"}, "id": "c1", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:03.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 100, "output": 5, "totalTokens": 105}}, "type": "message_end"}
+{"message": {"content": [{"text": "A001\nA002\nA003\nA004\nA005\nA006\nA007\nA008\nA009\nA010\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:04.000Z", "toolCallId": "c1", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "A001\nA002\nA003\nA004\nA005\nA006\nA007\nA008\nA009\nA010\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:04.000Z", "toolCallId": "c1", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 96, "offset": 5, "path": "a.py"}, "id": "c2", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:05.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 200, "output": 5, "totalTokens": 205}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 96, "offset": 5, "path": "a.py"}, "id": "c2", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:05.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 200, "output": 5, "totalTokens": 205}}, "type": "message_end"}
+{"message": {"content": [{"text": "A005\nA006\nA007\nA008\nA009\nA010\nA011\nA012\nA013\nA014\nA015\nA016\nA017\nA018\nA019\nA020\nA021\nA022\nA023\nA024\nA025\nA026\nA027\nA028\nA029\nA030\nA031\nA032\nA033\nA034\nA035\nA036\nA037\nA038\nA039\nA040\nA041\nA042\nA043\nA044\nA045\nA046\nA047\nA048\nA049\nA050\nA051\nA052\nA053\nA054\nA055\nA056\nA057\nA058\nA059\nA060\nA061\nA062\nA063\nA064\nA065\nA066\nA067\nA068\nA069\nA070\nA071\nA072\nA073\nA074\nA075\nA076\nA077\nA078\nA079\nA080\nA081\nA082\nA083\nA084\nA085\nA086\nA087\nA088\nA089\nA090\nA091\nA092\nA093\nA094\nA095\nA096\nA097\nA098\nA099\nA100\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:06.000Z", "toolCallId": "c2", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "A005\nA006\nA007\nA008\nA009\nA010\nA011\nA012\nA013\nA014\nA015\nA016\nA017\nA018\nA019\nA020\nA021\nA022\nA023\nA024\nA025\nA026\nA027\nA028\nA029\nA030\nA031\nA032\nA033\nA034\nA035\nA036\nA037\nA038\nA039\nA040\nA041\nA042\nA043\nA044\nA045\nA046\nA047\nA048\nA049\nA050\nA051\nA052\nA053\nA054\nA055\nA056\nA057\nA058\nA059\nA060\nA061\nA062\nA063\nA064\nA065\nA066\nA067\nA068\nA069\nA070\nA071\nA072\nA073\nA074\nA075\nA076\nA077\nA078\nA079\nA080\nA081\nA082\nA083\nA084\nA085\nA086\nA087\nA088\nA089\nA090\nA091\nA092\nA093\nA094\nA095\nA096\nA097\nA098\nA099\nA100\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:06.000Z", "toolCallId": "c2", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 10, "offset": 1, "path": "b.py"}, "id": "c3", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:07.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 300, "output": 5, "totalTokens": 305}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 10, "offset": 1, "path": "b.py"}, "id": "c3", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:07.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 300, "output": 5, "totalTokens": 305}}, "type": "message_end"}
+{"message": {"content": [{"text": "B001\nB002\nB003\n\n[7 more lines in file. Use offset=4 to continue.]", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:08.000Z", "toolCallId": "c3", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "B001\nB002\nB003\n\n[7 more lines in file. Use offset=4 to continue.]", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:08.000Z", "toolCallId": "c3", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 5, "offset": 1, "path": "b.py"}, "id": "c4", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:09.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 400, "output": 5, "totalTokens": 405}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 5, "offset": 1, "path": "b.py"}, "id": "c4", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:09.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 400, "output": 5, "totalTokens": 405}}, "type": "message_end"}
+{"message": {"content": [{"text": "B001\nB002\nB003\nB004\nB005\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:10.000Z", "toolCallId": "c4", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "B001\nB002\nB003\nB004\nB005\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:10.000Z", "toolCallId": "c4", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"newText": "y", "oldText": "x", "path": "a.py"}, "id": "c5", "name": "edit", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:11.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 500, "output": 5, "totalTokens": 505}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"newText": "y", "oldText": "x", "path": "a.py"}, "id": "c5", "name": "edit", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:11.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 500, "output": 5, "totalTokens": 505}}, "type": "message_end"}
+{"message": {"content": [{"text": "Successfully replaced text in a.py.", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:12.000Z", "toolCallId": "c5", "toolName": "edit"}, "type": "message_start"}
+{"message": {"content": [{"text": "Successfully replaced text in a.py.", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:12.000Z", "toolCallId": "c5", "toolName": "edit"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 10, "offset": 1, "path": "a.py"}, "id": "c6", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:13.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 600, "output": 5, "totalTokens": 605}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 10, "offset": 1, "path": "a.py"}, "id": "c6", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:13.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 600, "output": 5, "totalTokens": 605}}, "type": "message_end"}
+{"message": {"content": [{"text": "A001\nA002\nA003\nA004\nA005\nA006\nA007\nA008\nA009\nA010\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:14.000Z", "toolCallId": "c6", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "A001\nA002\nA003\nA004\nA005\nA006\nA007\nA008\nA009\nA010\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:14.000Z", "toolCallId": "c6", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"command": "ls"}, "id": "c7", "name": "bash", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:15.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 700, "output": 5, "totalTokens": 705}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"command": "ls"}, "id": "c7", "name": "bash", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:15.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 700, "output": 5, "totalTokens": 705}}, "type": "message_end"}
+{"message": {"content": [{"text": "a.py\nb.py\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:16.000Z", "toolCallId": "c7", "toolName": "bash"}, "type": "message_start"}
+{"message": {"content": [{"text": "a.py\nb.py\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:16.000Z", "toolCallId": "c7", "toolName": "bash"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 2, "offset": 1, "path": "b.py"}, "id": "c8", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:17.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 800, "output": 5, "totalTokens": 805}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 2, "offset": 1, "path": "b.py"}, "id": "c8", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:17.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 800, "output": 5, "totalTokens": 805}}, "type": "message_end"}
+{"message": {"content": [{"text": "B001\nB002\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:18.000Z", "toolCallId": "c8", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "B001\nB002\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:18.000Z", "toolCallId": "c8", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"path": "c.py"}, "id": "c9", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:19.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 900, "output": 5, "totalTokens": 905}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"path": "c.py"}, "id": "c9", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:19.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 900, "output": 5, "totalTokens": 905}}, "type": "message_end"}
+{"message": {"content": [{"text": "ENOENT: no such file", "type": "text"}], "isError": true, "role": "toolResult", "timestamp": "2026-01-01T00:00:20.000Z", "toolCallId": "c9", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "ENOENT: no such file", "type": "text"}], "isError": true, "role": "toolResult", "timestamp": "2026-01-01T00:00:20.000Z", "toolCallId": "c9", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"offset": 1, "path": "d.py"}, "id": "c10", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:21.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 1000, "output": 5, "totalTokens": 1005}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"offset": 1, "path": "d.py"}, "id": "c10", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:21.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 1000, "output": 5, "totalTokens": 1005}}, "type": "message_end"}
+{"message": {"content": [{"text": "D001\n[Output truncated at 50KB]", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:22.000Z", "toolCallId": "c10", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "D001\n[Output truncated at 50KB]", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:22.000Z", "toolCallId": "c10", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"arguments": {"limit": 2, "offset": 1, "path": "lien/a.py"}, "id": "c11", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:23.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 1100, "output": 5, "totalTokens": 1105}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"arguments": {"limit": 2, "offset": 1, "path": "lien/a.py"}, "id": "c11", "name": "read", "type": "toolCall"}], "role": "assistant", "timestamp": "2026-01-01T00:00:23.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 1100, "output": 5, "totalTokens": 1105}}, "type": "message_end"}
+{"message": {"content": [{"text": "A001\nA002\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:24.000Z", "toolCallId": "c11", "toolName": "read"}, "type": "message_start"}
+{"message": {"content": [{"text": "A001\nA002\n", "type": "text"}], "isError": false, "role": "toolResult", "timestamp": "2026-01-01T00:00:24.000Z", "toolCallId": "c11", "toolName": "read"}, "type": "message_end"}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"text": "fin", "type": "text"}], "role": "assistant", "timestamp": "2026-01-01T00:00:25.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 1200, "output": 5, "totalTokens": 1205}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"text": "fin", "type": "text"}], "role": "assistant", "timestamp": "2026-01-01T00:00:25.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 1200, "output": 5, "totalTokens": 1205}}, "type": "message_end"}

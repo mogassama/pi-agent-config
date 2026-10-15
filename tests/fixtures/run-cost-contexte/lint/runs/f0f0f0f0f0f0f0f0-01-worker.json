@@ -1,0 +1,1 @@
+{"durationMs": 1000, "envelope": {"payload": {}, "role": "worker", "status": "ok"}, "model": "m", "role": "worker", "runId": "f0f0f0f0f0f0f0f0", "task": "tâche", "turns": 6, "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 2100, "output": 30, "total": 2130}}

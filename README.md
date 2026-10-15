@@ -429,6 +429,48 @@ What this does and does not give:
 - `--no-verify` is not used to get past a refusal: the commit is reported and
   stopped. Undoing the activation is a separate operator decision.
 
+## Mesure du contexte (`run-cost --contexte`)
+
+`bin/run-cost` reads a run's billed tokens: the adjudicated cost grid, cut at the terminal plan, and its breakdowns. The `--contexte` option (phase-0 plan v3) adds a read-only *direct reading* of what entered each child's calls. It is a consultation command. It changes no runtime behaviour and has nothing to activate.
+
+```bash
+bin/run-cost <runs> <sessions> --contexte [--json out.json]
+```
+
+**What it does, per delegation.** It takes the `message_end` events of the transcription, after an identity check and a collision check. It classifies every observed character into exactly one origin, with a fixed priority:
+
+1. O-lint
+2. O-revue
+3. O-relecture and O-relecture-incertaine
+4. O-lecture
+5. O-tâche
+6. O-préfixe
+7. O-bash, O-edit-write and O-autres-outils
+8. O-sortie and O-sortie-thinking
+9. O-autre and O-non-textuel
+
+**How the figures are computed.**
+
+- **Estimates.** Each origin is estimated at exactly characters/4, independently of the usage fields.
+- **Residual.** The input billed at call *t*, C_t = `input + cacheRead + cacheWrite`, is set against the estimates assumed resident at *t*. Residence (H-rés) is an unproven hypothesis. The signed residual is R_t = C_t − Σ resident estimates.
+- **Published figures.** Cumulative parts are published without renormalisation, together with the residual mass Σ|R_t|/ΣC_t. Each figure comes in two variants, with and without the observed `thinking` texts.
+- **Verdict.** Always **attribution non établie**. The head of the ranking is called *premier poste estimé*.
+- **Traceability.** Each origin lists structured references, never copied text: transcription member, message rank, tool call and line ranges for a `read`, and for O-revue the reviewer's sequence, artefact, field and task interval. All references are kept when positions merge, and no character is counted twice. The frame of a truncated `read` (footer and separator) goes to O-autre as *encadrement de read*, not to the new lines.
+- **Denominators.** Per role, the known expected mass (C from the artefacts, delegations without a transcription included), the observed mass (ΣC of the delegations read, the denominator of the parts) and the delegations whose expected mass is unknown are published separately. When a role is not fully read, its parts and ranking are labelled as covering the observed subset only.
+
+The orchestrator session is read the same way as a secondary reading: its prefix is not observable, it is rebuilt across compactions, and it carries no verdict.
+
+**Refusals and stops.** Without `--contexte`, the output is byte-for-byte unchanged. With it, the following refuse with code 2 (`PRÉCONDITION`):
+
+- an illegible line;
+- a foreign or inconsistent identity: header id, journal line, artefact `runId`/`role`, an artefact missing from the journal, or one sequence carried by two artefacts;
+- a colliding event;
+- a per-field mismatch between turns and artefact, or an artefact usage or `turns` field that is not an integer (a boolean is not a count).
+
+A missing transcription, missing usage (in a turn or in the artefact, field by field), a null or decreasing context, or an ambiguous compaction branch is reported as a named state, never as a zero. A `for_risks` link is published only when its single `opened` event names exactly the retained reviewer artefact of the same run and unit, earlier than the worker; otherwise it is *non documenté*. If an internal reconciliation fails (Σ per-origin = Σ estimate, and Σ estimate + ΣR = 4·ΣC in quarter tokens), the program stops with code 1.
+
+**Tests.** The `Contexte` class of `tests/test_run_cost.py` covers cases K01–K47. Their deterministic fixtures and hand-computed expectations are in `tests/fixtures/run-cost-contexte/` (`generer.py`, `ATTENDUS.md`).
+
 ## pi version and the adaptation layer (LOT-PI-ADAPT)
 
 LOT-PI-ADAPT is **closed** (13 October 2026), level A, neutral on pi 0.86.0. It

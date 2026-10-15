@@ -1,0 +1,10 @@
+{"cwd": "/w", "id": "f0f0f0f0f0f0f0f0-worker", "timestamp": "2026-01-01T00:00:00.000Z", "type": "session", "version": 3}
+{"type": "agent_start"}
+{"message": {"content": "", "role": "system", "sections": {"preamble": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS"}, "timestamp": "2026-01-01T00:00:01.000Z"}, "type": "message_start"}
+{"message": {"content": "", "role": "system", "sections": {"preamble": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS"}, "timestamp": "2026-01-01T00:00:01.000Z"}, "type": "message_end"}
+{"message": {"content": [{"text": "Première tâche. Respecter strictement le périmètre d'écriture déclaré dans le plan gelé.", "type": "text"}], "role": "user", "timestamp": "2026-01-01T00:00:02.000Z"}, "type": "message_start"}
+{"message": {"content": [{"text": "Première tâche. Respecter strictement le périmètre d'écriture déclaré dans le plan gelé.", "type": "text"}], "role": "user", "timestamp": "2026-01-01T00:00:02.000Z"}, "type": "message_end"}
+{"type": "turn_start"}
+{"message": {"content": [{"text": "x", "type": "text"}], "role": "assistant", "timestamp": "2026-01-01T00:00:03.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 50, "output": 5, "totalTokens": 55}}, "type": "message_start"}
+{"type": "message_update"}
+{"message": {"content": [{"text": "x", "type": "text"}], "role": "assistant", "timestamp": "2026-01-01T00:00:03.000Z", "usage": {"cacheRead": 0, "cacheWrite": 0, "input": 50, "output": 5, "totalTokens": 55}}, "type": "message_end"}

@@ -1,0 +1,1 @@
+{"version": 1, "work_units": [{"id": "W01", "goal": "g", "depends_on": [], "expected_write_scope": ["src"]}, {"id": "W02", "goal": "g", "depends_on": [], "expected_write_scope": ["src"]}]}

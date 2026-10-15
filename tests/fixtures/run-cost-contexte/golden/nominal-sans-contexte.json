@@ -1,0 +1,71 @@
+{
+  "run": "f0f0f0f0f0f0f0f0",
+  "selection_run": "seul run du dossier",
+  "plan": "f0f0f0f0f0f0f0f0-plan.json · planHash 269dd0f09b2def83 vérifié (manifeste actif)",
+  "sessions": [
+    "s.jsonl"
+  ],
+  "selection_sessions": "toutes les sessions du dossier, chacune attribuée au run",
+  "unites": [
+    "W01"
+  ],
+  "coupure": "plan jamais terminal : pas de coupure",
+  "releves": {
+    "orchestrateur": {
+      "avant": 35,
+      "apres": 0
+    },
+    "sous_agents": {
+      "avant": 360,
+      "apres": 0
+    },
+    "par_role": {
+      "worker": {
+        "avant": 360,
+        "apres": 0
+      }
+    },
+    "total": {
+      "avant": 395,
+      "apres": 0
+    }
+  },
+  "orchestrateur_natures_estime": {
+    "retour de délégation": {
+      "n": 1,
+      "tokens": 6,
+      "residence": 0
+    }
+  },
+  "relectures_estime": {},
+  "delegations": [
+    {
+      "seq": 1,
+      "at": "2026-01-01T00:00:01.000Z",
+      "role": "worker",
+      "unite": "W01",
+      "artifact_nom": "f0f0f0f0f0f0f0f0-01-worker.json",
+      "tours": 2,
+      "injecte": null,
+      "duree_s": 1,
+      "usage": {
+        "input": 350,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "output": 10
+      },
+      "total": 360,
+      "part_cache": 0.0,
+      "verdict": "ok",
+      "constats": [],
+      "outils": {},
+      "relectures": {},
+      "echec": null
+    }
+  ],
+  "par_unite": {
+    "W01": [
+      1
+    ]
+  }
+}

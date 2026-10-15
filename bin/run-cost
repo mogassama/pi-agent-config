@@ -3,7 +3,7 @@
 run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée au plan terminal, et sa décomposition.
 
   bin/run-cost <runs> <sessions> [--run <runId>] [--session <fichier>]… [--coupure auto|aucune|<ISO>]
-               [--json <fichier>] [--tours] [--cycles] [--postes]
+               [--json <fichier>] [--tours] [--cycles] [--postes] [--contexte]
 
   <runs>      le `.pi-subagent-runs` du dépôt, ou sa copie relevée
   <sessions>  le dossier des sessions pi de l'orchestrateur pour ce dépôt (*.jsonl)
@@ -26,6 +26,11 @@ run-cost — où vont les tokens d'un run : la grille de coût adjugée, coupée
               scope-breach et open-risks, approved avec risque ouvert, refus REVIEW_APPROVED_WITH_OPEN_RISKS
               et WRITE_OUTSIDE_SCOPE relevés dans les transcriptions (lues sans omission), refus de plan
               structurés (`details.plan_refusal`).
+  --contexte  ajoute la lecture directe du contexte (phase 0, mesure A, niveau B) : pour chaque délégation,
+              les textes finalisés observés avant chaque appel, rangés par origine (une seule par caractère),
+              estimés à caractères / 4 exactement ; résidence H-rés, non prouvée ; résidu R_t = C_t − Σ estimé,
+              signé, jamais redistribué ; parts non renormalisées ; verdict « attribution non établie » et
+              « premier poste estimé ». Lecture stricte ; identités nom/artefact/journal/en-tête contrôlées.
   --postes    ajoute les postes de LOT-EFFICACITÉ (M) : les règles D1 et D3 adjugées au diagnostic,
               versionnées sans changement, et les compteurs des leviers.
               D1 — chaque appel de l'orchestrateur avant coupure dans UNE catégorie, décidée sur ses
@@ -93,11 +98,13 @@ Une délégation compte AVANT si elle a commencé avant la coupure ; un appel de
 horodatage la précède. Rien ici n'écrit, rien ne lance git. Code 0 ; 2 sur une précondition ; 1 si un
 rapprochement de --postes n'est pas nul.
 """
+import difflib
 import fnmatch
 import glob
 import hashlib
 import json
 import os
+import posixpath
 import re
 import statistics as st
 import sys
@@ -1190,12 +1197,777 @@ def postes(runs, run_id, unites, fichiers_sessions, dl, releves, coupure, avant)
 
 # ------------------------------------------------------------------ grille
 
+# ------------------------------------------------------------------ contexte (--contexte, phase 0)
+#
+# Lecture directe et descriptive de ce qui entre dans l'appel de chaque tour (plan de phase 0 v3).
+# RELEVÉ : C_t = input + cacheRead + cacheWrite de l'usage du message assistant du tour t ; jamais
+# ventilé entre origines. ESTIMÉ : les textes finalisés observés avant l'appel, rangés par origine
+# (une seule par caractère), estimés à caractères / 4 exactement — tenus en « quarts » (caractères)
+# pour rester entiers ; aucun calcul d'estimation ne lit C_t. HYPOTHÈSE H-rés, non prouvée : un message
+# finalisé avant l'appel t réside dans l'entrée de t et des appels suivants. RÉSIDU : R_t = C_t − Σ
+# estimations résidentes, signé, jamais redistribué. Verdict : « attribution non établie » ; le
+# classement descriptif nomme son premier poste « premier poste estimé ».
+
+CTX_MARQUE_RUFF = "\n\n--- ruff ("
+CTX_MARQUE_MYPY = "mypy failed on files edited this turn:"
+CTX_PIED_READ = re.compile(r"^\[(\d+) more lines in file\. Use offset=(\d+) to continue\.\]$")
+CTX_PIED_SUSPECT = re.compile(r"^\[.*(more lines|truncat|offset=).*\]$", re.IGNORECASE)
+CTX_ARTEFACT = re.compile(r"^([0-9a-f]{16})-(\d{2})-([a-z][a-z-]*)\.json$")
+CTX_SEUIL_REVUE = 40
+CTX_ATTRIBUABLES = ("O-lint", "O-revue", "O-relecture", "O-lecture", "O-tâche", "O-préfixe", "O-bash",
+                    "O-edit-write", "O-autres-outils", "O-sortie", "O-sortie-thinking",
+                    "O-opérateur", "O-retours-task", "O-résumé")
+CTX_INCERTAINS = ("O-relecture-incertaine",)
+CTX_NON_ATTRIBUABLES = ("O-autre", "O-non-textuel")
+CTX_RESIDU_ORCH = "éléments non observables, dont préfixe, et écart d'estimation"
+
+
+class CtxIncoherence(Exception):
+    """Rapprochement interne de --contexte en défaut : code 1, ARRÊT."""
+
+
+def ctx_rapprocher(etiquette, b):
+    """Σ cumul par origine = Σ estimé, et Σ estimé + ΣR = 4·ΣC (en quarts), sur les mêmes tours."""
+    if sum(b["cumul_q"].values()) != b["somme_estime_q"] or b["somme_estime_q"] + b["somme_R_q"] != 4 * b["somme_C"]:
+        raise CtxIncoherence(f"{etiquette} : Σ cumul {sum(b['cumul_q'].values())} · Σ estimé {b['somme_estime_q']}"
+                             f" · ΣR {b['somme_R_q']} · 4·ΣC {4 * b['somme_C']} (quarts)")
+
+
+def ctx_lire(chemin):
+    """Lecture stricte : une ligne illisible refuse, fichier et ligne nommés."""
+    return jsonl(chemin)
+
+
+def ctx_q(n):
+    """Un nombre de quarts de jeton, affiché en jetons à deux décimales, sans arrondi (exact)."""
+    signe = "-" if n < 0 else ""
+    n = abs(n)
+    return f"{signe}{n // 4}.{(n % 4) * 25:02d}"
+
+
+def ctx_entier(v):
+    """Un entier de comptage : int, jamais bool (True n'est pas 1 tour ni 1 jeton)."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def ctx_intervalles(numeros):
+    """[[début, fin]] contigus (bornes incluses) d'un ensemble de numéros de lignes."""
+    out = []
+    for n in sorted(numeros):
+        if out and n == out[-1][1] + 1:
+            out[-1][1] = n
+        else:
+            out.append([n, n])
+    return out
+
+
+def ctx_blocs(contenu):
+    """[(type, texte)] ; un bloc non textuel garde son type et un texte vide."""
+    if isinstance(contenu, str):
+        return [("text", contenu)]
+    out = []
+    for x in contenu or []:
+        if not isinstance(x, dict):
+            out.append(("non-textuel", ""))
+        elif x.get("type") == "text":
+            out.append(("text", str(x.get("text") or "")))
+        elif x.get("type") == "thinking":
+            out.append(("thinking", str(x.get("thinking") or "")))
+        elif x.get("type") == "toolCall":
+            corps = json.dumps(x.get("arguments") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            out.append(("toolCall", str(x.get("name") or "") + corps))
+        else:
+            out.append(("non-textuel", ""))
+    return out
+
+
+def ctx_canonique(evenements, etiquette):
+    """Les seuls message_end, dans l'ordre, contrôlés contre la collision (rôle, timestamp, toolCallId)."""
+    vus, out, turn_end_vu = set(), [], False
+    for e in evenements:
+        t = e.get("type")
+        if t == "turn_end":
+            turn_end_vu = True
+        if t != "message_end":
+            continue
+        m = e.get("message") or {}
+        cle = (m.get("role"), m.get("timestamp"), m.get("toolCallId"))
+        if m.get("timestamp") is None:
+            raise Refus(f"{etiquette} : message_end sans timestamp (rôle {m.get('role')}) — collision non contrôlable")
+        if cle in vus:
+            raise Refus(f"{etiquette} : collision de message_end {cle}")
+        vus.add(cle)
+        out.append({"m": m, "apres_turn_end": turn_end_vu})
+        turn_end_vu = False
+    return out
+
+
+def ctx_lignes(texte_):
+    """Les lignes d'un résultat, chacune avec son saut de ligne s'il existe."""
+    return [x for x in re.split(r"(?<=\n)", texte_) if x != ""]
+
+
+def ctx_plage(texte_, offset):
+    """
+    (lignes de contenu avec leur numéro, caractères d'encadrement) d'un résultat `read`, ou None si
+    la plage réellement retournée n'est pas établie (pied inconnu, compte discordant).
+    """
+    lignes = ctx_lignes(texte_)
+    corps = [x.rstrip("\n") for x in lignes]
+    pied = None
+    if corps and CTX_PIED_READ.match(corps[-1]):
+        m = CTX_PIED_READ.match(corps[-1])
+        pied = int(m.group(2))
+        lignes = lignes[:-1]
+        if lignes and lignes[-1] == "\n":
+            lignes = lignes[:-1]
+    elif corps and CTX_PIED_SUSPECT.match(corps[-1]):
+        return None
+    if pied is not None and pied - offset != len(lignes):
+        return None
+    contenu = [(offset + i, len(x)) for i, x in enumerate(lignes)]
+    encadrement = len(texte_) - sum(n for _, n in contenu)
+    return contenu, encadrement
+
+
+class CtxLectures:
+    """Lignes déjà retournées par chemin, depuis la dernière invalidation ; incertaines après un bash."""
+
+    def __init__(self, cwd):
+        self.cwd = cwd or "/"
+        self.sures, self.incertaines = {}, {}
+
+    def chemin(self, args):
+        p = (args or {}).get("path")
+        if not isinstance(p, str) or not p:
+            return None
+        return posixpath.normpath(posixpath.join(self.cwd, p))
+
+    def ecriture(self, chemin):
+        if chemin:
+            self.sures.pop(chemin, None)
+            self.incertaines.pop(chemin, None)
+
+    def bash(self):
+        for c, s in self.sures.items():
+            self.incertaines.setdefault(c, set()).update(s)
+        self.sures = {}
+
+    def lecture(self, args, texte_):
+        """
+        [(origine, caractères, libellé, plages de lignes)] d'un résultat read réussi. L'encadrement (pied
+        de troncature et son séparateur) n'est pas une ligne du fichier : O-autre, « encadrement de read ».
+        """
+        chemin = self.chemin(args)
+        offset = (args or {}).get("offset", 1)
+        if chemin is None or not ctx_entier(offset) or offset < 1:
+            return [("O-relecture-incertaine", len(texte_), "read", None)]
+        plage = ctx_plage(texte_, offset)
+        if plage is None:
+            return [("O-relecture-incertaine", len(texte_), "read", None)]
+        contenu, encadrement = plage
+        sures, incertaines = self.sures.get(chemin, set()), self.incertaines.get(chemin, set())
+        out = {"O-relecture": [0, []], "O-relecture-incertaine": [0, []], "O-lecture": [0, []]}
+        for n, nb in contenu:
+            if n in sures:
+                o = "O-relecture"
+            elif n in incertaines:
+                o = "O-relecture-incertaine"
+            else:
+                o = "O-lecture"
+            out[o][0] += nb
+            out[o][1].append(n)
+        self.sures.setdefault(chemin, set()).update(n for n, _ in contenu)
+        res = [(o, c, "read", ctx_intervalles(ns)) for o, (c, ns) in out.items() if c]
+        if encadrement:
+            res.append(("O-autre", encadrement, "encadrement de read", None))
+        return res
+
+
+def ctx_ruff(blocs, args, cwd):
+    """L'indice du bloc ruff de pi-lint-gate rattaché à cet edit/write, ou None."""
+    if len(blocs) < 2 or blocs[-1][0] != "text" or not blocs[-1][1].startswith(CTX_MARQUE_RUFF):
+        return None
+    cible = (args or {}).get("path")
+    if not isinstance(cible, str) or not cible.endswith(".py"):
+        return None
+    reste = blocs[-1][1][len(CTX_MARQUE_RUFF):]
+    fin = reste.find(") ---\n")
+    if fin < 0:
+        return None
+    cite = reste[:fin]
+    absolu = posixpath.normpath(posixpath.join(cwd or "/", cible))
+    relatif = posixpath.relpath(absolu, cwd or "/")
+    return len(blocs) - 1 if cite in (relatif, absolu, cible) else None
+
+
+def ctx_revue(tache, sources, generiques):
+    """
+    Positions de la tâche couvertes par des blocs exacts d'au moins 40 caractères des champs de revue
+    (fusionnées, chaque caractère une fois), hors blocs génériques. `sources` : [(référence, champ)].
+    Rend (positions, n_génériques, références) : une référence par bloc retenu, même si ses positions
+    sont déjà couvertes par une autre source (aucun caractère compté deux fois, aucune source perdue).
+    """
+    couvertes, generiques_vus, refs = set(), 0, []
+    for source, champ in sources:
+        sm = difflib.SequenceMatcher(None, tache, champ, autojunk=False)
+        for a, _b, n in sm.get_matching_blocks():
+            if n < CTX_SEUIL_REVUE:
+                continue
+            bloc = tache[a:a + n]
+            if any(bloc in g for g in generiques):
+                generiques_vus += 1
+                continue
+            refs.append(dict(source, intervalle_tache=[a, a + n]))
+            couvertes.update(range(a, a + n))
+    return couvertes, generiques_vus, refs
+
+
+def ctx_champs_revue(artefact):
+    """[(champ, texte)] : issue/fix/impact textuels non vides des findings, chaînes d'open_risks ; et les ignorés."""
+    p = ((artefact or {}).get("envelope") or {}).get("payload") or {}
+    champs, ignores = [], 0
+    for i, f in enumerate(p.get("findings") or []):
+        if not isinstance(f, dict):
+            ignores += 1
+            continue
+        for k in ("issue", "fix", "impact"):
+            v = f.get(k)
+            if isinstance(v, str) and v:
+                champs.append((f"findings[{i}].{k}", v))
+            elif k in f:
+                ignores += 1
+    for i, r in enumerate(p.get("open_risks") or []):
+        if isinstance(r, str) and r:
+            champs.append((f"open_risks[{i}]", r))
+        else:
+            ignores += 1
+    return champs, ignores
+
+
+def ctx_portions(canon, cwd, revue=None, membre=None):
+    """
+    Pour chaque message canonique : [(origine, caractères, libellé, références)]. Une référence est
+    structurée : membre (transcription), message (rang dans la séquence canonique), appel et outil pour
+    un résultat, bloc pour un message assistant, plages de lignes d'un read ; pour O-revue, séquence et
+    artefact du reviewer, champ et intervalle de la tâche. Aucun texte n'est recopié. `revue` :
+    (sources, génériques) pour la tâche d'un worker. Rend aussi les états rencontrés.
+    """
+    lectures = CtxLectures(cwd)
+    appels, out, premier_user, etats = {}, [], True, set()
+    for i, x in enumerate(canon):
+        m = x["m"]
+        role = m.get("role")
+        blocs = ctx_blocs(m.get("content"))
+        portions = []
+        ici = {"membre": membre, "message": i}
+
+        def ajouter(o, c, libelle, **ref):
+            portions.append((o, c, libelle, [dict(ici, **ref)]))
+        if role == "system":
+            corps = m.get("content") if isinstance(m.get("content"), str) else texte(m.get("content"))
+            if not corps:
+                sections = m.get("sections") or {}
+                corps = "".join(str(v) for v in sections.values()) if isinstance(sections, dict) else ""
+            portions.append(("O-préfixe", len(corps), "système", [dict(ici)]))
+        elif role == "user":
+            corps = "".join(t for k, t in blocs if k == "text")
+            nt = sum(1 for k, _ in blocs if k == "non-textuel")
+            if premier_user:
+                premier_user = False
+                if revue is not None:
+                    pos, gen, refs = ctx_revue(corps, revue[0], revue[1])
+                    if gen:
+                        etats.add(f"texte générique commun exclu ({gen} bloc(s))")
+                    portions.append(("O-revue", len(pos), "champs de revue antérieurs", [dict(ici, **r) for r in refs]))
+                    ajouter("O-tâche", len(corps) - len(pos), "tâche")
+                else:
+                    ajouter("O-tâche", len(corps), "tâche")
+            elif x["apres_turn_end"] and corps.startswith(CTX_MARQUE_MYPY):
+                ajouter("O-lint", len(corps), "mypy (pi-lint-gate)")
+            else:
+                ajouter("O-autre", len(corps), "message user")
+            if nt:
+                ajouter("O-non-textuel", 0, f"{nt} bloc(s)")
+        elif role == "assistant":
+            for j, (k, t) in enumerate(blocs):
+                if k == "thinking":
+                    ajouter("O-sortie-thinking", len(t), "thinking", bloc=j)
+                elif k == "non-textuel":
+                    ajouter("O-non-textuel", 0, "bloc assistant", bloc=j)
+                else:
+                    ajouter("O-sortie", len(t), k, bloc=j)
+            for c in m.get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "toolCall":
+                    appels[c.get("id")] = (c.get("name"), c.get("arguments") or {})
+        elif role == "toolResult":
+            nom, args = appels.get(m.get("toolCallId"), (None, None))
+            corps = "".join(t for k, t in blocs if k == "text")
+            ici["appel"], ici["outil"] = m.get("toolCallId"), nom
+            if nom is None:
+                ajouter("O-autre", len(corps), "résultat sans appel connu")
+            elif nom == "read":
+                if m.get("isError"):
+                    ajouter("O-autre", len(corps), "read en erreur")
+                else:
+                    for o, c, libelle, lignes in lectures.lecture(args, corps):
+                        if lignes is None:
+                            ajouter(o, c, libelle)
+                        else:
+                            ajouter(o, c, libelle, lignes=lignes)
+            elif nom in ("edit", "write"):
+                ir = ctx_ruff(blocs, args, cwd)
+                for j, (k, t) in enumerate(blocs):
+                    if j == ir:
+                        ajouter("O-lint", len(t), "ruff (pi-lint-gate)", bloc=j)
+                    elif k == "non-textuel":
+                        ajouter("O-non-textuel", 0, nom, bloc=j)
+                    else:
+                        ajouter("O-edit-write", len(t), nom, bloc=j)
+                lectures.ecriture(lectures.chemin(args))
+            elif nom == "bash":
+                ajouter("O-bash", len(corps), "bash")
+                lectures.bash()
+            elif nom == "task":
+                ajouter("O-retours-task", len(corps), "task")
+            else:
+                ajouter("O-autres-outils", len(corps), nom)
+        else:
+            ajouter("O-autre", len(texte(m.get("content"))), f"rôle {role}")
+        out.append({"role": role, "portions": [p for p in portions if p[1] or p[0] == "O-non-textuel"],
+                    "usage": m.get("usage") if role == "assistant" else None, "i": i})
+    return out, sorted(etats)
+
+
+def ctx_mesure(messages, avec_thinking, residents_initiaux=None):
+    """
+    Tours, contexte relevé, estimations résidentes (H-rés), résidus. Les quantités sont en quarts de
+    jeton (= caractères) ; C_t est converti en quarts (× 4) pour le résidu.
+    """
+    def garder(o):
+        return avec_thinking or o != "O-sortie-thinking"
+    residents = {}
+    for o, c in (residents_initiaux or []):
+        residents[o] = residents.get(o, 0) + c
+    tours, prec = [], None
+    for x in messages:
+        if x["role"] == "assistant":
+            u = x["usage"]
+            ok = isinstance(u, dict) and all(ctx_entier(u.get(k)) for k in ("input", "cacheRead", "cacheWrite"))
+            c = ctx(u) if ok else None
+            est = sum(residents.values())
+            tours.append({
+                "C": c, "estime_q": est, "par_origine_q": dict(residents),
+                "R_q": (4 * c - est) if c is not None else None,
+                "dC": (c - prec) if (c is not None and prec is not None) else None,
+                "etat": "usage absent" if c is None else ("contexte nul" if c == 0 else "ok"),
+            })
+            if c is not None:
+                prec = c
+        for o, ch, *_ in x["portions"]:
+            if garder(o) and ch:
+                residents[o] = residents.get(o, 0) + ch
+    # texte nouveau : ce qui est entré dans au moins une entrée, soit les résidents du dernier appel,
+    # moins les résidents initiaux (orchestrateur après compaction) ; compté une fois.
+    nouveau = {}
+    if tours:
+        init = {}
+        for o, c in (residents_initiaux or []):
+            init[o] = init.get(o, 0) + c
+        nouveau = {o: q - init.get(o, 0) for o, q in tours[-1]["par_origine_q"].items() if q - init.get(o, 0)}
+    return tours, nouveau
+
+
+def ctx_bilan(tours):
+    """Sommes sur les tours dont C_t est relevé : ΣC, Σ estimé, ΣR, Σ|R|, cumul par origine (quarts)."""
+    valides = [t for t in tours if t["C"] is not None]
+    cumul = {}
+    for t in valides:
+        for o, q in t["par_origine_q"].items():
+            cumul[o] = cumul.get(o, 0) + q
+    return {
+        "tours": len(tours), "tours_releves": len(valides),
+        "tours_non_monotones": sum(1 for t in tours if t["dC"] is not None and t["dC"] < 0),
+        "tours_contexte_nul": sum(1 for t in tours if t["C"] == 0),
+        "somme_C": sum(t["C"] for t in valides),
+        "somme_estime_q": sum(t["estime_q"] for t in valides),
+        "somme_R_q": sum(t["R_q"] for t in valides),
+        "somme_abs_R_q": sum(abs(t["R_q"]) for t in valides),
+        "cumul_q": cumul,
+    }
+
+
+def ctx_classement(bilan):
+    """Classement descriptif des parts cumulées estimées (non renormalisées)."""
+    sc = bilan["somme_C"]
+    lignes = sorted(((o, q) for o, q in bilan["cumul_q"].items() if o in CTX_ATTRIBUABLES),
+                    key=lambda kv: (-kv[1], kv[0]))
+    parts = [{"origine": o, "cumul_q": q, "part": (round(q / (4 * sc), 6) if sc else None)} for o, q in lignes]
+    return {"parts": parts, "premier_poste_estime": parts[0]["origine"] if parts else None,
+            "masse_residuelle": round(bilan["somme_abs_R_q"] / (4 * sc), 6) if sc else None,
+            "verdict": "attribution non établie"}
+
+
+def ctx_journal(runs, run_id):
+    chemin = os.path.join(runs, f"{run_id}-delegations.jsonl")
+    return [d for d in jsonl(chemin) if "seq" in d] if os.path.isfile(chemin) else []
+
+
+def ctx_risques(runs, run_id):
+    """{identifiant : noms de base des pièces `by` de ses événements opened} ; un `by` absent compte comme ''."""
+    chemin = os.path.join(runs, f"{run_id}-risks.jsonl")
+    out = {}
+    if os.path.isfile(chemin):
+        for e in jsonl(chemin):
+            if e.get("event") == "opened" and e.get("id"):
+                out.setdefault(str(e["id"]), []).append(os.path.basename(str(e.get("by") or "")))
+    return out
+
+
+def ctx_identites(runs, run_id, journal):
+    """Contrôles (i) à (iii) : rend {seq: (rôle, artefact, chemin transcription)} ; refuse toute incohérence."""
+    par_nom, retenues = {}, {}
+    for d in journal:
+        nom = os.path.basename(str(d.get("artifact") or ""))
+        par_nom.setdefault(nom, []).append(d)
+    for nom, ds in par_nom.items():
+        if len(ds) != 1:
+            raise Refus(f"journal des délégations : {len(ds)} lignes pour l'artefact {nom}")
+    for nom in sorted(os.listdir(runs)):
+        m = CTX_ARTEFACT.match(nom)
+        if not m or m.group(1) != run_id or m.group(3) == "transmis":
+            continue
+        if nom not in par_nom:
+            raise Refus(f"{nom} : artefact de délégation absent du journal des délégations")
+    for nom, (d,) in par_nom.items():
+        m = CTX_ARTEFACT.match(nom)
+        if not m or m.group(1) != run_id:
+            raise Refus(f"journal : délégation #{d.get('seq')} → artefact {nom} hors du format <runId>-<NN>-<rôle>.json de {run_id}")
+        seq, role = int(m.group(2)), m.group(3)
+        if d.get("seq") != seq or d.get("role") != role:
+            raise Refus(f"journal : délégation #{d.get('seq')} ({d.get('role')}) → artefact {nom} (#{seq} {role})")
+        art = lire_json(os.path.join(runs, nom))
+        if art.get("runId") != run_id or art.get("role") != role:
+            raise Refus(f"{nom} : runId/role de l'artefact ({art.get('runId')}, {art.get('role')}) ≠ ({run_id}, {role})")
+        if seq in retenues:
+            raise Refus(f"journal : séquence #{seq} portée par deux artefacts, {retenues[seq][1]} et {nom}")
+        retenues[seq] = (role, nom, art, os.path.join(runs, nom[:-5] + ".jsonl"), d)
+    return retenues
+
+
+CTX_CHAMPS_USAGE = ("input", "output", "cacheRead", "cacheWrite")
+
+
+def ctx_artefact_usage(nom, art):
+    """
+    Champs d'usage et nombre de tours de l'artefact : ({champ: entier}, [champs absents]). Absent (ou null)
+    n'est jamais zéro ; un champ présent non entier, booléen compris, est incohérent et refusé.
+    """
+    u = art.get("usage")
+    if u is not None and not isinstance(u, dict):
+        raise Refus(f"{nom} : usage de l'artefact non objet ({type(u).__name__})")
+    u = u or {}
+    valeurs, absents = {}, []
+    for k in CTX_CHAMPS_USAGE:
+        v = u.get(k)
+        if v is None:
+            absents.append(k)
+        elif not ctx_entier(v):
+            raise Refus(f"{nom} : champ {k} de l'artefact non entier ({v!r})")
+        else:
+            valeurs[k] = v
+    v = art.get("turns")
+    if v is None:
+        absents.append("turns")
+    elif not ctx_entier(v):
+        raise Refus(f"{nom} : champ turns de l'artefact non entier ({v!r})")
+    else:
+        valeurs["turns"] = v
+    return valeurs, absents
+
+
+def ctx_delegation(seq, role, nom, art, tr, d, journal_retenu, runs, run_id, risques):
+    """Lecture directe d'une délégation : contrôles (iv), rapprochement, portions, deux variantes."""
+    valeurs, absents = ctx_artefact_usage(nom, art)
+    c_art = (valeurs["input"] + valeurs["cacheRead"] + valeurs["cacheWrite"]
+             if all(k in valeurs for k in ("input", "cacheRead", "cacheWrite")) else None)
+    out = {"seq": seq, "role": role, "unite": d.get("work_unit"), "artefact": nom, "etats": [],
+           "usage_artefact": valeurs, "champs_absents_artefact": absents, "masse_attendue": c_art}
+    for k in absents:
+        out["etats"].append(f"non établie pour le rapprochement : champ {k} absent de l'artefact")
+    if not os.path.isfile(tr):
+        out["etats"].append("non établie : transcription absente")
+        out["rapprochement"] = "non établi : transcription absente"
+        return out
+    ev = ctx_lire(tr)
+    tete = next((e for e in ev if e.get("type") == "session"), None)
+    if tete is None or tete.get("id") != f"{run_id}-{role}":
+        raise Refus(f"{os.path.basename(tr)} : en-tête de session {None if tete is None else tete.get('id')} ≠ {run_id}-{role}")
+    canon = ctx_canonique(ev, os.path.basename(tr))
+    assistants = [x["m"] for x in canon if x["m"].get("role") == "assistant"]
+    tours_ok = all(isinstance(m.get("usage"), dict) and all(ctx_entier(m["usage"].get(k)) for k in CTX_CHAMPS_USAGE)
+                   for m in assistants)
+    if not tours_ok:
+        out["etats"].append("non établie pour le rapprochement : usage absent dans au moins un tour")
+    for k in CTX_CHAMPS_USAGE:
+        if k in valeurs and tours_ok:
+            s = sum(m["usage"][k] for m in assistants)
+            if s != valeurs[k]:
+                raise Refus(f"{os.path.basename(tr)} : somme des tours, champ {k} = {s} ≠ artefact {valeurs[k]}")
+    if "turns" in valeurs and len(assistants) != valeurs["turns"]:
+        raise Refus(f"{os.path.basename(tr)} : {len(assistants)} tours ≠ artefact {valeurs['turns']}")
+    out["rapprochement"] = "rapproché" if tours_ok and not absents else "non établi"
+    revue, liens = None, []
+    if role == "worker":
+        avant = sorted((s, r) for s, r in journal_retenu.items()
+                       if s < seq and r[4].get("work_unit") == d.get("work_unit"))
+        sources = []
+        for s, r in avant:
+            if r[0] == "reviewer":
+                ch, ign = ctx_champs_revue(r[2])
+                sources.extend(({"reviewer": s, "artefact": r[1], "champ": k}, v) for k, v in ch)
+                if ign:
+                    out["etats"].append(f"#{s} : {ign} champ(s) de revue vide(s) ou non textuel(s) ignoré(s)")
+        premiers = [r for s, r in avant if r[0] == "worker"]
+        generiques = []
+        sys_m = next((x["m"] for x in canon if x["m"].get("role") == "system"), None)
+        if sys_m is not None:
+            sections = sys_m.get("sections") or {}
+            generiques.append(texte(sys_m.get("content")) or ("".join(str(v) for v in sections.values()) if isinstance(sections, dict) else ""))
+        if premiers:
+            generiques.append(str(premiers[0][2].get("task") or ""))
+        revue = (sources, generiques)
+        for rid in d.get("for_risks") or []:
+            # lien documentaire : un seul événement opened (ou des doublons identiques) dont `by` est
+            # exactement l'artefact reviewer retenu, du même run, de la même unité, antérieur
+            pieces = sorted(set(risques.get(str(rid)) or []))
+            par = pieces[0] if len(pieces) == 1 else ""
+            m = CTX_ARTEFACT.match(par)
+            src = journal_retenu.get(int(m.group(2))) if m else None
+            if (src and src[1] == par and src[0] == "reviewer" and int(m.group(2)) < seq
+                    and src[4].get("work_unit") == d.get("work_unit")):
+                liens.append({"risque": str(rid), "reviewer": int(m.group(2)), "piece": par})
+            else:
+                liens.append({"risque": str(rid), "lien": "non documenté"})
+    msgs, etats = ctx_portions(canon, tete.get("cwd"), revue, membre=os.path.basename(tr))
+    out["etats"].extend(etats)
+    out["liens_for_risks"] = liens
+    origines = {}
+    for x in msgs:
+        for o, c, libelle, refs in x["portions"]:
+            y = origines.setdefault(o, {"caracteres": 0, "occurrences": 0, "par_libelle": {}, "references": []})
+            y["caracteres"] += c
+            y["occurrences"] += 1
+            y["par_libelle"][libelle] = y["par_libelle"].get(libelle, 0) + c
+            y["references"].extend(refs)
+    out["origines_observees"] = {o: {"caracteres": y["caracteres"], "occurrences": y["occurrences"],
+                                     "sources": sorted(y["par_libelle"]),
+                                     "par_libelle": dict(sorted(y["par_libelle"].items())),
+                                     "references": y["references"]} for o, y in sorted(origines.items())}
+    out["variantes"] = {}
+    for nomv, avec in (("avec_thinking", True), ("sans_thinking", False)):
+        tours, nouveau = ctx_mesure(msgs, avec)
+        b = ctx_bilan(tours)
+        ctx_rapprocher(f"délégation #{seq} {nomv}", b)
+        out["variantes"][nomv] = {"bilan": b, "nouveau_q": nouveau, "classement": ctx_classement(b),
+                                  "tours": [{k: t[k] for k in ("C", "dC", "estime_q", "R_q", "etat")} for t in tours]}
+    if role == "reviewer":
+        tr_trace = os.path.join(runs, f"{run_id}-{seq:02d}-transmis.json")
+        doc, etat = lire_trace(tr_trace)
+        inj = (doc or {}).get("injection") if isinstance(doc, dict) else None
+        out["diff_injecte_trace"] = (inj or {}).get("octets_injectes") if isinstance(inj, dict) else (etat or "non établi")
+    return out
+
+
+def ctx_orchestrateur(fichiers):
+    """Lecture secondaire : même méthode sur la session ; préfixe non observable ; aucun verdict."""
+    res = {"sessions": [], "residu": CTX_RESIDU_ORCH}
+    for p in fichiers:
+        ev = ctx_lire(p)
+        enfants = {}
+        for e in ev:
+            if e.get("parentId") is not None:
+                enfants[e["parentId"]] = enfants.get(e["parentId"], 0) + 1
+        tete = next((e for e in ev if e.get("type") == "session"), {}) or {}
+        s = {"session": os.path.basename(p), "etats": []}
+        if any(n > 1 for n in enfants.values()):
+            s["etats"].append("non établie : branche ambiguë dans la session")
+            res["sessions"].append(s)
+            continue
+        canon, ids, compactions, vus = [], [], [], set()
+        for e in ev:
+            if e.get("type") == "message":
+                m = e.get("message") or {}
+                cle = (m.get("role"), m.get("timestamp") or e.get("timestamp"), m.get("toolCallId"))
+                if cle in vus:
+                    raise Refus(f"{os.path.basename(p)} : collision de messages {cle}")
+                vus.add(cle)
+                canon.append({"m": m, "apres_turn_end": False, "id": e.get("id"), "t": e.get("timestamp")})
+            elif e.get("type") == "compaction":
+                canon.append({"compaction": e})
+        msgs, segments, courant, residents_init, etat_seg = [], [], [], None, "ok"
+        for x in canon:
+            if "compaction" in x:
+                segments.append((courant, residents_init, etat_seg))
+                c = x["compaction"]
+                garde = c.get("firstKeptEntryId")
+                idx = next((k for k, y in enumerate(courant) if y.get("id") == garde), None)
+                if idx is None:
+                    courant, residents_init, etat_seg = [], None, "non établi : firstKeptEntryId introuvable"
+                else:
+                    gardes = courant[idx:]
+                    portions_g, _ = ctx_portions([{"m": y["m"], "apres_turn_end": False} for y in gardes], tete.get("cwd"),
+                                                 membre=os.path.basename(p))
+                    init = [("O-résumé", len(str(c.get("summary") or "")))]
+                    for y in portions_g:
+                        init.extend((o, ch) for o, ch, *_ in y["portions"])
+                    courant, residents_init, etat_seg = [], init, "ok"
+                continue
+            courant.append(x)
+        segments.append((courant, residents_init, etat_seg))
+        s["segments"] = []
+        for k, (seg, init, etat) in enumerate(segments):
+            portions, _ = ctx_portions([{"m": y["m"], "apres_turn_end": False} for y in seg], tete.get("cwd"),
+                                       membre=os.path.basename(p))
+            for y in portions:
+                if y["role"] == "user":
+                    y["portions"] = [("O-opérateur" if o in ("O-tâche", "O-autre") else o, c, lib, refs)
+                                     for o, c, lib, refs in y["portions"]]
+            if etat != "ok":
+                s["segments"].append({"segment": k, "etat": etat})
+                continue
+            v = {}
+            for nomv, avec in (("avec_thinking", True), ("sans_thinking", False)):
+                tours, nouveau = ctx_mesure(portions, avec, residents_initiaux=init)
+                b = ctx_bilan(tours)
+                ctx_rapprocher(f"{os.path.basename(p)} segment {k} {nomv}", b)
+                v[nomv] = {"bilan": b, "nouveau_q": nouveau,
+                           "masse_residuelle": round(b["somme_abs_R_q"] / (4 * b["somme_C"]), 6) if b["somme_C"] else None}
+            s["segments"].append({"segment": k, "apres_compaction": k > 0, "variantes": v})
+        res["sessions"].append(s)
+    return res
+
+
+def ctx_agreger(delegs):
+    """
+    Effectifs et sommes par rôle, en gardant les délégations non établies dans le périmètre attendu : masse
+    attendue connue (C des artefacts), masse observée (ΣC des délégations lues, dénominateur des parts),
+    délégations de masse attendue inconnue. Les parts d'un rôle incomplet portent sur le seul sous-ensemble
+    observé, et le disent ; aucun résidu n'est fabriqué pour le texte absent.
+    """
+    roles = {}
+    for d in delegs:
+        r = roles.setdefault(d["role"], {"attendues": 0, "lues": 0, "non_etablies": [], "variantes": {},
+                                         "masse_attendue_connue": 0, "masse_observee": 0,
+                                         "masse_attendue_inconnue": []})
+        r["attendues"] += 1
+        if d["masse_attendue"] is None:
+            r["masse_attendue_inconnue"].append(d["seq"])
+        else:
+            r["masse_attendue_connue"] += d["masse_attendue"]
+        if "variantes" not in d:
+            r["non_etablies"].append({"seq": d["seq"], "etats": d["etats"], "masse_attendue": d["masse_attendue"]})
+            continue
+        r["lues"] += 1
+        r["masse_observee"] += d["variantes"]["avec_thinking"]["bilan"]["somme_C"]
+        for nomv, v in d["variantes"].items():
+            a = r["variantes"].setdefault(nomv, {"somme_C": 0, "somme_estime_q": 0, "somme_R_q": 0,
+                                                 "somme_abs_R_q": 0, "tours": 0, "tours_non_monotones": 0,
+                                                 "cumul_q": {}, "attribuable_q": 0, "incertain_q": 0,
+                                                 "non_attribuable_q": 0})
+            b = v["bilan"]
+            for k in ("somme_C", "somme_estime_q", "somme_R_q", "somme_abs_R_q", "tours", "tours_non_monotones"):
+                a[k] += b[k]
+            for o, q in b["cumul_q"].items():
+                a["cumul_q"][o] = a["cumul_q"].get(o, 0) + q
+                cle = "attribuable_q" if o in CTX_ATTRIBUABLES else ("incertain_q" if o in CTX_INCERTAINS else "non_attribuable_q")
+                a[cle] += q
+    for nom_r, r in roles.items():
+        r["perimetre"] = ("rôle entier" if r["lues"] == r["attendues"] else
+                          f"sous-ensemble observé : {r['lues']} délégation(s) lue(s) sur {r['attendues']} attendue(s)")
+        for nomv, a in r["variantes"].items():
+            ctx_rapprocher(f"rôle {nom_r} {nomv}", a)
+            a["classement"] = ctx_classement(a)
+            a["classement"]["perimetre"] = r["perimetre"]
+        tetes = {nomv: a["classement"]["premier_poste_estime"] for nomv, a in r["variantes"].items()}
+        r["divergence_thinking"] = (f"premier poste estimé avec thinking {tetes.get('avec_thinking')} ≠ sans thinking "
+                                    f"{tetes.get('sans_thinking')}") if len(set(tetes.values())) > 1 else None
+    return roles
+
+
+def contexte(runs, run_id, fichiers_sessions):
+    journal = ctx_journal(runs, run_id)
+    retenues = ctx_identites(runs, run_id, journal)
+    risques = ctx_risques(runs, run_id)
+    delegs = [ctx_delegation(seq, *retenues[seq][:4], retenues[seq][4], retenues, runs, run_id, risques)
+              for seq in sorted(retenues)]
+    return {"methode": "lecture directe ; estimé = caractères / 4 (exact, en quarts) ; résidence H-rés non prouvée ;"
+                       " résidu R_t = C_t − Σ estimations résidentes, signé ; aucune ventilation de C_t",
+            "delegations": delegs, "par_role": ctx_agreger(delegs),
+            "orchestrateur": ctx_orchestrateur(fichiers_sessions)}
+
+
+def imprimer_contexte(c):
+    print("\n== CONTEXTE — lecture directe [estimé : caractères / 4 ; résidence H-rés non prouvée ; R = C − Σ estimé]")
+    print("   verdict : attribution non établie (aucune méthode validée ne borne l'erreur des catégories)")
+    for d in c["delegations"]:
+        if "variantes" not in d:
+            print(f"  #{d['seq']:<3} {d['role']:18} {'; '.join(d['etats'])}")
+            continue
+        for nomv in ("avec_thinking", "sans_thinking"):
+            v = d["variantes"][nomv]
+            b, k = v["bilan"], v["classement"]
+            print(f"  #{d['seq']:<3} {d['role']:18} {nomv:13} tours {b['tours']:>3} (non monotones {b['tours_non_monotones']})"
+                  f" · ΣC {b['somme_C']:>9} · Σ estimé {ctx_q(b['somme_estime_q']):>12} · ΣR {ctx_q(b['somme_R_q']):>12}"
+                  f" · masse résiduelle {k['masse_residuelle']} · premier poste estimé {k['premier_poste_estime']}")
+        print(f"        rapprochement : {d['rapprochement']}")
+        for e in d["etats"]:
+            print(f"        état : {e}")
+        if d.get("liens_for_risks"):
+            print(f"        for_risks : {d['liens_for_risks']}")
+    for r, a in sorted(c["par_role"].items()):
+        print(f"\n  rôle {r} : attendues {a['attendues']} · lues {a['lues']} · non établies {len(a['non_etablies'])}"
+              f" · périmètre : {a['perimetre']}")
+        inconnue = f" · masse attendue inconnue : #{', #'.join(str(s) for s in a['masse_attendue_inconnue'])}" \
+            if a["masse_attendue_inconnue"] else ""
+        print(f"    masse attendue connue {a['masse_attendue_connue']} · masse observée {a['masse_observee']}{inconnue}")
+        for x in a["non_etablies"]:
+            masse = "inconnue" if x["masse_attendue"] is None else x["masse_attendue"]
+            print(f"    non établie #{x['seq']} (masse attendue {masse}) : {'; '.join(x['etats'])}")
+        if a["divergence_thinking"]:
+            print(f"    DIVERGENCE : {a['divergence_thinking']}")
+        for nomv, v in sorted(a["variantes"].items()):
+            k = v["classement"]
+            print(f"    {nomv} : ΣC {v['somme_C']} · attribuable {ctx_q(v['attribuable_q'])} · incertain {ctx_q(v['incertain_q'])}"
+                  f" · non attribuable {ctx_q(v['non_attribuable_q'])} · masse résiduelle {k['masse_residuelle']}")
+            for p in k["parts"]:
+                print(f"      {p['origine']:24} cumul {ctx_q(p['cumul_q']):>14} · part {p['part']}")
+            print(f"      premier poste estimé : {k['premier_poste_estime']} ({k['perimetre']}) · verdict : {k['verdict']}")
+    o = c["orchestrateur"]
+    print(f"\n  orchestrateur (lecture secondaire, sans verdict ; résidu : {o['residu']})")
+    for s in o["sessions"]:
+        for e in s.get("etats", []):
+            print(f"    {s['session']} : {e}")
+        for g in s.get("segments", []):
+            if "variantes" not in g:
+                print(f"    {s['session']} segment {g['segment']} : {g['etat']}")
+                continue
+            for nomv, v in sorted(g["variantes"].items()):
+                b = v["bilan"]
+                print(f"    {s['session']} segment {g['segment']}{' (après compaction)' if g['apres_compaction'] else ''} {nomv}"
+                      f" : tours {b['tours']} · ΣC {b['somme_C']} · Σ estimé {ctx_q(b['somme_estime_q'])}"
+                      f" · ΣR {ctx_q(b['somme_R_q'])} · masse résiduelle {v['masse_residuelle']}")
+
+
 def main(argv):
     try:
         return analyser(argv)
     except Refus as r:
         print(f"PRÉCONDITION — {r}")
         return 2
+    except CtxIncoherence as r:
+        print(f"INCOHÉRENCE INTERNE (--contexte) — {r}")
+        return 1
 
 
 def analyser(argv):
@@ -1204,9 +1976,13 @@ def analyser(argv):
         return 2
     runs, sessions = argv[1], argv[2]
     coupure_arg, sortie_json, run_explicite, sessions_explicites = "auto", None, None, []
-    avec_tours, avec_cycles, avec_postes = False, False, False
+    avec_tours, avec_cycles, avec_postes, avec_contexte = False, False, False, False
     i = 3
     while i < len(argv):
+        if argv[i] == "--contexte":
+            avec_contexte = True
+            i += 1
+            continue
         if argv[i] == "--postes":
             avec_postes = True
             i += 1
@@ -1359,6 +2135,10 @@ def analyser(argv):
     if avec_postes:
         grille["postes"] = postes(runs, run_id, unites, fichiers_sessions, dl, grille["releves"], coupure, avant)
         code = 0 if grille["postes"]["ecarts"] == 0 else 1
+
+    if avec_contexte:
+        grille["contexte"] = contexte(runs, run_id, fichiers_sessions)
+        imprimer_contexte(grille["contexte"])
 
     if sortie_json:
         with open(sortie_json, "w", encoding="utf-8") as f:

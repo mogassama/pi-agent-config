@@ -13,6 +13,9 @@ transcription d'un enfant sans omission et rapproche la somme de ses tours du to
 Depuis LOT-REPRISES (R3) : --cycles, dont chaque cause de reprise se lit dans la porte puis le
 verdict structuré, et vaut unknown sinon. Depuis LOT-EFFICACITÉ (M) : --postes, dont les catégories
 D1 et D3 somment exactement à la grille, et dont les compteurs ne valent jamais 0 faute de trace.
+Depuis le plan de phase 0 (v3) : --contexte, lecture directe des textes observés par origine
+(caractères/4, résidu signé, verdict « attribution non établie ») ; classe Contexte, cas K01–K37,
+fixtures et attendus chiffrés dans tests/fixtures/run-cost-contexte/.
 
     python3 tests/test_run_cost.py
     bin/test-guards                # le lance aussi
@@ -685,6 +688,538 @@ class Postes(unittest.TestCase):
             code, sortie = lancer(runs, sessions, "--postes")
             self.assertEqual(code, 2, sortie)
             self.assertIn(f"{RUN}-02-reviewer.jsonl:", sortie)
+
+
+# ------------------------------------------------------------------ --contexte (phase 0, mesure A, niveau B)
+# Fixtures : tests/fixtures/run-cost-contexte/ (generer.py) ; attendus chiffrés : ATTENDUS.md du même dossier.
+FX = ROOT / "tests" / "fixtures" / "run-cost-contexte"
+FXRUN = "f0f0f0f0f0f0f0f0"
+SOMME_ESTIME_RELECTURE = 9989  # Σ estimé (quarts) de relecture, identique avant et après le reclassement de l'encadrement
+
+
+def fixture(t, nom):
+    import shutil
+    d = Path(t) / nom
+    shutil.copytree(FX / nom, d)
+    return d / "runs", d / "session-orchestrateur"
+
+
+def contexte_de(t, runs, sessions, *extra):
+    sortie_json = Path(t) / "c.json"
+    code, sortie = lancer(runs, sessions, "--contexte", *extra, "--json", sortie_json)
+    c = json.loads(sortie_json.read_text(encoding="utf-8"))["contexte"] if code == 0 else None
+    return code, sortie, c
+
+
+def deleg(c, seq):
+    return next(d for d in c["delegations"] if d["seq"] == seq)
+
+
+def obs(c, seq, origine):
+    return deleg(c, seq)["origines_observees"].get(origine, {}).get("caracteres", 0)
+
+
+def libelles(c, seq, origine):
+    return deleg(c, seq)["origines_observees"].get(origine, {}).get("par_libelle", {})
+
+
+def refs(c, seq, origine):
+    return deleg(c, seq)["origines_observees"].get(origine, {}).get("references", [])
+
+
+def lire_art(runs, nom):
+    return json.loads((runs / nom).read_text(encoding="utf-8"))
+
+
+def ecrire_art(runs, nom, art):
+    (runs / nom).write_text(json.dumps(art), encoding="utf-8")
+
+
+def reecrire(chemin, f):
+    lignes = [json.loads(x) for x in chemin.read_text(encoding="utf-8").splitlines() if x.strip()]
+    lignes = f(lignes)
+    chemin.write_text("".join(json.dumps(x, ensure_ascii=False, sort_keys=True) + "\n" for x in lignes), encoding="utf-8")
+
+
+class Contexte(unittest.TestCase):
+    def test_K01_nominal_estimations_et_residus(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "nominal"))
+            self.assertEqual(code, 0, sortie)
+            d = deleg(c, 1)
+            self.assertEqual(obs(c, 1, "O-tâche"), 240)
+            self.assertEqual(obs(c, 1, "O-préfixe"), 400)
+            self.assertEqual(obs(c, 1, "O-sortie"), 41 + 2)
+            self.assertEqual(obs(c, 1, "O-sortie-thinking"), 40)
+            self.assertEqual(obs(c, 1, "O-lecture"), 9)
+            v = d["variantes"]["avec_thinking"]
+            self.assertEqual([x["R_q"] for x in v["tours"]], [-40, 70])
+            self.assertEqual(v["bilan"]["somme_C"], 350)
+            self.assertEqual(v["bilan"]["somme_estime_q"], 1370)
+            self.assertEqual(d["variantes"]["sans_thinking"]["bilan"]["somme_estime_q"], 1330)
+            self.assertEqual(c["par_role"]["worker"]["variantes"]["avec_thinking"]["classement"]["verdict"],
+                             "attribution non établie")
+
+    def test_K02_sans_contexte_sortie_identique_au_golden(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            j = Path(t) / "g.json"
+            code, sortie = lancer(runs, sessions, "--json", j)
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(sortie, (FX / "golden" / "nominal-sans-contexte.txt").read_text(encoding="utf-8"))
+            self.assertEqual(j.read_bytes(), (FX / "golden" / "nominal-sans-contexte.json").read_bytes())
+
+    def test_K03_redecoupage_d_une_origine_sans_effet(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            tr = runs / f"{FXRUN}-01-worker.jsonl"
+            def couper(lignes):
+                for e in lignes:
+                    m = e.get("message") or {}
+                    if m.get("role") == "system":
+                        m["sections"] = {"a": "P" * 201, "b": "P" * 199}
+                return lignes
+            reecrire(tr, couper)
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 1, "O-préfixe"), 400)
+
+    def test_K04_chevauchement_partiel(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 1, "O-relecture"), 30 + 15)
+            self.assertEqual(obs(c, 1, "O-lecture"), 585)  # lignes nouvelles seules ; l'encadrement est en O-autre (K47)
+
+    def test_K05_plage_tronquee_lue_dans_le_pied(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 1, "O-relecture"), 45)
+            self.assertEqual(obs(c, 1, "O-relecture-incertaine"), 10 + 31)
+
+    def test_K06_ecriture_invalide_les_lignes_lues(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(obs(c, 1, "O-relecture"), 45)
+            self.assertEqual(obs(c, 1, "O-edit-write"), 35)
+
+    def test_K07_bash_rend_la_relecture_incertaine(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(obs(c, 1, "O-relecture-incertaine"), 41)
+            self.assertEqual(obs(c, 1, "O-bash"), 10)
+
+    def test_K08_erreur_pied_inconnu_alias(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(libelles(c, 1, "O-autre")["read en erreur"], 20)
+            self.assertEqual(obs(c, 1, "O-lecture"), 585)
+
+    def test_K09_vrai_bloc_ruff(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "lint"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 1, "O-lint"), 121 + 56)
+
+    def test_K10_marque_litterale_sans_transport(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "lint"))
+            self.assertEqual(obs(c, 1, "O-edit-write"), 35 + 36 + 31)
+            self.assertEqual(obs(c, 1, "O-lecture"), 31)
+            self.assertEqual(obs(c, 1, "O-bash"), 40)
+
+    def test_K11_vrai_message_mypy(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "lint"))
+            self.assertEqual(obs(c, 1, "O-lint"), 177)
+
+    def test_K12_champ_entier_et_sous_chaine(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 5, "O-revue"), 67 + 45 + 68)
+
+    def test_K13_sources_multiples_comptees_une_fois(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(obs(c, 5, "O-revue"), 180)
+
+    def test_K14_texte_generique_exclu(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(obs(c, 5, "O-revue"), 180)
+            self.assertIn("texte générique commun exclu (1 bloc(s))", deleg(c, 5)["etats"])
+
+    def test_K15_reformulation_non_reconnue(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "revue")
+            i1 = "Le calcul des montants ignore les écritures lettrées partiellement."  # I1 de generer.py
+            def sans_i1(lignes):
+                for e in lignes:
+                    m = e.get("message") or {}
+                    if m.get("role") == "user":
+                        m["content"][0]["text"] = m["content"][0]["text"].replace("Reprise. " + i1, "Reprise.")
+                return lignes
+            reecrire(runs / f"{FXRUN}-05-worker.jsonl", sans_i1)
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 5, "O-revue"), 45 + 68)
+
+    def test_K16_autre_unite_non_reconnue(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(obs(c, 5, "O-revue"), 180)
+
+    def test_K17_reviewer_posterieur_non_reconnu(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(obs(c, 5, "O-revue"), 180)
+
+    def test_K18_lien_for_risks_seulement_identifiable(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(deleg(c, 5)["liens_for_risks"], [
+                {"risque": f"{FXRUN}-02-1", "reviewer": 2, "piece": f"{FXRUN}-02-reviewer.json"},
+                {"risque": f"{FXRUN}-99-1", "lien": "non documenté"}])
+
+    def test_K19_compaction_reconstruit_le_resident(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "compaction"))
+            self.assertEqual(code, 0, sortie)
+            seg = c["orchestrateur"]["sessions"][0]["segments"]
+            self.assertEqual([g["variantes"]["avec_thinking"]["bilan"]["somme_estime_q"] for g in seg], [214, 120])
+            self.assertEqual([g["variantes"]["avec_thinking"]["bilan"]["somme_C"] for g in seg], [130, 60])
+
+    def test_K20_usage_absent_et_contexte_nul(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "usage"))
+            self.assertEqual(code, 0, sortie)
+            tours = deleg(c, 1)["variantes"]["sans_thinking"]["tours"]
+            self.assertEqual([x["etat"] for x in tours], ["ok", "contexte nul", "ok", "ok", "usage absent"])
+            self.assertIsNone(tours[4]["C"])
+
+    def test_K21_contexte_decroissant(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "usage"))
+            self.assertEqual(deleg(c, 1)["variantes"]["sans_thinking"]["bilan"]["tours_non_monotones"], 2)
+
+    def test_K22_masse_residuelle_en_valeurs_absolues(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "nominal"))
+            b = deleg(c, 1)["variantes"]["avec_thinking"]["bilan"]
+            self.assertEqual((b["somme_R_q"], b["somme_abs_R_q"]), (30, 110))
+
+    def test_K23_entete_d_un_autre_run_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "identite")
+            def autre(lignes):
+                lignes[0]["id"] = "aaaaaaaaaaaaaaaa-worker"
+                return lignes
+            reecrire(runs / f"{FXRUN}-01-worker.jsonl", autre)
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("en-tête de session aaaaaaaaaaaaaaaa-worker", sortie)
+
+    def test_K24_sequence_du_journal_discordante_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "identite")
+            def seq3(lignes):
+                lignes[0]["seq"] = 3
+                return lignes
+            reecrire(runs / f"{FXRUN}-delegations.jsonl", seq3)
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("délégation #3 (worker)", sortie)
+
+    def test_K25_collision_d_evenements_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "identite")
+            def doubler(lignes):
+                fins = [e for e in lignes if e.get("type") == "message_end"]
+                return lignes + [fins[-1]]
+            reecrire(runs / f"{FXRUN}-01-worker.jsonl", doubler)
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("collision de message_end", sortie)
+
+    def test_K26_trace_transmis_hors_effectifs(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "identite"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(sorted(c["par_role"]), ["reviewer", "worker"])
+            self.assertEqual(deleg(c, 2)["diff_injecte_trace"], 123)
+
+    def test_K27_ligne_illisible_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "identite")
+            with open(runs / f"{FXRUN}-01-worker.jsonl", "a", encoding="utf-8") as f:
+                f.write("{tronquée\n")
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn(f"{FXRUN}-01-worker.jsonl:", sortie)
+
+    def test_K28_systeme_compte_une_fois(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "nominal"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(deleg(c, 1)["origines_observees"]["O-préfixe"]["occurrences"], 1)
+
+    def test_K29_delegation_sans_transcription_reste_attendue(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "usage"))
+            r = c["par_role"]["reviewer"]
+            self.assertEqual((r["attendues"], r["lues"], [x["seq"] for x in r["non_etablies"]]), (1, 0, [2]))
+
+    def test_K30_divergence_thinking_rapportee(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "usage"))
+            self.assertIn("O-sortie-thinking", c["par_role"]["worker"]["divergence_thinking"] or "")
+            self.assertIn("DIVERGENCE", sortie)
+
+    def test_K31_contexte_change_textes_identiques(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            code0, sortie0, c0 = contexte_de(t, runs, sessions)
+            self.assertEqual(code0, 0, sortie0)
+            def plus10(lignes):
+                for e in lignes:
+                    m = e.get("message") or {}
+                    if e.get("type") == "message_end" and m.get("role") == "assistant" and m["usage"]["input"] == 150:
+                        m["usage"]["input"] = 160
+                return lignes
+            reecrire(runs / f"{FXRUN}-01-worker.jsonl", plus10)
+            art = json.loads((runs / f"{FXRUN}-01-worker.json").read_text(encoding="utf-8"))
+            art["usage"]["input"] += 10
+            (runs / f"{FXRUN}-01-worker.json").write_text(json.dumps(art), encoding="utf-8")
+            code, sortie, c1 = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            v0, v1 = (deleg(x, 1)["variantes"]["avec_thinking"] for x in (c0, c1))
+            self.assertEqual([x["estime_q"] for x in v0["tours"]], [x["estime_q"] for x in v1["tours"]])
+            self.assertEqual(v1["tours"][0]["R_q"] - v0["tours"][0]["R_q"], 40)
+
+    def test_K32_parts_non_renormalisees(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "usage"))
+            parts = c["par_role"]["worker"]["variantes"]["avec_thinking"]["classement"]["parts"]
+            self.assertGreater(sum(p["part"] for p in parts), 1)
+
+    def test_K33_marque_mypy_hors_transport(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "lint"))
+            self.assertEqual(obs(c, 1, "O-autre"), 59)
+
+    def test_K34_branche_ambigue_non_etablie(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "compaction-ambigue"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(c["orchestrateur"]["sessions"][0]["etats"], ["non établie : branche ambiguë dans la session"])
+
+    def test_K35_somme_des_tours_differente_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            art = json.loads((runs / f"{FXRUN}-01-worker.json").read_text(encoding="utf-8"))
+            art["usage"]["output"] += 1
+            (runs / f"{FXRUN}-01-worker.json").write_text(json.dumps(art), encoding="utf-8")
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("champ output", sortie)
+
+    def test_K36_artefact_hors_journal_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "identite")
+            reecrire(runs / f"{FXRUN}-delegations.jsonl", lambda l: l[:1])
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("absent du journal des délégations", sortie)
+
+    def test_K37_rapprochement_interne_en_defaut_arrete(self):
+        from unittest import mock
+        vrai = rc.ctx_bilan
+
+        def fausse(tours):
+            b = vrai(tours)
+            b["somme_R_q"] += 1
+            return b
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            with mock.patch.object(rc, "ctx_bilan", fausse):
+                code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 1, sortie)
+            self.assertIn("INCOHÉRENCE INTERNE (--contexte) — délégation #1 avec_thinking", sortie)
+
+    # ---- corrections R1–R6 de la revue r3 (décision 6ea3062b) : K38–K47
+    def test_K38_sequence_portee_par_deux_artefacts_refuse(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "identite")
+            for ext in (".json", ".jsonl"):
+                (runs / f"{FXRUN}-02-reviewer{ext}").rename(runs / f"{FXRUN}-01-reviewer{ext}")
+            def seq1(lignes):
+                lignes[1]["seq"] = 1
+                lignes[1]["artifact"] = f"/x/.pi-subagent-runs/{FXRUN}-01-reviewer.json"
+                return lignes
+            reecrire(runs / f"{FXRUN}-delegations.jsonl", seq1)
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn(f"séquence #1 portée par deux artefacts, {FXRUN}-01-worker.json et {FXRUN}-01-reviewer.json", sortie)
+
+    def _revue_risques(self, t, for_risks, evenements):
+        runs, sessions = fixture(t, "revue")
+        def w5(lignes):
+            for x in lignes:
+                if x["seq"] == 5:
+                    x["for_risks"] = x["for_risks"] + for_risks
+            return lignes
+        reecrire(runs / f"{FXRUN}-delegations.jsonl", w5)
+        reecrire(runs / f"{FXRUN}-risks.jsonl", lambda l: l + evenements)
+        code, sortie, c = contexte_de(t, runs, sessions)
+        self.assertEqual(code, 0, sortie)
+        return {x["risque"]: x for x in deleg(c, 5)["liens_for_risks"]}
+
+    def test_K39_for_risks_autre_run_ou_autre_role_non_documente(self):
+        with tempfile.TemporaryDirectory() as t:
+            liens = self._revue_risques(t, [f"{FXRUN}-02-2", f"{FXRUN}-02-3"], [
+                {"at": "2026-01-01T00:00:03.000Z", "event": "opened", "id": f"{FXRUN}-02-2", "by": "/x/.pi-subagent-runs/aaaaaaaaaaaaaaaa-02-reviewer.json"},
+                {"at": "2026-01-01T00:00:03.000Z", "event": "opened", "id": f"{FXRUN}-02-3", "by": f"/x/.pi-subagent-runs/{FXRUN}-02-worker.json"}])
+            self.assertEqual(liens[f"{FXRUN}-02-1"], {"risque": f"{FXRUN}-02-1", "reviewer": 2, "piece": f"{FXRUN}-02-reviewer.json"})
+            self.assertEqual(liens[f"{FXRUN}-02-2"], {"risque": f"{FXRUN}-02-2", "lien": "non documenté"})
+            self.assertEqual(liens[f"{FXRUN}-02-3"], {"risque": f"{FXRUN}-02-3", "lien": "non documenté"})
+
+    def test_K40_for_risks_evenement_contradictoire_ou_sans_source_non_documente(self):
+        with tempfile.TemporaryDirectory() as t:
+            liens = self._revue_risques(t, [f"{FXRUN}-02-4", f"{FXRUN}-03-5"], [
+                {"at": "2026-01-01T00:00:03.000Z", "event": "opened", "id": f"{FXRUN}-02-1", "by": f"/x/.pi-subagent-runs/{FXRUN}-02-reviewer.json"},
+                {"at": "2026-01-01T00:00:03.000Z", "event": "opened", "id": f"{FXRUN}-02-4", "by": f"/x/.pi-subagent-runs/{FXRUN}-02-reviewer.json"},
+                {"at": "2026-01-01T00:00:03.000Z", "event": "opened", "id": f"{FXRUN}-02-4", "by": f"/x/.pi-subagent-runs/{FXRUN}-03-reviewer.json"},
+                {"at": "2026-01-01T00:00:03.000Z", "event": "opened", "id": f"{FXRUN}-03-5"}])
+            self.assertEqual(liens[f"{FXRUN}-02-1"]["reviewer"], 2)  # doublon identique : lien maintenu
+            self.assertEqual(liens[f"{FXRUN}-02-4"], {"risque": f"{FXRUN}-02-4", "lien": "non documenté"})
+            self.assertEqual(liens[f"{FXRUN}-03-5"], {"risque": f"{FXRUN}-03-5", "lien": "non documenté"})
+
+    def test_K41_champ_d_usage_absent_de_l_artefact_n_est_pas_zero(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(deleg(c, 1)["rapprochement"], "rapproché")  # vrai zéro présent : contrôle nominal
+            art = lire_art(runs, f"{FXRUN}-01-worker.json")
+            del art["usage"]["cacheWrite"]  # cacheWrite = 0 dans tous les tours
+            ecrire_art(runs, f"{FXRUN}-01-worker.json", art)
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            d = deleg(c, 1)
+            self.assertEqual(d["rapprochement"], "non établi")
+            self.assertIn("non établie pour le rapprochement : champ cacheWrite absent de l'artefact", d["etats"])
+            self.assertNotIn("cacheWrite", d["usage_artefact"])
+
+    def test_K42_turns_absent_de_l_artefact_n_est_pas_zero(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            art = lire_art(runs, f"{FXRUN}-01-worker.json")
+            del art["turns"]
+            ecrire_art(runs, f"{FXRUN}-01-worker.json", art)
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            d = deleg(c, 1)
+            self.assertEqual(d["rapprochement"], "non établi")
+            self.assertIn("non établie pour le rapprochement : champ turns absent de l'artefact", d["etats"])
+
+    def test_K43_booleen_n_est_pas_un_entier_de_comptage(self):
+        with self.subTest("artefact"), tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            art = lire_art(runs, f"{FXRUN}-01-worker.json")
+            art["usage"]["cacheWrite"] = False
+            ecrire_art(runs, f"{FXRUN}-01-worker.json", art)
+            code, sortie, _ = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("champ cacheWrite de l'artefact non entier (False)", sortie)
+        with self.subTest("tours"), tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            def faux(lignes):
+                for e in lignes:
+                    m = e.get("message") or {}
+                    if m.get("role") == "assistant":
+                        m["usage"]["cacheWrite"] = False
+                return lignes
+            reecrire(runs / f"{FXRUN}-01-worker.jsonl", faux)
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(deleg(c, 1)["rapprochement"], "non établi")
+
+    def test_K44_masses_connues_d_une_delegation_sans_transcription(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "usage")
+            art = {"runId": FXRUN, "role": "worker", "model": "m", "task": "t", "turns": 1, "durationMs": 1,
+                   "usage": {"input": 70, "output": 2, "cacheRead": 5, "cacheWrite": 0, "total": 77},
+                   "envelope": {"role": "worker", "status": "ok", "payload": {}}}
+            ecrire_art(runs, f"{FXRUN}-03-worker.json", art)
+            reecrire(runs / f"{FXRUN}-delegations.jsonl", lambda l: l + [
+                {"at": "2026-01-01T00:00:03.000Z", "seq": 3, "role": "worker", "work_unit": "W01",
+                 "artifact": f"/x/.pi-subagent-runs/{FXRUN}-03-worker.json", "for_risks": [], "failure": None}])
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            w = c["par_role"]["worker"]
+            self.assertEqual((w["attendues"], w["lues"]), (2, 1))
+            self.assertEqual((w["masse_observee"], w["masse_attendue_connue"], w["masse_attendue_inconnue"]), (450, 525, []))
+            self.assertEqual([(x["seq"], x["masse_attendue"]) for x in w["non_etablies"]], [(3, 75)])
+            perimetre = "sous-ensemble observé : 1 délégation(s) lue(s) sur 2 attendue(s)"
+            self.assertEqual(w["perimetre"], perimetre)
+            self.assertEqual(w["variantes"]["avec_thinking"]["classement"]["perimetre"], perimetre)
+            self.assertIn(perimetre, sortie)
+
+    def test_K45_origine_tracable_a_chaque_appel(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(code, 0, sortie)
+            membre = f"{FXRUN}-01-worker.jsonl"
+            self.assertEqual([(r["membre"], r["appel"], r["outil"], r["lignes"]) for r in refs(c, 1, "O-lecture")], [
+                (membre, "c1", "read", [[1, 10]]), (membre, "c2", "read", [[11, 100]]), (membre, "c3", "read", [[1, 3]]),
+                (membre, "c4", "read", [[4, 5]]), (membre, "c6", "read", [[1, 10]]), (membre, "c11", "read", [[1, 2]])])
+            self.assertEqual([(r["appel"], r["lignes"]) for r in refs(c, 1, "O-relecture")], [("c2", [[5, 10]]), ("c4", [[1, 3]])])
+            self.assertTrue(all(isinstance(r["message"], int) for r in refs(c, 1, "O-lecture")))
+
+    def test_K46_references_de_revue_conservees_apres_fusion(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "revue"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual(obs(c, 5, "O-revue"), 180)
+            self.assertEqual(sorted((r["reviewer"], r["artefact"], r["champ"]) for r in refs(c, 5, "O-revue")), [
+                (2, f"{FXRUN}-02-reviewer.json", "findings[0].fix"), (2, f"{FXRUN}-02-reviewer.json", "findings[0].issue"),
+                (2, f"{FXRUN}-02-reviewer.json", "open_risks[0]"), (3, f"{FXRUN}-03-reviewer.json", "findings[0].issue"),
+                (3, f"{FXRUN}-03-reviewer.json", "open_risks[0]")])
+            i1 = [r["intervalle_tache"] for r in refs(c, 5, "O-revue") if r["champ"] == "findings[0].issue"]
+            self.assertEqual(len(i1), 2)
+            self.assertEqual(i1[0], i1[1])  # même intervalle, deux sources, caractères comptés une fois
+
+    def test_K47_encadrement_de_read_hors_lignes_nouvelles(self):
+        with tempfile.TemporaryDirectory() as t:
+            code, sortie, c = contexte_de(t, *fixture(t, "relecture"))
+            self.assertEqual(code, 0, sortie)
+            self.assertEqual((obs(c, 1, "O-lecture"), obs(c, 1, "O-relecture"), libelles(c, 1, "O-autre")),
+                             (585, 45, {"encadrement de read": 50, "read en erreur": 20}))
+            enc = [r for r in refs(c, 1, "O-autre") if r["appel"] == "c3"]
+            self.assertEqual(len(enc), 1)
+            self.assertNotIn("lignes", enc[0])
+            self.assertEqual(deleg(c, 1)["variantes"]["avec_thinking"]["bilan"]["somme_estime_q"], SOMME_ESTIME_RELECTURE)
+
+    # ---- correction C1 de la revue r4 (décision 27f08c00) : K48
+    def test_K48_masse_attendue_inconnue_si_champ_absent_de_l_artefact(self):
+        with tempfile.TemporaryDirectory() as t:
+            runs, sessions = fixture(t, "nominal")
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            w = c["par_role"]["worker"]  # contrôle nominal : vrai zéro présent, masse attendue connue
+            self.assertEqual((deleg(c, 1)["masse_attendue"], w["masse_attendue_connue"], w["masse_attendue_inconnue"],
+                              w["masse_observee"]), (350, 350, [], 350))
+            art = lire_art(runs, f"{FXRUN}-01-worker.json")
+            del art["usage"]["cacheWrite"]  # tous les tours portent cacheWrite = 0 explicitement
+            ecrire_art(runs, f"{FXRUN}-01-worker.json", art)
+            code, sortie, c = contexte_de(t, runs, sessions)
+            self.assertEqual(code, 0, sortie)
+            w = c["par_role"]["worker"]
+            self.assertIsNone(deleg(c, 1)["masse_attendue"])
+            self.assertEqual((w["masse_attendue_connue"], w["masse_attendue_inconnue"], w["masse_observee"]), (0, [1], 350))
+            self.assertIn("masse attendue inconnue : #1", sortie)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,27 @@
+run f0f0f0f0f0f0f0f0 (seul run du dossier) · unités W01 · design_update non
+plan : f0f0f0f0f0f0f0f0-plan.json · planHash 269dd0f09b2def83 vérifié (manifeste actif)
+sessions (toutes les sessions du dossier, chacune attribuée au run) : s.jsonl
+coupure : plan jamais terminal : pas de coupure
+
+== RELEVÉS — tokens facturés (entrée + cache relu + cache écrit + sortie)
+                          avant coupure        après   run entier
+  orchestrateur                      35            0           35
+  worker (1+0)                      360            0          360
+  sous-agents                       360            0          360
+  TOTAL                             395            0          395
+
+  orchestrateur avant coupure : 1 appels · entrée 30 · cache relu 0 · sortie 5 · contexte médian 30 · pic 30
+
+== ORCHESTRATEUR — décomposition du contexte [estimé : caractères / 4, avant coupure]
+  nature                          n    tokens  relus ensuite   part
+  retour de délégation            1         6              0   0.0%
+
+  relectures d'un contenu identique [estimé] : 0 chemin(s), 0 tokens relus pour rien à la lecture
+
+  verbosité : sortie totale 5 · médiane 5 · 5 plus longues [5] · texte visible 5 [estimé]
+
+== DÉLÉGATIONS
+  #1   avant worker             W01   tours   2 · total      360 · cache relu   0.0% · injecté None · 1 s
+
+== ALLERS-RETOURS PAR UNITÉ (avant coupure)
+  W01 : W#1 · workers 1 · reprises 0
