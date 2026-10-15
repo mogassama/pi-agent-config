@@ -1415,6 +1415,20 @@ Partie 2, 2E et 2H.
 - [ ] Porte de preuve à la fin d'un worker — « fini » exige une preuve exécutée par le
       runtime, pas déclarée.
 - [ ] Dépendances entre lots et déblocage automatique dans le registre de lanes.
+- [ ] **Mesurer `maxParallel`, puis inscrire la valeur retenue dans la configuration.**
+      *Proposition de Mo, 15-10 — inscription au suivi retenue ; plan de phase à adjuger.*
+      Aucune mesure ni aucun changement de réglage n'est autorisé ici. La référence historique
+      qualifiée est `maxParallel=2` (pilote du 27-09, qualifié le 29-09).
+      Au plan de phase 8 : fixer les valeurs candidates, conserver 2 comme témoin et comparer sur un
+      même corpus, à conditions contrôlées, avec répétitions et dispersion déclarées.
+      *À fixer au plan :* objectif, périmètre, qualification bornée, retour arrière et critères de choix.
+      Mesurer durée de campagne, qualité, coût et tokens, reprises, conflits et quota fournisseur ;
+      aucun gain de coût ou de tokens n'est présumé. Conserver le détail par worker et les agrégats de
+      campagne, selon les mêmes règles de comptage. Toute valeur retenue reste bornée au contexte testé.
+      *Condition d'entrée :* l'ordre des phases est conservé (3 avant 2, phase 8 après 2 à 7), avec
+      gel et pilote préalables, puis plan de phase adjugé.
+      *Activation distincte :* après décision sur les résultats et autorisation de pose, la valeur
+      persistante, révisable, vit dans la configuration versionnée ; le runtime l'applique au nominal.
 - [ ] Invariant testé : arrêter le parent arrête tous les enfants.
 - [ ] **Revue d'ensemble après intégration** — ce qui casse au croisement des lanes.
 - [ ] Chaînes de repli et rotation de clés, par rôle (OMP).
