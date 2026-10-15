@@ -1,4 +1,4 @@
-# Chantier — état au 14 octobre 2026
+# Chantier — état au 15 octobre 2026
 
 *Registre de la configuration pi. Ce qui est fait quitte « à faire », ce qui a été
 tranché ne garde que sa raison, ce qu'une mesure a réfuté le dit.*
@@ -20,9 +20,11 @@ le dernier sans aucun échec. **Septembre — le chantier `3c`** : un audit exte
 la parallélisation des writers possible sous preuves. Aucune régression d'audit ne reste
 ouverte.
 
-**État courant (14-10) :** branche `feat/subagent-extension`, commit publié
-`6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2, commit documentaire, parent unique `2def810f…`),
-arbre documentaire `77d12c5b89cd1ccb4eadfbe363231168955f86df`. Trois acquis, distincts :
+**État courant (15-10) :** branche `feat/subagent-extension`, tête distante et commit publié
+`8ac87262ed01f38ad5e19dbf375a9420f04bcaf6` (POST-3b, commit documentaire, parent unique `aa0fc55c…`),
+arbre documentaire `a53c81ef3de406c5e83b3761f52a837544474ceb`. *État du 14-10, conservé :* commit publié
+`6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2), arbre documentaire
+`77d12c5b89cd1ccb4eadfbe363231168955f86df`. Cinq éléments, distincts :
 
 - **LOT-PI-ADAPT, clos le 13-10, niveau A, neutre sur pi 0.86.0** — commit
   `2def810f56d96bb459716efda4d409028b14de72`, parent `b54532045e1305bd48ee93ea8fdebdcca534b847`, arbre
@@ -33,9 +35,19 @@ arbre documentaire `77d12c5b89cd1ccb4eadfbe363231168955f86df`. Trois acquis, dis
 - **POST-1, établi** — `core.hooksPath` local activé sur les trois crochets qualifiés (voir § 9).
 - **POST-2, achevé le 14-10** — README, nouveau `docs/MONTEE-PI.md`, skill `git-collaboration` ; publié
   sans force ni tags ; aucun nouveau run de qualification, QD ni changement de pi.
+- **POST-3 et POST-3b, publiés et achevés (14-10, 15-10)** — `aa0fc55c…` (arbre `efb2ccd5…`), portage du
+  suivi, puis `8ac87262…` (arbre `a53c81ef…`), inscription de la mesure de `maxParallel` en phase 8 ;
+  documentation seule, aucun changement de réglage. Le nettoyage borné est achevé, avec son écart de
+  séquence P1/P2 maintenu ; l'écart d'authentification préalable du manifeste de POST-3b est maintenu comme
+  écart historique ; aucune autre conservation n'est levée.
+- **Phase 0 : plan adjugé, réalisation à venir (15-10)** — mesure A et relevé de dépense par une option
+  `--contexte` de `bin/run-cost`, niveau B, sans nouveau run ; rien n'est construit dans le dépôt ni
+  mesuré. Ce registre n'en porte aucun résultat. Détail et raisons : § 5 ; plan et corpus : `SUIVI.md`,
+  *Phase 0*. Le portage POST-3c, documentaire, précède tout code de phase 0.
 
-*Ordre de la suite (adjugé le 08-10, repris le 14-10) :* LOT-PI-ADAPT clos, POST-1 et POST-2 achevés,
-portage POST-3 → phase 0 (mesure A et relevé de dépense) → phase 3 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9 →
+*Ordre de la suite (adjugé le 08-10, repris les 14-10 et 15-10) :* LOT-PI-ADAPT clos, POST-1, POST-2,
+POST-3 et POST-3b achevés, portage POST-3c → phase 0 (mesure A et relevé de dépense ; plan adjugé,
+réalisation à venir) → phase 3 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9 →
 phase 9b (versions, dont montée directe de pi) → QD de référence sur l'environnement final de 9b →
 phase 10 (modèles). **Une phase par lot**, après plan adjugé. Aucune mesure A, phase suivante, montée de
 pi ni QD n'est lancée par ce portage. Détail : `SUIVI.md`.
@@ -537,6 +549,10 @@ qui est prouvé.
 | **Montée de pi directe vers la cible stable publiée** *(08-10)* | Remplace les paliers 0.87.0/0.99.0 du 06-10 : version exacte et identité complète épinglées, jamais `latest` ; paliers intermédiaires seulement en diagnostic autorisé. pi 1.0.1 retire `npm-shrinkwrap.json`, donc la seule version ne fixe pas l'installation. Aucune cible n'est choisie avant le plan de montée |
 | **Une phase par lot** *(08-10)* | Remplace « trois items par lot par défaut » : plan adjugé (objectif, périmètre exact, qualification bornée, retour arrière) ; une phase trop large se découpe au plan, avant construction |
 | **La phase 3 vient avant la phase 2** *(08-10)* | Exception explicite à l'ordre numérique : ses trois priorités (registres durables, instruments hors dépôt, garde du push) précèdent, sans plafond automatique de trois items |
+| **Phase 0 : lecture directe, aucune origine par soustraction** *(15-10)* | Le solde d'un tour à l'autre (variation du contexte moins la sortie précédente) range dans une origine visible des éléments invisibles — sérialisation, schémas d'outils, raisonnement caché — et rend le résidu non indépendant : il s'annule par construction. Sont admis la lecture directe des textes observés, l'estimation caractères/4 indépendante des usages et un résidu signé, publié, jamais redistribué ; la résidence des textes reste une hypothèse non prouvée, affichée comme telle. Verdict « attribution non établie », tête du classement « premier poste estimé » : ni causalité ni correction de contexte n'en découlent, et aucun seuil n'est adopté faute de méthode validée pour borner l'erreur des catégories |
+| **Corpus de la phase 0 : QD-EFF-a/b en principal** *(15-10)* | Remplace la cible `a1c83f`, dont l'inventaire n'a trouvé aucune pièce (absence bornée à cet inventaire). Deux runs donnent un écart observé a/b, pas une bande de bruit générale. Le pilote final et QD-P1b, distincts, servent à l'échelle et aux reprises ; pas d'agrégation entre candidats ; les résultats restent historiques, sans transfert à l'environnement technique actuel |
+| **Python : aucun gel de version** *(15-10)* | Le Python stable courant de la machine est employé, résolu une fois puis invoqué explicitement ; son chemin et sa version sont relevés dans l'environnement réel de l'invocation, sans `PATH` imposé qui masquerait l'installation habituelle. Une version différente n'est pas un écart ; une sortie canonique différente l'est. Aucun repli automatique vers une ancienne version |
+| **Conservations du bac précédent : devenues matériellement inaccessibles, non levées** *(15-10)* | L'inaccessibilité ne prouve pas la destruction ; aucune suppression n'est autorisée ou constatée ; aucune levée générale des conservations. Aucun acte ni résultat ne dépend d'une pièce présente seulement dans l'ancien bac |
 
 ---
 
@@ -864,3 +880,15 @@ globale ; le chemin absolu ne garantit pas une isolation physique.
 **Une phase par lot (08-10).** Une phase ne devient un lot qu'après un plan adjugé : objectif commun,
 périmètre exact, qualification bornée, retour arrière défini. Les conditions d'entrée restent : mesure A
 avant tout changement de contexte, banc avant tout allègement, gel et pilote avant l'intégration.
+
+**Le bac n'est pas un dépôt durable (15-10).** Toute pièce du bac destinée à durer est déposée sur le Mac,
+dans un dossier neuf, sous manifeste vérifié, avant la fin de la conversation et avant que sa conservation
+soit invoquée. Aucun futur acte ni résultat ne dépend d'une pièce présente seulement dans un ancien bac ;
+une dépendance découverte est rapportée à Sol, sans substitution silencieuse. Les éléments contenant des
+identifiants ne sont pas copiés par cette règle.
+
+**Un portage documentaire ne touche que ses chemins (15-10).** POST-3c ne porte que `SUIVI.md` et
+`CHANTIER.md` ; la boîte privée et le registre des résultats restent hors dépôt et hors push, et aucun
+fichier de code n'y entre. Le commit documentaire précède le commit de code de la phase 0 ; si la seconde
+étape d'un établissement échoue, il n'y a ni push ni retour automatique, et l'état partiel est conservé et
+rapporté.

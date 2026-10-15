@@ -3,12 +3,22 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-*Mise à jour du 14-10-2026 (portage POST-3).* **État courant :** branche `feat/subagent-extension`,
-commit publié `6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2, commit documentaire, parent
-unique `2def810f…`), arbre documentaire `77d12c5b89cd1ccb4eadfbe363231168955f86df`. **Le candidat
-technique qualifié demeure `2def810f56d96bb459716efda4d409028b14de72`, arbre
-`b1a99caa0e31e96cbc5279dbca19781335ac764b`** (LOT-PI-ADAPT, clos le 13-10) : ses portes ne sont pas
-présentées comme rejouées sur l'arbre documentaire.
+*Mise à jour du 15-10-2026 (portage POST-3c).* **État courant :** branche `feat/subagent-extension`,
+tête distante et commit publié `8ac87262ed01f38ad5e19dbf375a9420f04bcaf6` (POST-3b, commit
+documentaire, parent unique `aa0fc55c…`), arbre documentaire
+`a53c81ef3de406c5e83b3761f52a837544474ceb`. **Le candidat technique qualifié demeure
+`2def810f56d96bb459716efda4d409028b14de72`, arbre `b1a99caa0e31e96cbc5279dbca19781335ac764b`**
+(LOT-PI-ADAPT, clos le 13-10) : ses portes ne sont pas présentées comme rejouées sur les arbres
+documentaires. pi 0.86.0 reste en usage ordinaire, crochets actifs. POST-3 (`aa0fc55c…`) et POST-3b
+(`8ac87262…`) sont publiés et achevés ; le nettoyage borné est achevé, avec son écart de séquence P1/P2
+maintenu ; maxParallel est seulement inscrit en phase 8. **La phase 0 n'est pas lancée : son plan est
+adjugé, sa réalisation est à venir** (voir *Phase 0*). Le présent portage, POST-3c, est documentaire et
+précède tout code de phase 0 ; il ne porte aucun résultat de mesure.
+
+*État du 14-10-2026 (portage POST-3), remplacé le 15-10 par le paragraphe ci-dessus et conservé :*
+branche `feat/subagent-extension`, commit publié `6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2,
+commit documentaire, parent unique `2def810f…`), arbre documentaire
+`77d12c5b89cd1ccb4eadfbe363231168955f86df`.
 
 Branche `feat/subagent-extension`. Chaîne des états : `c42f2d4` (correctif pré-pilote C4, arbre
 `3a7de843`), puis `83eb62a` (`PORTES-GEL` v4, arbre `82a9b1b8`), **gelé par Sol et poussé le 27-09**, puis `a562579`
@@ -18,7 +28,8 @@ Branche `feat/subagent-extension`. Chaîne des états : `c42f2d4` (correctif pr�
 (LOT-REPRISES-CORRECTIF, arbre `6c03bd41`), **gelé et poussé le 01-10**, puis `555b202f` (lot
 efficacité, arbre `8b821da4`), **gelé et poussé le 06-10**, puis `2def810f` (LOT-PI-ADAPT, arbre
 `b1a99caa`), **établi, gelé et poussé le 13-10**, puis `6a73e9ee` (POST-2, arbre `77d12c5b`),
-**établi et publié le 14-10**.
+**établi et publié le 14-10**, puis `aa0fc55c` (POST-3, arbre `efb2ccd5`), **établi et publié le
+14-10**, puis `8ac87262` (POST-3b, arbre `a53c81ef`), **établi et publié le 15-10**.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste. Les références **[A]** désignent les sections de
 `SUIVI-en-attente.md`, boîte d'attente privée tenue par Mo hors du dépôt.
@@ -695,6 +706,96 @@ et de publication de POST-2, et les textes publiés. Les audits restent sous
       qualifié reste l'arbre `b1a99caa…`.
       *Portage POST-3 (ce fichier, `CHANTIER.md`, boîte privée) :* préparé dans une livraison neuve,
       relue par Sol ; la pose, le commit et son éventuelle publication attendent sa décision.
+      *[15-10, achevé :]* ce portage a été posé, commité et publié par POST-3 puis POST-3b — voir la
+      section suivante.
+
+### POST-3, nettoyage borné, POST-3b et reprise (14-10 → 15-10)
+
+*Pièces faisant foi : les adjudications de Sol des 14 et 15-10 (textes POST-3 ; établissement et
+publication ; inventaire de nettoyage, reprises et banc du nettoyage, M1 ; maxParallel ; POST-3b ;
+réception de la reprise ; décision de reprise), les retours d'établissement et de publication, et le
+registre des résultats, hors dépôt. Ce portage distingue les actes (exécutés par Mo), les observations
+(rapportées par Claude) et les adjudications (de Sol) ; les écarts déclarés ne sont pas effacés par les
+constats finaux conformes.*
+
+- [x] **POST-3 — publié et achevé (14-10).** Textes adjugés avec corrections de Sol, posés dans le
+      Projet (3/3 conformes), puis commit documentaire `aa0fc55cc1ca448daf7971f4ca04d0d4ca519d09`,
+      parent unique `6a73e9ee…`, arbre `efb2ccd5…`, 257 fichiers suivis, message adjugé, **établi** une
+      fois par Mo (22:21Z, aucun push) **puis publié** (22:43Z) sans force ni tag : tête distante avant
+      `6a73e9ee…`, après `aa0fc55c…`. Manifestes des retours : établissement `6a152e2e…`, publication
+      `71bfc4a3…`. Déclaré **achevé** par Sol (`2afa4ea4…`, 15-10) ; candidat technique inchangé
+      (`b1a99caa…`).
+- [x] **Nettoyage borné — achevé le 15-10, avec écarts déclarés.** Sur l'inventaire en lecture seule
+      (`44042cc7…`) et la liste fermée adjugée par Sol (`928dc2fa…`) : M1 (archive redondante du Mac),
+      B1 à B4 (mondes des bancs POST-2 R1, POST-2 R2 en deux passages et POST-3 R1, dans le bac) et P1, P2
+      (copies Projet de l'ancien transit POST-3 et des sources POST-3, 21 documents).
+      B1 et B2 retirés conformes. **Arrêts avant l'acte, sans suppression**, sur B3 : d'abord un fichier de
+      résultats rangé dans la cible, puis des refus de lecture dans la recherche des références
+      (décisions de Sol `64ce61fa…`, puis `37596117…`). Collecteur root et script de retrait corrigés ; banc de reprise conforme au
+      troisième passage, après deux arrêts de banc déclarés (`a450cceb…`) ; B3 et B4 retirés conformes ;
+      P1 et P2 retirés, chacun après relecture de taille et d'empreinte (état final jugé conforme par Sol,
+      `6d04531c…`) ; M1 autorisé en deux temps (`6d04531c…`) et exécuté par Mo (contrôle, puis retrait), avec
+      un jugement de références rendu conforme par Claude ; nettoyage déclaré achevé par Sol (`e5b56ba9…`).
+      **Écart de séquence P1/P2 maintenu :** le Projet n'a pas été listé après chaque retrait (un listage
+      avant P1, un après P2) ; l'état final est conforme et l'écart n'est pas effacé. **Aucune autre
+      conservation n'est levée.** Ce nettoyage n'ouvre ni montée de pi, ni mesure A, ni QD.
+- [x] **maxParallel, puis POST-3b — publié et achevé (15-10).** Proposition de Mo, inscrite en phase 8
+      (mesure de la valeur ; plan à adjuger ; aucun réglage changé). Textes corrigés par Sol (`SUIVI.md`
+      `bc62cdbb…`, boîte privée `426eb7dc…`), posés dans le Projet (2/2) après le nettoyage. Commit
+      documentaire `8ac87262ed01f38ad5e19dbf375a9420f04bcaf6`, parent unique `aa0fc55c…`, arbre
+      `a53c81ef3de406c5e83b3761f52a837544474ceb`, blob Git de `SUIVI.md` `255b1900…`, `CHANTIER.md`
+      conservé (`d4d16412…`, contrôlé avant et après), message adjugé, **établi** une fois par Mo (07:08Z,
+      aucun push) **puis publié** (07:31Z) sans force ni tag : tête distante avant `aa0fc55c…`, après
+      `8ac87262…`. Manifestes des retours : établissement `e3860264…`, publication `b93371d0…`.
+      **Écart d'authentification préalable du manifeste de POST-3b, maintenu comme écart historique** ;
+      un précontrôle documentaire des trois manifestes a été consigné avant la publication. Clôture par
+      Sol : manifeste de la décision `3962c33c…` (le texte de la décision porte `3371e479…` ; les
+      citations futures distinguent les deux).
+- [x] **Reprise du 15-10 : réception documentaire et décision.** Trois nouvelles conversations (construction,
+      adjudication, suivi) reprennent sur un dossier de reprise (manifeste `7261b631…`, 13
+      empreintes) et son archive (`76b009dd…`, 301 276 octets), retenus par Sol comme copies documentaires
+      vérifiées (décision de réception, manifeste `72d010ef…`) ; aucun travail de chantier n'est ouvert
+      par cette réception. L'incident de constitution de l'archive (échec initial, archive vide remplacée,
+      temporaire à retirer par Mo) reste une **déclaration de Mo** : Sol ne l'a pas constaté et n'a rien
+      supprimé. Le contrôle de l'archive par la conversation de suivi est consigné comme
+      **déclaré**, non vérifié par Sol (note de réception `9a99ea4b…`). La reconstruction par la
+      conversation de construction, dans un bac neuf, de la référence `8ac87262…` (arbre `a53c81ef…`, 257
+      fichiers suivis, `fsck` code 0, tête locale égale à la tête distante) est reçue **sur compte rendu** ;
+      Sol n'a observé ni ce bac ni le distant.
+- [x] **Décision de reprise (Sol, manifeste `4734d360…`).** Deux préparations en parallèle — le portage
+      par ce suivi, l'inventaire et le plan de phase 0 par la construction — avec **un seul POST-3c
+      documentaire commun** (portage et inscription du plan), avant tout code de phase 0. Cadre de la
+      phase 0 reçu : niveau B, aucun nouveau run, corpus principal QD-EFF-a/b ; détail dans *Phase 0*.
+      L'ordre du 08-10 est inchangé. Le registre des résultats, hors dépôt, garde son statut documentaire ;
+      sa version du Projet fait foi sur la copie de la reprise.
+- [x] **Statut du bac précédent : conservations prescrites devenues matériellement inaccessibles.**
+      Libellé de la décision de Sol, repris tel quel : *« Conservations prescrites du bac précédent :
+      devenues matériellement inaccessibles depuis la nouvelle conversation, selon le constat transmis par
+      Mo et Opus ; aucune suppression autorisée ou constatée par Sol, aucune levée générale des
+      conservations. »* L'inaccessibilité ne prouve pas la destruction. La formule « caduques par
+      inaccessibilité » n'est pas retenue. Aucune récupération de l'ancien bac n'est demandée ; les anciennes
+      preuves ne sont pas attribuées à de nouvelles copies sans contrôle d'identité ; les citations
+      historiques restent possibles avec leur statut. **Aucun futur acte ni résultat ne dépend d'une pièce
+      présente seulement dans l'ancien bac** : si une preuve manque, la dépendance est rapportée à Sol,
+      sans substitution silencieuse, nouvelle exécution ni récupération automatique. Les résultats déjà
+      adjugés restent reçus dans les limites et sur les pièces de leurs décisions.
+      *Règle de pérennité adoptée :* toute pièce du bac destinée à durer est déposée sur le Mac, dans un
+      dossier neuf, sous manifeste vérifié, avant la fin de la conversation et avant qu'on invoque sa
+      conservation durable ; un bac n'est pas un dépôt durable. Les éléments contenant des identifiants ne
+      sont pas copiés par cette règle ; pour les installations privées, le plan de conservation précisera
+      les artefacts reproductibles nécessaires.
+      *Table par famille, constituée sur les documents disponibles — sans inventorier de nouveau le bac
+      inaccessible :*
+
+      | Famille | Dernière trace documentaire | Couverture Mac | Limite pour les travaux futurs |
+      |:--|:--|:--|:--|
+      | Références Git reconstruites dans l'ancien bac | registre, retours d'établissement et de publication | établie pour la tête publiée `8ac87262…` (reconstruction neuve vérifiée, sur compte rendu) ; copies de l'ancien bac : non relues | ne pas invoquer les anciennes copies |
+      | Mondes et passage de développement de POST-3b | registre, § POST-3b R1 | dépôt Mac `post3b-r1` (manifeste `5ddc1e27…`) ; transport et passage de développement : **non établie** | pièces du bac inaccessibles ; pas de dépendance |
+      | Banc du lanceur M1 (mondes factices) | registre, M1 | lanceur déposé sur le Mac (manifeste `fd626fa8…`) ; mondes du banc : **non établie** | idem |
+      | Relectures des poses Projet POST-3 et POST-3b | registre, § 20–21 | preuve de la pose POST-3b sur le Mac (manifeste `8628dc4d…`) ; relectures restées au bac | pièces du bac inaccessibles ; couverture Mac limitée aux éléments effectivement identifiés et vérifiés, sans preuve supplémentaire au-delà des retours déjà adjugés |
+      | 262 racines protégées de `/tmp` et temporaires C-r* | registre, §§ 4 et 10 | dépôts Mac sous manifeste pour les résultats ; les racines elles-mêmes : **non établie** | aucune levée générale des conservations |
+      | Deux transports à couverture partielle | registre, §§ 2 et 4 | partielle | pièces du bac inaccessibles ; couverture Mac limitée aux éléments effectivement identifiés et vérifiés, sans preuve supplémentaire au-delà des retours déjà adjugés |
+      | Distributions Node et installations pi privées | registre, § 4 | **non établie** | pas de copie d'éléments à identifiants ; artefacts reproductibles à préciser au plan de conservation |
 
 ---
 
@@ -714,11 +815,11 @@ non qualifiée. Suivent **LOT-REPRISES** et son correctif, **qualifiés et clos 
 (objet final `1e07ae13`, efficacité toujours non qualifiée). Tout chantier suivant passe par
 un nouveau lot ; le suivant recommandé par Sol est **l'efficacité P1, diagnostic d'abord**.
 
-*Ordre actuel, adjugé le 08-10 et repris au portage du 14-10 — il remplace celui du 06-10 :*
+*Ordre actuel, adjugé le 08-10 et repris aux portages des 14-10 et 15-10 — il remplace celui du 06-10 :*
 
 ```text
-LOT-PI-ADAPT clos, POST-1 et POST-2 achevés, portage POST-3
-→ phase 0 : mesure A et relevé de dépense
+LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, portage POST-3c
+→ phase 0 : mesure A et relevé de dépense (plan adjugé, réalisation à venir)
 → phase 3 : dette prioritaire du chantier
 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9
 → phase 9b : versions, dont montée directe de pi
@@ -856,6 +957,75 @@ rôle. N'attend pas le pilote ; se mène en parallèle de la phase 1.*
 *[14-10]* Première phase de la suite adjugée le 08-10, après la clôture de LOT-PI-ADAPT : la mesure A
 précède tout changement de contexte. **Non lancée** par le portage POST-3.
 
+**[15-10] Plan adjugé, réalisation à venir.** Le cadre est adjugé par Sol (décisions `4734d360…`,
+`74cbcec9…`, `5c42e0f0…`, précision Python `5c5a4a8e…`). Le plan consolidé — v3, construit selon ce cadre
+sans nouveau tour de cadrage — est livré avec le code et relu par Sol à cette occasion. **Rien n'est
+construit dans le dépôt, rien n'est mesuré, aucun résultat n'est inscrit ici** : les résultats de la mesure
+et du rapport s'inscriront dans un commit documentaire ultérieur, après leur adjudication.
+
+- *Niveau et portée.* Niveau B : analyse historique de relevés conservés. Pas de run, pas de transfert vers
+  `b1a99caa`, pas de qualification technique du candidat. Le préalable de reproduction de l'instrument
+  inchangé (`f6581f37…`) est reçu conforme (décision `5c42e0f0…`) ; il ne qualifie ni `--contexte`, ni les
+  autres corpus, ni une version de Python.
+- *Objet.* Doter `bin/run-cost` d'une option `--contexte`, versionnée et testée, et la lire sur un corpus
+  arrêté pour publier deux lectures historiques datées. **(A) Mesure A, descriptive :** les textes
+  directement observés dans l'entrée des appels des workers, par origine (une seule origine par caractère,
+  priorité fixée), leur estimation par caractères/4 — indépendante des usages relevés —, un résidu signé et
+  un classement descriptif. **Verdict : « attribution non établie »** ; la tête du classement s'appelle
+  « premier poste estimé ». **(B) Relevé de dépense :** grille par rôle (orchestrateur, worker, reviewer,
+  scout, advisor, integration-worker ; `input`, `cacheRead`, `cacheWrite`, `output` dont `reasoning` non
+  additionné ; appels, délégations, tours, `durationMs`, pic et médiane du contexte, compactions et
+  horaires ; fenêtres avant et après la coupure), dénominateur = le run entier orchestrateur compris, puis
+  par worker ; la durée cumulée des délégations reste distincte de la durée écoulée ; **aucun montant
+  monétaire**. Ni causalité, ni correction de contexte ne sont autorisées par ces résultats ; ils éclairent
+  les plans des phases 5 et 6.
+- *Méthode, et ce que le plan écarte.* Lecture directe ; **aucune origine n'est mesurée par le solde
+  d'autres postes.** L'attribution par différences d'un tour à l'autre n'est pas adjugée (elle rangerait
+  dans une origine visible des éléments invisibles) ; les libellés « relevé sous hypothèse », le seuil de
+  0,8 et le seuil calibré sur le premier tour sont retirés. La seule soustraction admise est le **résidu**
+  R_t = C_t − Σ estimations résidentes, signé, publié, jamais redistribué ni écrêté, avec sa masse
+  Σ|R_t| / ΣC_t sur les mêmes tours que les parts ; les parts ne sont pas renormalisées. La résidence des
+  textes est une hypothèse non prouvée, affichée comme telle (texte nouveau distinct du cumul). Chaque
+  résultat est donné avec et sans les textes `thinking` observés ; aucun raisonnement caché n'est converti en
+  texte. La variation du contexte relevé par tour n'est qu'un contrôle de monotonie.
+- *Corpus (décision `74cbcec9…`).* C1 = QD-EFF-a (`ebf2ba0c`, archive `dce7ca72…`) et QD-EFF-b (`c9e479b3`,
+  archive `5cb467a6…`), configuration `555b202f` : principal pour la non-régression, la dépense et les
+  origines exercées, avec une dispersion a/b |a − b| / ((a + b) / 2) (« non définie » si le dénominateur est
+  nul) ; la dépense en findings lors d'une reprise y est « non exercée ». C2 = pilote final `0ffdeedc`
+  (archive `aebccae8…`, configuration `83eb62a`) et QD-P1b `c3eba4f9` (archive `fdbe72ed…`, configuration
+  `383a5f36`), distincts, avec les périodes du pilote séparées par la pièce de séparation (`6a335e18…`, ni
+  cinquième run ni effectif à additionner) et le repli de modèle isolé. Pas d'agrégation entre candidats.
+  **Changement explicite de corpus :** QD-EFF-a/b remplace la cible `a1c83f` du présent fichier, dont
+  l'inventaire réalisé n'a trouvé aucune pièce (absence bornée à cet inventaire) ; la raison est conservée
+  ici, sans nouvelle recherche historique. `1c5d47` (configuration `870f389`), les runs 12 à 15 et les autres QD sont exclus de
+  l'attribution.
+- *Périmètre du futur code.* `bin/run-cost` ; `tests/test_run_cost.py` (ajouts seuls : les 27 tests
+  existants restent inchangés) ; un dossier de fixtures `tests/fixtures/run-cost-contexte/` ; une section
+  d'usage dans `README.md`. Aucune dépendance nouvelle, aucun changement de runtime, de configuration ni
+  d'extension. Sans `--contexte`, les sorties restent identiques à l'octet et les refus inchangés.
+- *Qualification bornée.* Fixtures calculées à la main, cas mordants avec un mutant par garde, table et
+  banc figés avant le passage, arrêt au premier écart, essais de mise au point séparés des preuves ; les
+  huit cas du préalable sont rejoués avec le candidat. Un défaut d'admissibilité prévu donne « non établi » ;
+  un écart d'instrument, d'intégrité ou de rapprochement impose l'ARRÊT. Le retour arrière est décrit au
+  plan ; les relevés historiques et les sorties antérieures restent immuables.
+- *Séquence.* Une livraison unique (plan, textes documentaires, code, preuves, recettes, identité du
+  candidat), une revue de Sol, puis deux actes de Mo, chacun sur autorisation propre, pi arrêté, sans sudo,
+  une fois : **établissement** (précontrôles ; vérification native du nouveau code sur les copies scellées,
+  dont le premier écart arrête l'acte *avant* toute pose ou commit ; commit documentaire POST-3c, puis
+  commit du code de phase 0), puis **publication** (un seul push, sans force ni tag, tête distante exigée
+  `8ac87262…`). **POST-3c ne touche que `SUIVI.md` et `CHANTIER.md`** ; la boîte privée et le registre restent
+  hors dépôt et hors push ; aucun fichier de code n'entre dans POST-3c.
+- *Règle Python (précision `5c5a4a8e…`).* **Aucun gel de version.** Les passages emploient le Python stable
+  courant de l'environnement habituel de la machine ; l'interpréteur est résolu une fois, puis invoqué
+  explicitement, et **son chemin et sa version sont relevés dans l'environnement réel de l'invocation** —
+  l'interpréteur qui exécute effectivement l'instrument, pas un autre `python3` résolu par le shell. Les
+  lanceurs ne masquent pas par un `PATH` imposé l'installation habituelle de Mo. Un numéro annoncé par un
+  relevé historique du bac n'est ni cible, ni minimum, ni condition d'admission. Une version différente
+  entre bac et Mac, ou après une mise à jour automatique, n'est pas à elle seule un écart ni un motif
+  d'ARRÊT ; l'écart, c'est une sortie canonique différente. Un échec effectif se rapporte avec son
+  environnement et n'autorise aucun repli automatique vers une ancienne version. Aucune recherche de
+  version sur Internet, installation, rétrogradation ni modification du système n'est ouverte.
+
 - [ ] **Écrire la commande d'analyse, versionnée sous `bin/` et testée.** *29-09 : la part
       coût existe — `bin/run-cost`, livrée dans ITE-1, reproduit la baseline fonctionnelle ;
       la part contexte (mesure A) reste à écrire.* `ANALYSE-f0797e`,
@@ -878,6 +1048,9 @@ précède tout changement de contexte. **Non lancée** par le portage POST-3.
       (24-08, 44 délégations, config `870f389`), transcriptions complètes — absent du journal ;
       base disponible, datée d'avant les neuf lots. Worker Terra et identité du corpus
       adjugés, numéro non établi (voir run 9).
+      *[15-10, corpus révisé :]* la base de la mesure devient QD-EFF-a/b (voir le plan ci-dessus) ;
+      aucune pièce de `a1c83f` n'a été trouvée par l'inventaire réalisé (absence bornée à cet inventaire). La ligne ci-dessus est conservée pour
+      l'historique.
       *Débloque :* phases 5 et 6, la moitié « économie »
       de la scission d'`AGENTS.md`, l'adoption d'un bras court de l'épreuve de concision.
       [A] Partie 2, *Mesure A — le pivot, renvoi*.
@@ -1655,3 +1828,8 @@ après relecture de `A-RELIRE-AVANT-PUBLICATION.md` et des octets destinés au d
 *Portage POST-3 (14-10) :* même régime — la boîte d'attente reste entière, le commit ne vaut ni
 archivage ni autorisation de la vider. Un commit de documentation passe par le crochet `commit-msg`
 actif (POST-1) : voir le format dans *Ce qui est fait*.
+
+*Portage POST-3c (15-10) :* même régime. Le commit ne porte que ce fichier et `CHANTIER.md` ; la boîte
+d'attente et le registre des résultats restent hors dépôt et hors push, et la boîte reste entière. Les
+résultats de la phase 0 (mesure, rapport) s'inscriront dans un commit documentaire ultérieur, après leur
+adjudication.
