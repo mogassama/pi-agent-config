@@ -10,6 +10,33 @@ L'extension est dans `~/.pi/agent/extensions/bash-guard/` — elle est chargée 
 
 ## Comportement
 
+### Refus sans dialogue (avant tout le reste)
+
+Trois refus passent avant la whitelist, avant TOKEN et avant toute consommation
+du jeton de commit. Ils n'ont ni dialogue, ni always-allow, ni autorisation
+possible : ils bloquent, journalisent et disent pourquoi.
+
+| Refus | Pattern | Journal |
+|---|---|---|
+| Jeton de commit | `\.allow-commit\b` | `allow-commit token file` |
+| Autorisation de push (`git-hooks/pre-push`), noms consommés compris | `\ballow-push\b` | `allow-push authorisation file` |
+| Contournement des crochets | `--no-verify` (et `--no-veri`, `--no-verif`) sur une commande git, entre guillemets ou non ; `-n` sur `git commit`, seul ou dans une grappe d'options booléennes courtes qui le contient, éventuellement terminée par une lettre à argument (`-nm "msg"`, `-anm "msg"`) | `hook bypass` |
+
+`git push -n` (essai à blanc) n'est pas un contournement et n'est pas refusé ; `-mn`
+et `-amn` (message « n ») non plus. Les deux motifs sont sensibles à la casse, comme
+git lit ses options. Comme le reste de l'extension, c'est de la reconnaissance de
+motifs et non une analyse de shell. Limites déclarées :
+
+- une redirection comme `2>&1` placée avant l'option coupe le segment, et une
+  continuation de ligne est lue comme un saut de ligne ;
+- une valeur d'option globale entre guillemets qui contient une espace
+  (`git -C '/a b' …`, `git -c "user.name=a b" …`) n'est pas suivie ;
+- un `-n` dans un message entre guillemets doubles, et `git grep --no-verify`,
+  peuvent être refusés à tort ;
+- un glob qui n'épelle pas le mot (`~/.pi/.allow-p*`) n'est pas reconnu, et les
+  outils `write` et `edit` ne passent pas par bash-guard ;
+- `-c core.hooksPath=…` et les alias restent hors de ces refus.
+
 ### Niveau TOKEN (autorisation à usage unique)
 
 Le niveau le plus strict. Vérifié **avant** HIGH, MEDIUM et la whitelist — aucune

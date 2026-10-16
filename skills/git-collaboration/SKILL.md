@@ -239,6 +239,7 @@ are approved separately.
    Return `[hash] pushed to [branch]` — one line, nothing else.
    On `n`, return `[hash] committed, not pushed` and stop. A local commit is a
    perfectly good stopping point.
+   Pushing this configuration repository requires an exact, single-use operator authorisation; agents never create it or bypass hooks with --no-verify.
 ---
  
 ## /check-config — Config repo consistency (pi config repo only)

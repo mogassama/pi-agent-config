@@ -2309,5 +2309,292 @@
     "file": "subagent-only/repo-preflight.ts",
     "find": "  if (marqueur.etat === \"invalide\") {\n",
     "replace": "  if (marqueur.etat === (\"jamais\" as string)) {\n"
+  },
+  {
+    "test": "L0 REG P3-P1 — sans autorisation, un push de ce dépôt est refusé et le distant reste inchangé",
+    "file": "git-hooks/pre-push",
+    "find": "[ -e \"$f\" ] || refus \"no authorisation\"\n",
+    "replace": "[ -e \"$f\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P2 — une autorisation pour une autre ref est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$a_ref\" = \"$rref\" ] || refus \"the authorisation is for another ref\"\n",
+    "replace": "[ \"$a_ref\" = \"$rref\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P3 — une autorisation pour un autre objet est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$a_source\" = \"$loid\" ] || refus \"the authorisation is for another commit\"\n",
+    "replace": "[ \"$a_source\" = \"$loid\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P4 — une autorisation qui attend une autre tête distante est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$a_avant\" = \"$roid\" ] || refus \"the remote head is not the one the authorisation expects\"\n",
+    "replace": "[ \"$a_avant\" = \"$roid\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P5 — une autorisation écrite pour un autre dépôt local, avec les mêmes objets, est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$a_depot\" = \"$depot\" ] || refus \"the authorisation is for another repository\"\n",
+    "replace": "[ \"$a_depot\" = \"$depot\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P6 — une adresse de push changée sous le même nom de distant est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$a_destination\" = \"$(printf '%s' \"$adresse\" | sha256)\" ] || refus \"the authorisation is for another push destination\"\n",
+    "replace": "[ \"$a_destination\" = \"$(printf '%s' \"$adresse\" | sha256)\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P7 — une autorisation pour un autre nom de distant est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$a_distant\" = \"$distant\" ] || refus \"the authorisation is for another remote\"\n",
+    "replace": "[ \"$a_distant\" = \"$distant\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P8a — une autorisation à l'en-tête faux est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$(printf '%s' \"$contenu\" | sed -n 1p)\" = \"pi-push-autorisation v1\" ] || refus \"malformed authorisation (header)\"\n",
+    "replace": "[ \"$(printf '%s' \"$contenu\" | sed -n 1p)\" = \"pi-push-autorisation v1\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P8b — une autorisation portant un CR est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "case \"$contenu\" in *$'\\r'*) refus \"malformed authorisation (CR)\" ;; esac\n",
+    "replace": "case \"$contenu\" in *$'\\r'*) ;; esac\n"
+  },
+  {
+    "test": "L0 REG P3-P8c — une autorisation sans saut de ligne final est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "case \"$contenu\" in *$'\\n') ;; *) refus \"malformed authorisation (no final newline)\" ;; esac\n",
+    "replace": "case \"$contenu\" in *$'\\n') ;; *) ;; esac\n"
+  },
+  {
+    "test": "L0 REG P3-P8d — une autorisation de huit lignes est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$(printf '%s' \"$contenu\" | tr -cd '\\n' | wc -c | tr -d ' ')\" = 7 ] || refus \"malformed authorisation (7 lines expected)\"\n",
+    "replace": "[ \"$(printf '%s' \"$contenu\" | tr -cd '\\n' | wc -c | tr -d ' ')\" = 7 ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P8e — une autorisation dont une clé est inconnue est refusée, même avec la bonne valeur",
+    "file": "git-hooks/pre-push",
+    "find": "  [ \"$l\" = \"$2 $v\" ] || refus \"malformed authorisation (line $1 must be '$2 <value>')\"\n",
+    "replace": "  [ \"$l\" = \"$2 $v\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P8f — une autorisation à l'empreinte de destination illisible est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[[ \"$a_destination\" =~ ^[0-9a-f]{64}$ ]] || refus \"malformed authorisation (destination digest)\"\n",
+    "replace": "[[ \"$a_destination\" =~ ^[0-9a-f]{64}$ ]] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P8g — une autorisation à l'identifiant d'objet illisible est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[[ \"$a_source\" =~ $oid ]] && [[ \"$a_avant\" =~ $oid ]] || refus \"malformed authorisation (object id)\"\n",
+    "replace": "[[ \"$a_source\" =~ $oid ]] && [[ \"$a_avant\" =~ $oid ]] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P8h — une autorisation portant un octet NUL est refusée avant toute consommation",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$(sha256 <\"$f\")\" = \"$valide\" ] || refus \"malformed authorisation (bytes not readable as text)\"\n",
+    "replace": "[ \"$(sha256 <\"$f\")\" = \"$valide\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P9a — une autorisation lien symbolique est refusée, même vers un contenu exact",
+    "file": "git-hooks/pre-push",
+    "find": "if [ -L \"$f\" ]; then refus \"the authorisation is a symbolic link\"; fi\n",
+    "replace": "if [ -L \"$f\" ]; then :; fi\n"
+  },
+  {
+    "test": "L0 REG P3-P9b — une autorisation qui n'est pas un fichier ordinaire est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ -f \"$f\" ] || refus \"the authorisation is not a regular file\"\n",
+    "replace": "[ -f \"$f\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P9c — une autorisation à plusieurs liens physiques est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ -n \"$(find \"$f\" -maxdepth 0 -type f -links 1 2>/dev/null)\" ] || refus \"the authorisation must have a single hard link\"\n",
+    "replace": "[ -n \"$(find \"$f\" -maxdepth 0 -type f -links 1 2>/dev/null)\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P9d — une autorisation inscriptible par le groupe ou les autres est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "[ -n \"$(find \"$f\" -maxdepth 0 -type f ! -perm -g+w ! -perm -o+w 2>/dev/null)\" ] || refus \"the authorisation must not be group- or other-writable\"\n",
+    "replace": "[ -n \"$(find \"$f\" -maxdepth 0 -type f ! -perm -g+w ! -perm -o+w 2>/dev/null)\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P9e — une autorisation remplacée pendant sa lecture est refusée avant toute consommation",
+    "file": "git-hooks/pre-push",
+    "find": "[ -n \"$ino\" ] && [ \"$(inode \"$f\")\" = \"$ino\" ] || refus \"the authorisation changed while it was read\"\n",
+    "replace": "[ -n \"$ino\" ] && [ \"$(inode \"$f\")\" = \"$ino\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P10 — zéro ou deux mises à jour dans un même push sont refusées",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$n\" -eq 1 ] || refus \"exactly one ref update is authorised per push, got $n\"\n",
+    "replace": "[ \"$n\" -eq 1 ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P11a — une suppression de branche distante est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "if [[ \"$loid\" =~ $nul ]]; then refus \"a deletion is never authorised\"; fi\n",
+    "replace": "if [[ \"$loid\" =~ $nul ]]; then :; fi\n"
+  },
+  {
+    "test": "L0 REG P3-P11b — la création d'une branche distante est refusée",
+    "file": "git-hooks/pre-push",
+    "find": "if [[ \"$roid\" =~ $nul ]]; then refus \"creating a remote branch is not authorised\"; fi\n",
+    "replace": "if [[ \"$roid\" =~ $nul ]]; then :; fi\n"
+  },
+  {
+    "test": "L0 REG P3-P11c — la mise à jour d'une étiquette distante est refusée, même en avance rapide",
+    "file": "git-hooks/pre-push",
+    "find": "  *) refus \"only an existing branch under refs/heads/ can be updated\" ;;\n",
+    "replace": "  *) ;;\n"
+  },
+  {
+    "test": "L0 REG P3-P12 — une mise à jour qui n'est pas une avance rapide est refusée, même forcée",
+    "file": "git-hooks/pre-push",
+    "find": "git merge-base --is-ancestor \"$roid\" \"$loid\" || refus \"not a fast-forward of the remote head\"\n",
+    "replace": "git merge-base --is-ancestor \"$roid\" \"$loid\" || true\n"
+  },
+  {
+    "test": "L0 REG P3-P13 — une tête distante absente localement est refusée, sans présomption d'ascendance",
+    "file": "git-hooks/pre-push",
+    "find": "git cat-file -e \"${roid}^{commit}\" 2>/dev/null || refus \"the remote head is not available locally; ancestry cannot be proven\"\n",
+    "replace": "git cat-file -e \"${roid}^{commit}\" 2>/dev/null || true\n"
+  },
+  {
+    "test": "L0 REG P3-P22a — un déplacement annoncé réussi mais non effectué fait refuser",
+    "file": "git-hooks/pre-push",
+    "find": "[ ! -e \"$f\" ] && [ ! -L \"$f\" ] || refus \"the authorisation is still available after the move\"\n",
+    "replace": "[ ! -e \"$f\" ] && [ ! -L \"$f\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P22b — une copie suivie d'une suppression (autre inode) n'est pas une réclamation : refus",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$(inode \"$pris/allow-push\")\" = \"$ino\" ] || refus \"the consumed file is not the validated authorisation\"\n",
+    "replace": "[ \"$(inode \"$pris/allow-push\")\" = \"$ino\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P22c — un nom disponible recréé après le déplacement fait refuser",
+    "file": "git-hooks/pre-push",
+    "find": "[ ! -e \"$f\" ] && [ ! -L \"$f\" ] || refus \"the authorisation is still available after the move\"\n",
+    "replace": "[ ! -e \"$f\" ] && [ ! -L \"$f\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P22d — une autorisation altérée après sa validation fait refuser",
+    "file": "git-hooks/pre-push",
+    "find": "[ \"$(sha256 <\"$pris/allow-push\")\" = \"$valide\" ] || refus \"the consumed authorisation differs from the validated one\"\n",
+    "replace": "[ \"$(sha256 <\"$pris/allow-push\")\" = \"$valide\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P22e — une autorisation consommée qui n'est plus privée et à lien unique fait refuser",
+    "file": "git-hooks/pre-push",
+    "find": "[ -n \"$(find \"$pris/allow-push\" -maxdepth 0 -type f -links 1 ! -perm -g+w ! -perm -o+w 2>/dev/null)\" ] || refus \"the consumed authorisation is not a private, single-link regular file\"\n",
+    "replace": "[ -n \"$(find \"$pris/allow-push\" -maxdepth 0 -type f -links 1 ! -perm -g+w ! -perm -o+w 2>/dev/null)\" ] || true\n"
+  },
+  {
+    "test": "L0 REG P3-P14 — une autorisation sert une fois : consommée par le push, elle n'en autorise pas un second",
+    "edits": [
+      {
+        "file": "git-hooks/pre-push",
+        "find": "if ! mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n",
+        "replace": "if ! cp -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n"
+      },
+      {
+        "file": "git-hooks/pre-push",
+        "find": "[ ! -e \"$f\" ] && [ ! -L \"$f\" ] || refus \"the authorisation is still available after the move\"\n",
+        "replace": "[ ! -e \"$f\" ] && [ ! -L \"$f\" ] || true\n"
+      },
+      {
+        "file": "git-hooks/pre-push",
+        "find": "[ \"$(inode \"$pris/allow-push\")\" = \"$ino\" ] || refus \"the consumed file is not the validated authorisation\"\n",
+        "replace": "[ \"$(inode \"$pris/allow-push\")\" = \"$ino\" ] || true\n"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG P3-P15 — invocations concurrentes sur une même autorisation : au plus une acceptation, autant de consommations que d'acceptations",
+    "edits": [
+      {
+        "file": "git-hooks/pre-push",
+        "find": "if ! mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n",
+        "replace": "sleep 3\nif ! { ln -- \"$f\" \"$pris/allow-push\" && sleep 1 && rm -f -- \"$f\"; } 2>/dev/null; then\n"
+      }
+    ],
+    "control": [
+      {
+        "file": "git-hooks/pre-push",
+        "find": "if ! mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n",
+        "replace": "sleep 3\nif ! mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n"
+      }
+    ],
+    "runs": 20
+  },
+  {
+    "test": "L0 REG P3-P16 — un déplacement en échec fait refuser, sans push, même si le fichier a bougé",
+    "file": "git-hooks/pre-push",
+    "find": "if ! mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n",
+    "replace": "if ! { mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null || true; }; then\n"
+  },
+  {
+    "test": "L0 REG P3-P17 — un enfant (PI_SUBAGENT_ROLE) ne pousse pas, même avec une autorisation exacte",
+    "file": "git-hooks/pre-push",
+    "find": "if [ -n \"${PI_SUBAGENT_ROLE:-}\" ]; then\n  cat >/dev/null || true\n  refus \"child agents never push (role: ${PI_SUBAGENT_ROLE})\"\nfi\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 REG P3-P21 — une destination de consommation préexistante, même de mêmes octets, fait refuser sans rien écraser",
+    "edits": [
+      {
+        "file": "git-hooks/pre-push",
+        "find": "mkdir -m 700 -- \"$pris\" 2>/dev/null || refus \"the consumption name already exists; nothing was consumed\"\n",
+        "replace": "mkdir -p -m 700 -- \"$pris\" 2>/dev/null || refus \"the consumption name already exists; nothing was consumed\"\n"
+      },
+      {
+        "file": "git-hooks/pre-push",
+        "find": "if ! mv -n -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n",
+        "replace": "if ! mv -f -- \"$f\" \"$pris/allow-push\" 2>/dev/null; then\n"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG P3-P19 — bash-guard refuse à un agent tout accès au fichier d'autorisation de push, sans dialogue, avant la whitelist",
+    "file": "extensions/bash-guard/index.ts",
+    "find": "    if (PUSH_AUTH_FILE_PATTERN.test(command)) {\n",
+    "replace": "    if (false && PUSH_AUTH_FILE_PATTERN.test(command)) {\n"
+  },
+  {
+    "test": "L0 REG P3-P19 — bash-guard refuse à un agent tout accès au fichier d'autorisation de push, sans dialogue, avant la whitelist",
+    "file": "extensions/bash-guard/patterns.ts",
+    "find": "export const PUSH_AUTH_FILE_PATTERN = new RegExp(String.raw`\\ballow-push\\b`, \"s\");\n",
+    "replace": "export const PUSH_AUTH_FILE_PATTERN = new RegExp(String.raw`\\.allow-push\\b`, \"s\");\n"
+  },
+  {
+    "test": "L0 REG P3-P20 — bash-guard refuse à un agent --no-verify et commit -n, sans dialogue, avant la whitelist et le jeton",
+    "file": "extensions/bash-guard/index.ts",
+    "find": "    if (HOOK_BYPASS_PATTERNS.some((p) => p.test(command))) {\n",
+    "replace": "    if (false && HOOK_BYPASS_PATTERNS.some((p) => p.test(command))) {\n"
+  },
+  {
+    "test": "L0 REG P3-P20 — bash-guard refuse à un agent --no-verify et commit -n, sans dialogue, avant la whitelist et le jeton",
+    "file": "extensions/bash-guard/patterns.ts",
+    "find": "(?<=[\\s\"'])--no-veri(?:f|fy)?(?=",
+    "replace": "(?<=[\\s\"'])--no-veri-jamais(?="
+  },
+  {
+    "test": "L0 REG P3-P20 — bash-guard refuse à un agent --no-verify et commit -n, sans dialogue, avant la whitelist et le jeton",
+    "file": "extensions/bash-guard/patterns.ts",
+    "find": "(?<=\\s)-[apseiovqz]*n[apseiovqz]*(?:[mcCFtuS]\\S*)?(?=",
+    "replace": "(?<=\\s)-jamais(?="
+  },
+  {
+    "test": "L0 REG P3-P20 — bash-guard refuse à un agent --no-verify et commit -n, sans dialogue, avant la whitelist et le jeton",
+    "file": "extensions/bash-guard/patterns.ts",
+    "find": "-[apseiovqz]*n[apseiovqz]*(?:[mcCFtuS]\\S*)?",
+    "replace": "-[apseiovqz]*n[apseiovqz]*"
   }
 ]

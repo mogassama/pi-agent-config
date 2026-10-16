@@ -20,7 +20,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { readFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { type PatternEntry, TOKEN_FILE_PATTERN, compilePatterns, findMatch } from "./patterns";
+import { type PatternEntry, HOOK_BYPASS_PATTERNS, PUSH_AUTH_FILE_PATTERN, TOKEN_FILE_PATTERN, compilePatterns, findMatch } from "./patterns";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -143,6 +143,32 @@ export default function (pi: ExtensionAPI): void {
           "blocked by bash-guard: the commit token is the operator's authorisation and " +
           "cannot be created, copied or restored by an agent. If a commit is blocked for " +
           "want of a token, report it and stop — do not work around it.",
+      };
+    }
+
+    // Same footing as the commit token: the push authorisation is the operator's,
+    // read by git-hooks/pre-push and consumed there. No dialog, before the
+    // whitelist and before TOKEN, so no setting and no commit token can open it.
+    if (PUSH_AUTH_FILE_PATTERN.test(command)) {
+      await appendLog(logPath, "token", "declined", "allow-push authorisation file", command);
+      return {
+        block: true,
+        reason:
+          "blocked by bash-guard: the push authorisation is the operator's and cannot be " +
+          "created, copied, read or restored by an agent. If a push is refused for want of " +
+          "one, report it and stop — do not work around it.",
+      };
+    }
+
+    // The hooks are the machine's half of the commit and push protocol;
+    // --no-verify (or commit -n) switches them off. Refused the same way.
+    if (HOOK_BYPASS_PATTERNS.some((p) => p.test(command))) {
+      await appendLog(logPath, "token", "declined", "hook bypass", command);
+      return {
+        block: true,
+        reason:
+          "blocked by bash-guard: --no-verify (or commit -n) bypasses this repository's " +
+          "hooks, which an agent never bypasses. Report the refusal and stop.",
       };
     }
 

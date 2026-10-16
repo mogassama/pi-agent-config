@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# pre-push — this configuration repository is pushed only on an exact, single-use
+# operator authorisation.
+#
+# The commit is guarded three times — the bash-guard TOKEN, `pre-commit`,
+# `reference-transaction` — and the push was guarded by nothing: an adjudication
+# of the form "commit yes, push no" lived only in a message, which is how the one
+# protocol gap of ten lots happened (PUSH-B, 25 September). This hook makes the
+# absence of a file mean "no push".
+#
+# The authorisation is ~/.pi/.allow-push, written by the operator (in practice by a
+# publication recipe) for exactly one update. Seven lines, LF, nothing else:
+#
+#   pi-push-autorisation v1
+#   depot <absolute, resolved git directory of this repository>
+#   distant <remote name>
+#   destination <SHA-256 of the push URL git hands this hook as $2>
+#   source <local object id>
+#   ref refs/heads/<branch>
+#   avant <remote object id expected before the push>
+#
+# The URL itself is never written down, here or in a log: only its digest is, and it
+# is compared in memory. A remote name alone proves nothing, since its push URL can
+# change under it.
+#
+# Refused, before anything is consumed: a child agent (PI_SUBAGENT_ROLE non-empty);
+# zero or several ref updates; a deletion; a branch creation; anything outside
+# refs/heads/ (tags included); an authorisation that is missing, a link, not a
+# regular file, hard-linked, group/other-writable, replaced while it was read, or
+# malformed (a NUL byte included); any line that does not match this push exactly;
+# a remote head that is not available locally; an update that is not a
+# fast-forward. Ancestry is proven here from the object ids — the hook never sees a
+# --force flag and does not claim to.
+#
+# Consumption is exclusive and happens BEFORE acceptance: a fresh directory
+# `.allow-push.consomme.<UTC time>.<pid>.<random>` is created exclusively, the file
+# is moved into it as `allow-push`, and the claim is then proven — the available name
+# is gone, the consumed file has the inode of the file read and validated, its
+# digest is the validated one, and it is still a private, single-link regular file.
+# Only then does the hook exit 0. A consumed
+# authorisation stays consumed even if the transport fails afterwards: nothing here
+# recreates it, and nothing retries. Consumed files are kept.
+#
+# This is a guard against the ordinary failure, not against a determined operator:
+# `--no-verify`, another hooks path or a hand-written authorisation get around it.
+# bash-guard refuses the first and the last to agents; nothing refuses them to a
+# human, and nothing should pretend to.
+#
+# Active in this clone through the local `core.hooksPath` (POST-1). Not installed
+# anywhere else.
+
+set -euo pipefail
+umask 077
+
+refus() {
+  printf 'refused by pre-push: %s\n' "$1" >&2
+  printf '  Pushing this repository needs ~/.pi/.allow-push, written by the operator for\n' >&2
+  printf '  exactly this update; the first matching push consumes it. Report and stop.\n' >&2
+  exit 1
+}
+
+if [ -n "${PI_SUBAGENT_ROLE:-}" ]; then
+  cat >/dev/null || true
+  refus "child agents never push (role: ${PI_SUBAGENT_ROLE})"
+fi
+
+distant="${1:-}"
+adresse="${2:-}"
+
+# All of stdin first: git must not see a broken pipe before the exit code.
+n=0
+maj=""
+while IFS= read -r l || [ -n "$l" ]; do
+  n=$((n + 1))
+  maj="$l"
+done
+[ "$n" -eq 1 ] || refus "exactly one ref update is authorised per push, got $n"
+
+lref="" loid="" rref="" roid="" reste=""
+read -r lref loid rref roid reste <<<"$maj" || true
+[ -n "$lref" ] && [ -z "$reste" ] || refus "unreadable ref update"
+oid='^[0-9a-f]{40}$|^[0-9a-f]{64}$'
+nul='^0+$'
+[[ "$loid" =~ $oid ]] && [[ "$roid" =~ $oid ]] || refus "unreadable object id"
+if [[ "$loid" =~ $nul ]]; then refus "a deletion is never authorised"; fi
+if [[ "$roid" =~ $nul ]]; then refus "creating a remote branch is not authorised"; fi
+case "$rref" in
+  refs/heads/?*) ;;
+  *) refus "only an existing branch under refs/heads/ can be updated" ;;
+esac
+git check-ref-format "$rref" || refus "invalid destination ref"
+
+[ -n "${HOME:-}" ] || refus "HOME is not set"
+f="$HOME/.pi/.allow-push"
+if [ -L "$f" ]; then refus "the authorisation is a symbolic link"; fi
+[ -e "$f" ] || refus "no authorisation"
+[ -f "$f" ] || refus "the authorisation is not a regular file"
+[ -n "$(find "$f" -maxdepth 0 -type f -links 1 2>/dev/null)" ] || refus "the authorisation must have a single hard link"
+[ -n "$(find "$f" -maxdepth 0 -type f ! -perm -g+w ! -perm -o+w 2>/dev/null)" ] || refus "the authorisation must not be group- or other-writable"
+
+# The file read is the file validated: its inode is taken before and after the one
+# read of its content, which is validated and fingerprinted in memory; consumption
+# then proves that the claimed file has this inode and this fingerprint.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+  else shasum -a 256 | cut -d' ' -f1; fi
+}
+inode() { ls -di -- "$1" 2>/dev/null | awk '{print $1}'; }
+ino="$(inode "$f")"
+contenu="$(cat "$f"; printf x)"
+contenu="${contenu%x}"
+[ -n "$ino" ] && [ "$(inode "$f")" = "$ino" ] || refus "the authorisation changed while it was read"
+# Bytes the shell would drop (NUL) make the file differ from what is validated.
+valide="$(printf '%s' "$contenu" | sha256)"
+[ "$(sha256 <"$f")" = "$valide" ] || refus "malformed authorisation (bytes not readable as text)"
+case "$contenu" in *$'\r'*) refus "malformed authorisation (CR)" ;; esac
+case "$contenu" in *$'\n') ;; *) refus "malformed authorisation (no final newline)" ;; esac
+[ "$(printf '%s' "$contenu" | tr -cd '\n' | wc -c | tr -d ' ')" = 7 ] || refus "malformed authorisation (7 lines expected)"
+
+valeur() {  # <line number> <key> : the value, or refusal
+  local l v
+  l="$(printf '%s' "$contenu" | sed -n "${1}p")"
+  v="${l#"$2 "}"
+  [ "$l" = "$2 $v" ] || refus "malformed authorisation (line $1 must be '$2 <value>')"
+  [[ "$v" =~ ^[^[:space:]]+$ ]] || refus "malformed authorisation (line $1)"
+  printf '%s' "$v"
+}
+[ "$(printf '%s' "$contenu" | sed -n 1p)" = "pi-push-autorisation v1" ] || refus "malformed authorisation (header)"
+a_depot="$(valeur 2 depot)" || exit 1
+a_distant="$(valeur 3 distant)" || exit 1
+a_destination="$(valeur 4 destination)" || exit 1
+a_source="$(valeur 5 source)" || exit 1
+a_ref="$(valeur 6 ref)" || exit 1
+a_avant="$(valeur 7 avant)" || exit 1
+[[ "$a_destination" =~ ^[0-9a-f]{64}$ ]] || refus "malformed authorisation (destination digest)"
+[[ "$a_source" =~ $oid ]] && [[ "$a_avant" =~ $oid ]] || refus "malformed authorisation (object id)"
+
+depot="$(git rev-parse --absolute-git-dir)"
+depot="$(cd "$depot" && pwd -P)"
+[ "$a_depot" = "$depot" ] || refus "the authorisation is for another repository"
+[ "$a_distant" = "$distant" ] || refus "the authorisation is for another remote"
+[ "$a_destination" = "$(printf '%s' "$adresse" | sha256)" ] || refus "the authorisation is for another push destination"
+[ "$a_source" = "$loid" ] || refus "the authorisation is for another commit"
+[ "$a_ref" = "$rref" ] || refus "the authorisation is for another ref"
+[ "$a_avant" = "$roid" ] || refus "the remote head is not the one the authorisation expects"
+
+git cat-file -e "${roid}^{commit}" 2>/dev/null || refus "the remote head is not available locally; ancestry cannot be proven"
+git merge-base --is-ancestor "$roid" "$loid" || refus "not a fast-forward of the remote head"
+
+# Exclusive consumption, then acceptance. Nothing here trusts what `mv -n` does
+# (non-standard; on macOS, "do not overwrite an existing file"): the claim is proven.
+pris="$HOME/.pi/.allow-push.consomme.$(date -u +%Y%m%dT%H%M%SZ).$$.$RANDOM$RANDOM"
+# 1. A fresh consumed name, created exclusively: an existing one refuses, nothing is
+#    overwritten, and the authorisation stays available.
+mkdir -m 700 -- "$pris" 2>/dev/null || refus "the consumption name already exists; nothing was consumed"
+# 2. The claim: one rename of the available name. Of two concurrent hooks, at most one
+#    can move that name; the other finds it gone, or moves a file it did not validate.
+if ! mv -n -- "$f" "$pris/allow-push" 2>/dev/null; then
+  rmdir -- "$pris" 2>/dev/null || true
+  refus "the authorisation could not be consumed (already taken?)"
+fi
+# 3. The available name is gone.
+[ ! -e "$f" ] && [ ! -L "$f" ] || refus "the authorisation is still available after the move"
+# 4. The consumed file is the validated file itself, not a copy or another file.
+[ "$(inode "$pris/allow-push")" = "$ino" ] || refus "the consumed file is not the validated authorisation"
+# 5. Its content is unchanged.
+[ "$(sha256 <"$pris/allow-push")" = "$valide" ] || refus "the consumed authorisation differs from the validated one"
+# 6. It is still a private, single-link regular file: no copy of it stays available.
+[ -n "$(find "$pris/allow-push" -maxdepth 0 -type f -links 1 ! -perm -g+w ! -perm -o+w 2>/dev/null)" ] || refus "the consumed authorisation is not a private, single-link regular file"
+
+exit 0

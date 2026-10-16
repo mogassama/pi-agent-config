@@ -56,6 +56,50 @@ const TOKEN_SOURCES: string[] = [
  */
 export const TOKEN_FILE_PATTERN = new RegExp(String.raw`\.allow-commit\b`, "is");
 
+/**
+ * The push authorisation — refused outright, like the commit token above.
+ *
+ * `git-hooks/pre-push` accepts a push only on `~/.pi/.allow-push`, written by the
+ * operator for exactly one update and consumed as
+ * `~/.pi/.allow-push.consomme.<UTC>.<pid>.<random>/allow-push`. An agent that could
+ * create, copy, read or restore it would hold the very authorisation the hook exists
+ * to keep from it. The word `allow-push` is matched wherever it stands, so both the
+ * available name and a consumed one are covered. A glob that never spells the word
+ * (`.allow-p*`) is not: declared limit.
+ */
+export const PUSH_AUTH_FILE_PATTERN = new RegExp(String.raw`\ballow-push\b`, "s");
+
+/**
+ * Bypassing this repository's hooks — refused outright, never authorised.
+ *
+ * The commit is gated by TOKEN, and the hooks (`commit-msg`, `pre-commit`,
+ * `reference-transaction`, `pre-push`) are the machine's half of the protocol:
+ * `--no-verify` switches them off. Two forms, matched within one segment of a
+ * compound command (`;`, `&`, `|` and a newline end it), case-sensitively as git
+ * reads its options:
+ *
+ *   1. `--no-verify` on any git subcommand, and its abbreviations `--no-veri` and
+ *      `--no-verif` (`--no-ver` is refused by git as ambiguous for commit, push,
+ *      merge and rebase; `git am` would take it, and has no hook here), global
+ *      options before the subcommand included, quoted or not;
+ *   2. `-n` on `git commit`: alone, or in a cluster of commit's boolean short
+ *      options (`a p s e i o v q z`) that contains it, optionally ended by one
+ *      letter that takes an argument (`-nm "msg"`, `-anm "msg"`). A cluster where
+ *      that letter comes first (`-mn`: the message "n") is not a `-n`, nor is
+ *      `git push -n`, a dry run.
+ *
+ * This is pattern matching, not a shell parser: a redirection such as `2>&1`
+ * before the option ends the segment, a line continuation is read as a newline, a
+ * quoted value with a space in a global option is not followed, and a `-n` inside
+ * a double-quoted message can be refused wrongly, as can `git grep --no-verify`.
+ * Declared limits. The global-option group has no overlapping alternatives, so a
+ * long run of `-c` options cannot make the match backtrack exponentially.
+ */
+export const HOOK_BYPASS_PATTERNS: RegExp[] = [
+  new RegExp(String.raw`\bgit\s[^;&|\n]*?(?<=[\s"'])--no-veri(?:f|fy)?(?=[\s;&|)="'\x60]|$)`, "s"),
+  new RegExp(String.raw`\bgit\s+(?:(?:-[cC]|-[pP]|--[\w-]+)(?:[= ]\S+)?\s+)*commit(?![\w-])[^;&|\n]*?(?<=\s)-[apseiovqz]*n[apseiovqz]*(?:[mcCFtuS]\S*)?(?=[\s;&|)"'\x60]|$)`, "s"),
+];
+
 const HIGH_SOURCES: string[] = [
   String.raw`\bterraform\s+destroy\b`,
   // One or more subcommand words (e.g. "functions", "composer environments", "run services")

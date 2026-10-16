@@ -58,6 +58,7 @@ from a run, not from a guess.
 ├── git-hooks/
 │   ├── commit-msg                   # Conventional Commits, at the git level
 │   ├── pre-commit                   # Refuses commits from child agents
+│   ├── pre-push                     # Push only on an exact, single-use operator authorisation
 │   └── reference-transaction        # Reject unauthorised ref mutations
 └── claude/strategic-forge/          # Upstream bundle generator (Claude side)
 ```
@@ -452,6 +453,36 @@ What this does and does not give:
   can change them, and a checkout without these files loses those hooks.
 - `--no-verify` is not used to get past a refusal: the commit is reported and
   stopped. Undoing the activation is a separate operator decision.
+
+**`pre-push` (phase 3).** A fourth hook guards the push of this repository, which
+nothing guarded before: an adjudication of the form "commit yes, push no" lived
+only in a message, and that is how the one protocol gap of the parallelisation
+work happened. A push now needs `~/.pi/.allow-push`, written by the operator (in
+practice by a publication recipe) for exactly one update: seven LF lines binding
+the resolved Git directory of this repository, the remote name, the SHA-256 of the
+push URL Git hands the hook (the URL itself is never written), the local object,
+the destination ref under `refs/heads/` and the remote head expected before the
+push. The hook refuses a child agent, zero or several updates, a deletion, a branch
+creation, a tag, a non-fast-forward (proven from the object ids, with the remote
+head required locally), and any authorisation that is missing, a link, not a
+regular file, hard-linked, group/other-writable, replaced while it was read,
+malformed (a NUL byte included), or not an exact match. It consumes the file
+before accepting: it creates a fresh directory
+`.allow-push.consomme.<time>.<pid>.<random>` (an existing name refuses, nothing is
+overwritten), moves the authorisation into it, then proves the claim instead of
+trusting the move: the available name is gone, the consumed file is the very file
+it read and validated (same inode), its content is unchanged, and it is still a
+private, single-link regular file. Two concurrent
+pushes cannot both claim one authorisation. A consumed authorisation stays consumed
+even if the transport fails afterwards; nothing recreates it or retries. Consumed
+files are kept.
+
+The hook is active as soon as `git-hooks/pre-push` exists in the main checkout,
+through the same local `core.hooksPath`. From then on, pushing this repository by
+hand also needs the authorisation. It guards against the ordinary failure, not
+against a determined operator: `--no-verify`, another hooks path or a hand-written
+authorisation get around it, and bash-guard refuses only the first and the last,
+and only to agents.
 
 ## Mesure du contexte (`run-cost --contexte`)
 
