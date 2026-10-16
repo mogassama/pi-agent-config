@@ -1,4 +1,4 @@
-# Chantier — état au 15 octobre 2026
+# Chantier — état au 16 octobre 2026
 
 *Registre de la configuration pi. Ce qui est fait quitte « à faire », ce qui a été
 tranché ne garde que sa raison, ce qu'une mesure a réfuté le dit.*
@@ -20,7 +20,12 @@ le dernier sans aucun échec. **Septembre — le chantier `3c`** : un audit exte
 la parallélisation des writers possible sous preuves. Aucune régression d'audit ne reste
 ouverte.
 
-**État courant (15-10, après la clôture de la phase 0) :** branche `feat/subagent-extension`, tête distante et
+**État courant (16-10, après la clôture de la phase 3) :** branche `feat/subagent-extension`, tête distante et
+commit publié `186aac98a207b84cd0ddfca6fe0a34b4b127ed07` (C5), arbre `2ec4adf4089ee01bb60d1e30f7769c14bf05660f`,
+au bout de six commits à parents uniques posés sur `604e89487e0eee2fa37ddfde7429aa3a41f785df` : C0 `59ab3aee…`
+(portage de la clôture de la phase 0, arbre `65b1d2c1…`), C1 `54eb40e6…`, C2 `1672db59…`, C3 `3bc6ba86…`, C4
+`4ca90fda…` et C5. Établis le 16-10 (acte 1) puis publiés le 16-10 (acte 2), les deux actes adjugés conformes.
+*État du 15-10 après la clôture de la phase 0, remplacé le 16-10 et conservé :* branche `feat/subagent-extension`, tête distante et
 commit publié `604e89487e0eee2fa37ddfde7429aa3a41f785df` (code de la phase 0, parent unique `32e2b3cb…`),
 arbre `cffdccabbd958e22c5a30a249a40007eb02d2647`, au-dessus de `32e2b3cb7c1d014d64a79f24bf64ac5965b2cadd`
 (POST-3c, commit documentaire, parent unique `8ac87262…`), arbre documentaire
@@ -28,7 +33,7 @@ arbre `cffdccabbd958e22c5a30a249a40007eb02d2647`, au-dessus de `32e2b3cb7c1d014d
 distante et commit publié `8ac87262ed01f38ad5e19dbf375a9420f04bcaf6` (POST-3b, commit documentaire, parent
 unique `aa0fc55c…`), arbre documentaire `a53c81ef3de406c5e83b3761f52a837544474ceb`. *État du 14-10, conservé :* commit publié
 `6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2), arbre documentaire
-`77d12c5b89cd1ccb4eadfbe363231168955f86df`. Cinq éléments, distincts :
+`77d12c5b89cd1ccb4eadfbe363231168955f86df`. Six éléments, distincts (le sixième ajouté le 16-10) :
 
 - **LOT-PI-ADAPT, clos le 13-10, niveau A, neutre sur pi 0.86.0** — commit
   `2def810f56d96bb459716efda4d409028b14de72`, parent `b54532045e1305bd48ee93ea8fdebdcca534b847`, arbre
@@ -57,8 +62,29 @@ unique `aa0fc55c…`), arbre documentaire `a53c81ef3de406c5e83b3761f52a837544474
   (15-10)** — mesure A et relevé de dépense par une option `--contexte` de `bin/run-cost`, niveau B, sans nouveau
   run ; rien n'est construit dans le dépôt ni mesuré. Ce registre n'en porte aucun résultat. Détail et raisons :
   § 5 ; plan et corpus : `SUIVI.md`, *Phase 0*. Le portage POST-3c, documentaire, précède tout code de phase 0. »
+- **Phase 3 : achevée au niveau A (16-10), périmètre P1, P2, P3, D1 et D2** — chaîne C0–C5 établie (acte 1 :
+  vérification native réelle V1–V6 sur le Mac, six commits, aucun push) puis publiée (acte 2 : un push, une
+  consommation de l'autorisation), les deux actes adjugés conformes, clôture par la décision `e87b4ea6…`.
+  Protection sur place des registres durables par un dépôt imbriqué (P1) ; instruments versés au dépôt sous
+  `instruments/`, copies à l'octet sous garde d'intégrité (P2) ; garde du push par le crochet `pre-push`, à
+  autorisation exacte à usage unique, et deux refus de `bash-guard` (P3) ; N1 indépendant de la longueur du
+  TMPDIR (D1) ; `.DS_Store` admis sous `tests/pi-contrats` seulement (D2). **Quatre crochets actifs** depuis C2.
+  La reprise ordinaire de pi 0.86.0 est **autorisée** ; ce portage ne constate pas qu'elle ait eu lieu. Aucune
+  qualification générale de pi, montée de version ni mesure QD n'en est déduite ; `b1a99caa…` reste l'identité
+  technique qualifiée historique ; la phase 0 reste close au niveau B. **La clôture ne ferme ni les dettes
+  historiques ni les limites reçues à la livraison** (§ 5, § 8). Détail, preuves et passages remplacés :
+  `SUIVI.md`, *Ce qui est fait*, « Phase 3 — clôture ».
 
-*Ordre de la suite (adjugé le 08-10, repris les 14-10 et 15-10, puis à la clôture de la phase 0) :* LOT-PI-ADAPT
+*Ordre de la suite (adjugé le 08-10, repris les 14-10 et 15-10, à la clôture de la phase 0, puis à la clôture de
+la phase 3 le 16-10) :* LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, POST-3c, phase 0 et phase
+3 publiés (phase 0 achevée au niveau B, attribution non établie ; phase 3 achevée au niveau A) → **phase 2, sur
+son plan préalable à soumettre ; construction non autorisée** → 4 → 5 → 6 → 7 → 8 → 9 → phase 9b (versions, dont
+montée directe de pi) → QD de référence sur l'environnement final de 9b → phase 10 (modèles). **Une phase par
+lot**, après plan adjugé. Aucune phase suivante, montée de pi ni QD n'est lancée par ce portage. Détail :
+`SUIVI.md`.
+
+*Ordre du 15-10, à la clôture de la phase 0, remplacé le 16-10 et conservé — « le présent portage » y désigne le
+portage de cette clôture :* LOT-PI-ADAPT
 clos, POST-1, POST-2, POST-3 et POST-3b achevés, POST-3c et phase 0 publiés (phase 0 achevée au niveau B ;
 attribution non établie) → **phase 3, avant la phase 2, sur un plan préalable à adjuger** → phase 2 → 4 → 5 →
 6 → 7 → 8 → 9 → phase 9b (versions, dont montée directe de pi) → QD de référence sur l'environnement final de
@@ -573,6 +599,12 @@ qui est prouvé.
 | **Phase 0 : achevée au niveau B, attribution non établie** *(15-10)* | Résultat prévu par le cadre reçu, non un échec à réparer pour obtenir une dominance. Les premiers postes sont des classements descriptifs estimés (caractères/4 non calibré, résidence non prouvée, résidu signé non redistribué, variantes avec et sans thinking) : aucune origine dominante ni cause n'est établie, aucun montant, aucune agrégation entre candidats ; le rapport de référence est celui de r5 (`69228b2b…`), historique et daté, sur les corpus déclarés. La publication de l'instrument ne transforme pas la mesure en qualification technique, gel ou référence sur `b1a99caa…` ; le résultat non établi n'autorise ni optimisation des phases 5 ou 6, ni nouveau QD. Les passages remplacés de la construction restent historiques et ne sont pas attribués au candidat final |
 | **Prochaine phase : la phase 3, avant la phase 2, sur plan préalable à adjuger** *(15-10)* | Ses trois priorités (registres durables, instruments hors dépôt, garde du push) sont maintenues ; les autres dettes à inclure ou à laisser au backlog sont nommées dans le plan, sans plafond automatique de trois items. Le plan borne périmètre, conditions d'entrée, qualification et retour arrière ; aucune construction, activation, modification de production ni exécution avant son adjudication. maxParallel reste en phase 8, la montée de pi en phase 9b |
 | **Conservations du bac précédent : devenues matériellement inaccessibles, non levées** *(15-10)* | L'inaccessibilité ne prouve pas la destruction ; aucune suppression n'est autorisée ou constatée ; aucune levée générale des conservations. Aucun acte ni résultat ne dépend d'une pièce présente seulement dans l'ancien bac |
+| **Phase 3 : achevée au niveau A, périmètre P1, P2, P3, D1, D2** *(16-10)* | Chaîne C0–C5 établie puis publiée, deux actes conformes, vérification native réelle sur le Mac avant toute pose. **Ce n'est pas la fermeture des dettes historiques** : backlog B1 à B10, TOKEN_SOURCES, O2-1 et les limites adjugées à la livraison (§ 8) demeurent. Aucune qualification générale de pi, montée ni QD n'en est déduite ; `b1a99caa…` reste l'identité qualifiée historique, la phase 0 reste close au niveau B |
+| **Registres durables : protection sur place, par un dépôt imbriqué** *(15-10)* | Choix cohérent avec la protection documentée de Git contre un nettoyage à simple force ; ne couvre ni double force, ni suppression explicite, ni retrait du marqueur. Aucun déplacement hors dépôt ni migration ouverte ; les runs anciens ne sont protégés qu'après leur passage par la nouvelle préparation |
+| **Push : autorisation exacte à usage unique, consommée avant acceptation** *(15-10, 16-10)* | Un triplet source/référence/ancienne tête peut convenir à plusieurs dépôts ou destinations : l'autorisation est liée aussi au dépôt local et à la destination. La consommation exclusive précède l'acceptation, et une autorisation consommée ne se recrée pas. Garde contre l'erreur ordinaire, non contre un opérateur décidé ni contre un acteur modifiant l'espace personnel : une règle d'exploitation, non une garantie générale |
+| **Instruments : copies à l'octet, S4 inchangée, O2-1 ouverte** *(15-10)* | L'identité est l'empreinte exacte, même si un commentaire historique nomme autrement la révision. S4 ne couvre ni `pre-push` ni les copies sous `instruments/` : la couverture complémentaire est la garde d'intégrité, la revue et leurs épreuves. Les versements ne requalifient pas les contrats de pi et ne lèvent pas O2-1 |
+| **C2.1 : vérification ciblée, non la campagne `--qualifier` historique** *(15-10)* | La garde de la campagne historique exige un ancien commit et un ancien arbre : son refus serait prévisible sur le candidat. Ne pas modifier ses constantes, ne pas la désarmer, ne pas attribuer une campagne d'un ancien objet au candidat courant. Le pilote de phase 3 (hors dépôt, garde propre) ne requalifie pas LOT-PI-ADAPT et ne ferme pas O2-1 ; l'exclusion de M1–M7 reste déclarée |
+| **Prochaine phase : la phase 2, plan préalable à soumettre, construction non autorisée** *(16-10)* | Ordre du 08-10 : la phase 3, qui précédait la phase 2 par exception, est achevée. La ligne du 15-10 sur la phase 3 est conservée comme historique. maxParallel reste en phase 8, la montée de pi en phase 9b |
 
 ---
 
@@ -775,6 +807,12 @@ un défaut par défaut dans le lanceur de test, pas un changement de code.
 pas, une preuve dépend d'un script joint et non d'un fichier relu. Suivi en phase 3 de
 `SUIVI.md`.
 
+*Précisé le 16-10 (clôture de la phase 3).* Le script S4 (`06de488f…`), son verrou d'outillage et les dix-huit
+fichiers de l'instrument externe de qualification Mac r4 sont versés au dépôt sous `instruments/`, en copies à
+l'octet protégées par une garde d'intégrité (C5 `186aac98…`). **Restent ouverts :** la baseline `tsc --strict`
+et les références S4, non versées d'après les pièces reçues ; **O2-1** (instruments interne et externe distincts
+; aucune requalification) ; S4 vert limité à sa projection, qui ne couvre ni `pre-push` ni ces copies.
+
 **Le push n'est pas gardé en machine.** Le commit l'est — jeton à usage unique,
 `pre-commit`, `reference-transaction`. Une adjudication « commit oui, push non » ne vit que
 dans un message, et c'est ce qui a permis le seul écart de protocole du chantier `3c`.
@@ -785,6 +823,18 @@ pour les commandes interceptées, notamment `git commit` ; il ne décrit pas les
 refusent si `PI_SUBAGENT_ROLE` est non vide (le second en phase `prepared`), une variable vide n'étant
 pas refusée. Ils ne rendent pas Git intégralement en lecture seule et ne prouvent pas à eux seuls
 l'impossibilité d'un push enfant. **La dette de garde du push reste ouverte** (phase 3 du suivi).
+
+*Précisé le 16-10 (clôture de la phase 3).* Depuis C2 (`1672db59…`, publié le 16-10), le crochet `pre-push`
+refuse tout push sans autorisation exacte à usage unique (sept lignes, liée au dépôt local et à la destination,
+pour une seule mise à jour), consommée avant acceptation ; `bash-guard` refuse, avant sa whitelist et le jeton
+de commit, le fichier de cette autorisation et les contournements `--no-verify` et `commit -n` ; une ligne de la
+skill `git-collaboration` énonce l'obligation. **Quatre crochets actifs.** *Ce que cela n'est pas :* une
+garantie face à un opérateur décidé ou à un acteur qui modifie l'espace personnel (contrôles de propriétaire et
+de longueur retirés du crochet, adjugé) ; `bash-guard` reste une garde lexicale, non un analyseur de shell ni un
+confinement de tous les outils (redirections, continuations, certaines options citées, globs, outils `write` et
+`edit` hors garantie ; faux positifs `-n` dans un message entre guillemets doubles et `git grep --no-verify`) ;
+TOKEN_SOURCES, préexistant, reste au backlog. **La dette de garde du push est traitée dans son périmètre adjugé
+et proposée à la clôture ; elle n'est pas fermée comme garantie générale.**
 
 **Dettes ouvertes à la clôture de LOT-PI-ADAPT (13-10), inscrites et non réalisées** — détail et
 conditions d'entrée de la montée dans `docs/MONTEE-PI.md` § 8 :
@@ -807,6 +857,17 @@ conditions d'entrée de la montée dans `docs/MONTEE-PI.md` § 8 :
   urgent, à instruire (sites, nature synthétique, propriétés des tests préservées, aucune garde ni
   détecteur affaibli). Pas de promesse d'absence de nouvelle alerte, ni de conclusion sur les secrets de
   l'historique ; les autres dettes de sécurité historiques ci-dessus restent entières.
+
+**Statut à la clôture de la phase 3 (16-10), proposition soumise à Sol.** *Traitées dans leur périmètre adjugé
+:* D-P3-N1 / TMPDIR (C3 `3bc6ba86…` : N1 indépendant de la longueur du TMPDIR, dans le harnais seul ; D1 sous
+des TMPDIR de 4, 12 et 47 caractères ; quatre portes égales au bac sur le Mac sous un TMPDIR de 108 caractères ;
+limite : la normalisation en entrée de `describePlan` ne démontre pas le rendu brut pour toutes les longueurs de
+racine) ; O1-7 / D-P3-PI-SURFACE-METADONNEES (C4 `4ca90fda…` : `.DS_Store` ordinaire admis sous
+`tests/pi-contrats` par son nom exact, toute autre source non déclarée refusée ; limite : pas un filtre général
+des non-suivis). *Restent ouvertes, inchangées :* O1-4 ; O2-1 ; O2-4 et portabilité ; P3 non clos (le « P3 » de
+LOT-PI-ADAPT, distinct du P3 « garde du push » de la phase 3) ; littéraux factices des tests ; TOKEN_SOURCES ;
+backlog B1 à B10 du plan de phase 3 (`66e79b46…`, hors dépôt), dont B3, constat documenté d'un abonnement à
+`tool_result` sans clôture implicite du contrat ; dettes de sécurité historiques ci-dessus.
 
 ---
 
@@ -897,6 +958,14 @@ refus est rapporté puis impose l'arrêt, sans raccourcissement ni répétition 
 est locale à ce dépôt (`core.hooksPath=/Users/MoG/.pi/agent/git-hooks`) et ne vaut pas activation
 globale ; le chemin absolu ne garantit pas une isolation physique.
 
+*Précisé le 16-10 (clôture de la phase 3).* Depuis C2, **quatre** crochets sont actifs : `commit-msg`,
+`pre-commit`, `reference-transaction` et `pre-push`. Le quatrième refuse tout push sans l'autorisation exacte à
+usage unique décrite au § 8 ; **créer cette autorisation est un geste de l'opérateur ou de sa recette, jamais
+d'un agent**, et un refus se rapporte puis impose l'arrêt (aucun `--no-verify`, aucune recréation d'une
+autorisation consommée). Si une autorisation reste disponible après un ARRÊT, elle est une capacité active : pi
+arrêté, rien poussé, fichier ni retiré, ni déplacé, ni restauré sans décision propre de Sol. L'activation reste
+locale à ce dépôt.
+
 **Une phase par lot (08-10).** Une phase ne devient un lot qu'après un plan adjugé : objectif commun,
 périmètre exact, qualification bornée, retour arrière défini. Les conditions d'entrée restent : mesure A
 avant tout changement de contexte, banc avant tout allègement, gel et pilote avant l'intégration.
@@ -916,3 +985,8 @@ rapporté.
 *Portage de la clôture de la phase 0 (15-10) :* même régime. Il ne touche que `SUIVI.md` et `CHANTIER.md` ;
 aucun fichier de code n'y entre ; la boîte privée et le registre des résultats restent hors dépôt et hors push.
 Sa base publiée est le commit `604e8948…`.
+
+*Portage de la clôture de la phase 3 (16-10) :* même régime. Il ne touche que `SUIVI.md` et `CHANTIER.md` ;
+aucun fichier de code n'y entre ; la boîte privée et le registre des résultats restent hors dépôt et hors push.
+Sa base publiée est le commit `186aac98…`. Son établissement et sa publication auraient chacun leur autorisation
+propre ; son push exigerait, comme tout push de ce dépôt, une autorisation exacte à usage unique (§ 8).
