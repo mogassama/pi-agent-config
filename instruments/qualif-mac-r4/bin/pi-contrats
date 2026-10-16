@@ -1,0 +1,59 @@
+#!/usr/bin/env node
+/*
+ * pi-contrats — instrument des contrats avec le pi réel (LOT-PI-ADAPT).
+ *
+ *   bin/pi-contrats --etape0          étape 0 : identité, isolement, captures, C3, C7, voies aveugles
+ *   bin/pi-contrats --refus <id> [--resultat <fichier.json>]
+ *                                     une épreuve de refus des matrices (§ B), résultat structuré en option
+ *   bin/pi-contrats --liste-refus     les 38 épreuves de refus historiques, une par ligne
+ *   bin/pi-contrats --liste-refus-item1
+ *                                     les épreuves de refus de l'item 1 (M6.14, M6.15, G-I1-base)
+ *   bin/pi-contrats --mesure-prealable <C2.7|C2.8|C8.2> [--conserver <dossier>]
+ *                                     une mesure préalable de l'adjudication K1-K9 (§ 6), une seule
+ *                                     exécution, non qualifiante ; pièces copiées dans <dossier>
+ *   bin/pi-contrats --qualifier [--conserver <dossier>]
+ *                                     item 1 : campagne nominale C1 à C8, plan déclaré avant exécution,
+ *                                     ARRÊT à la première divergence
+ *   bin/pi-contrats --contre-epreuve-reelle <id> [--conserver <dossier>]
+ *                                     item 1 : une contre-épreuve réelle (b) du plan
+ *   bin/pi-contrats --liste-contre-epreuves-reelles
+ *   bin/pi-contrats --contre-epreuve 0.99.0 [--conserver <dossier>]
+ *                                     rupture de C3 sur l'identité 0.99.0 : NON QUALIFIANT, aucun vert
+ *   bin/pi-contrats --contre-epreuves-a <dossier[:dossier…]> [<id> …]
+ *                                     contre-épreuves (a) des vérificateurs sur les observations conservées
+ *   bin/pi-contrats --reevaluer <dossier[:dossier…]> <id> [--resultat <fichier.json>]
+ *                                     réévalue la clause visée d'une contre-épreuve (mutants)
+ *   bin/pi-contrats --liste-mutants-verificateurs
+ *   bin/pi-contrats --lecteur-interprete <entrées> [--alterer] [--resultat <fichier.json>]
+ *                                     contrôle de lecteur M6.15/interprete (R3) : analyse des Brutes
+ *                                     conservées sous le Contexte déclaré, ou sous sa copie dont
+ *                                     l'empreinte mémorisée de l'interprète est altérée ; sans lancer pi
+ *
+ * Lance Node directement, jamais un shell. Seul pi 0.86.0 est qualifiant ;
+ * toute autre version est refusée hors du mode de contre-épreuve.
+ * Trois états : satisfait, violé, indéterminé ; seul « satisfait » compte vert.
+ *
+ * Les modes vivent dans tests/pi-contrats/modes.ts, typé et compilé par S4 ; ce lanceur ne fait que
+ * charger ce module par Node et poser le code de sortie (arguments, sorties et codes inchangés).
+ */
+"use strict";
+const { join } = require("node:path");
+const { pathToFileURL } = require("node:url");
+
+import(pathToFileURL(join(__dirname, "..", "tests", "pi-contrats", "modes.ts")).href)
+  .then((m) => {
+    if (typeof m.principal !== "function") {
+      throw new TypeError("module des modes : principal non callable");
+    }
+    return m.principal(process.argv);
+  })
+  .then((code) => {
+    if (typeof code !== "number" || !Number.isInteger(code) || code < 0 || code > 3) {
+      throw new TypeError("code de sortie des modes non établi");
+    }
+    process.exitCode = code;
+  })
+  .catch((e) => {
+    process.stderr.write(`pi-contrats : ${e && e.stack ? e.stack : e}\n`);
+    process.exitCode = 3;
+  });

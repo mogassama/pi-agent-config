@@ -23,6 +23,11 @@ from a run, not from a guess.
 │   └── pi-contrats                  # Internal contract CLI (item 1) — not the requalification instrument
 ├── docs/
 │   └── MONTEE-PI.md                 # Procedure for a future pi version change (French)
+├── instruments/                     # Exact copies of instruments that authorised acts — never run here
+│   ├── s4/                          # S4 gate (mesurer-s4.sh), tool lock, plan template, provenance
+│   ├── qualif-mac-r4/               # External Mac r4 qualification instrument (18 files), provenance
+│   ├── MANIFESTE-INSTRUMENTS.sha256 # Digests of everything above; checked by tests/l0-instruments
+│   └── MODES-ATTENDUS.tsv           # Expected modes
 ├── extensions/
 │   ├── subagent/                    # The `task` tool — delegation
 │   ├── subagent-footer/             # Three-line footer: orchestrator + roles

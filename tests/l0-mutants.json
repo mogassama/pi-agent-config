@@ -2626,5 +2626,45 @@
     "file": "tests/l0-pi-surface.test.ts",
     "find": "  if (lstatOuNul(join(racine, METADONNEE_FINDER)) && !lstatSync(join(racine, METADONNEE_FINDER)).isFile()) {\n",
     "replace": "  if (false) {\n"
+  },
+  {
+    "test": "L0 REG P3-I1 — un instrument altéré d'un octet est refusé",
+    "file": "tests/l0-instruments.test.ts",
+    "find": "    if (couverts.includes(d) && sha256(readFileSync(join(dir, d))) !== h) anomalies.push(`empreinte : ${d}`);\n",
+    "replace": "    void h;\n"
+  },
+  {
+    "test": "L0 REG P3-I2 — un fichier ajouté à instruments/ est refusé",
+    "file": "tests/l0-instruments.test.ts",
+    "find": "  for (const r of couverts) if (!declares.has(r)) anomalies.push(`en trop : ${r}`);\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 REG P3-I3 — un fichier retiré d'instruments/ est refusé",
+    "file": "tests/l0-instruments.test.ts",
+    "find": "  for (const d of declares.keys()) if (!couverts.includes(d)) anomalies.push(`manquant : ${d}`);\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 REG P3-I4 — un mode changé est refusé",
+    "file": "tests/l0-instruments.test.ts",
+    "find": "    else if (attendu !== reel) anomalies.push(`mode : ${r} ${reel} au lieu de ${attendu}`);\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 REG P3-I5 — un lien à la place d'un instrument est refusé, même vers un contenu identique",
+    "edits": [
+      {
+        "file": "tests/l0-instruments.test.ts",
+        "find": "      const st = lstatSync(join(dir, r));\n      if (st.isSymbolicLink()) anomalies.push(`lien : ${r}`);\n",
+        "replace": "      const st = statSync(join(dir, r));\n      if (st.isSymbolicLink()) anomalies.push(`lien : ${r}`);\n"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG P3-I6 — un répertoire d'instruments sans aucun fichier examiné est refusé",
+    "file": "tests/l0-instruments.test.ts",
+    "find": "  if (couverts.length === 0) anomalies.push(\"aucun fichier examiné\");\n",
+    "replace": ""
   }
 ]
