@@ -2596,5 +2596,11 @@
     "file": "extensions/bash-guard/patterns.ts",
     "find": "-[apseiovqz]*n[apseiovqz]*(?:[mcCFtuS]\\S*)?",
     "replace": "-[apseiovqz]*n[apseiovqz]*"
+  },
+  {
+    "test": "L0 REG P3-N1 — N1 ne dépend pas de la longueur de TMPDIR : vert sous le TMPDIR courant et sous un TMPDIR long",
+    "file": "tests/l0-pi-adapt.test.ts",
+    "find": "describePlan: describePlan({ ...plan, args: norm(plan.args) }) });",
+    "replace": "describePlan: describePlan(plan) });"
   }
 ]

@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -27,6 +27,9 @@ import { test, type TestContext } from "node:test";
 type Preuve = (t: TestContext) => Promise<void> | void;
 function preservation(id: string, titre: string, fn: Preuve): void {
   test(`L0 PRES ${id} — ${titre}`, fn);
+}
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, fn);
 }
 function propriete(vrai: boolean, message: string): void {
   assert.ok(vrai, `PROPRIÉTÉ — ${message}`);
@@ -158,7 +161,7 @@ try {
       const c = ref.n1.contextes.find((x) => x.id === p.contexte);
       if (!agent || !c) throw new Error("N1 : agent ou contexte introuvable : " + p.agent + " / " + p.contexte);
       const plan = buildSpawnPlan(agent, ref.n1.tache, { agentDir: r.agentDir, selfDir: path.join(r.agentDir, "subagent-only"), runId: "n1ref", cwd: r.cwd, ...c.ctx });
-      return norm({ agent: p.agent, contexte: p.contexte, args: plan.args, env: plan.env, injectedChars: plan.injectedChars, estimatedInputTokens: plan.estimatedInputTokens, withoutDelta: plan.withoutDelta, describePlan: describePlan(plan) });
+      return norm({ agent: p.agent, contexte: p.contexte, args: plan.args, env: plan.env, injectedChars: plan.injectedChars, estimatedInputTokens: plan.estimatedInputTokens, withoutDelta: plan.withoutDelta, describePlan: describePlan({ ...plan, args: norm(plan.args) }) });
     });
   } else if (partie === "n2") {
     const { loadAgents } = await imp("subagent-only/agents.ts");
@@ -222,7 +225,7 @@ try {
 fs.writeFileSync(process.env.PI_ADAPT_SORTIE, JSON.stringify(resultat));
 `;
 
-function calculer(partie: "n1" | "n2" | "n3"): Record<string, any> {
+function calculer(partie: "n1" | "n2" | "n3", tmpdirEnfant?: string): Record<string, any> {
   const dossier = mkdtempSync(join(tmpdir(), "pi-adapt-test-"));
   jetables.push(dossier);
   const sortie = join(dossier, `${partie}.json`);
@@ -236,6 +239,7 @@ function calculer(partie: "n1" | "n2" | "n3"): Record<string, any> {
     maxBuffer: 64 * 1024 * 1024,
     env: {
       ...process.env,
+      ...(tmpdirEnfant ? { TMPDIR: tmpdirEnfant } : {}),
       PI_ADAPT_PARTIE: partie,
       PI_ADAPT_SORTIE: sortie,
       PI_ADAPT_REFERENCES: REFERENCES,
@@ -249,7 +253,12 @@ function calculer(partie: "n1" | "n2" | "n3"): Record<string, any> {
 preservation("PI-ADAPT-N1", "les vingt SpawnPlan et describePlan du candidat sont ceux de la base", () => {
   const ref = references();
   precondition(ref.n1.plans.length === 20, `vingt plans de référence attendus, ${ref.n1.plans.length}`);
-  const { plans } = calculer("n1");
+  const ecarts = ecartsN1(ref, calculer("n1").plans);
+  propriete(ecarts.length === 0, `N1 : ${ecarts.length} écart(s) sur 20 plans × 8 champs\n${ecarts.slice(0, 10).join("\n")}`);
+});
+
+/** Les écarts de N1 : chacun des huit champs des vingt plans, comparé sous forme canonique. */
+function ecartsN1(ref: Record<string, any>, plans: Array<Record<string, unknown>>): string[] {
   precondition(Array.isArray(plans) && plans.length === 20, "vingt plans calculés attendus");
   const ecarts: string[] = [];
   ref.n1.plans.forEach((attendu: Record<string, unknown>, i: number) => {
@@ -259,7 +268,32 @@ preservation("PI-ADAPT-N1", "les vingt SpawnPlan et describePlan du candidat son
       }
     }
   });
-  propriete(ecarts.length === 0, `N1 : ${ecarts.length} écart(s) sur 20 plans × 8 champs\n${ecarts.slice(0, 10).join("\n")}`);
+  return ecarts;
+}
+
+/*
+ * D-P3-N1 (phase 3, D1). `describePlan` élide tout argument de plus de 80 caractères en
+ * « <N chars> ». Les chemins sous agentDir et cwd portent la racine temporaire : plus TMPDIR est
+ * long, plus tôt un chemin franchit 80, et la forme élidée ne se normalise plus. Le harnais
+ * décrit donc le plan normalisé (racines remplacées par <AGENTDIR> et <CWD>, symétriquement),
+ * au lieu de normaliser la description du plan réel. Les huit champs restent comparés ; les
+ * références, le générateur et le code de production sont inchangés.
+ */
+regressionCorrigee("P3-N1", "N1 ne dépend pas de la longueur de TMPDIR : vert sous le TMPDIR courant et sous un TMPDIR long", () => {
+  const ref = references();
+  precondition(ref.n1.plans.length === 20, `vingt plans de référence attendus, ${ref.n1.plans.length}`);
+  // Le TMPDIR courant lui-même, puis un répertoire de plus de 48 caractères sous lui. Les trois
+  // longueurs du diagnostic (≤ 5, 12, ≥ 40) ne sont pas toutes constructibles partout (sur le Mac,
+  // /tmp vaut /private/tmp, 12 caractères) : le diagnostic les a relevées dans le bac (plan, § 5.4).
+  const courant = realpathSync(tmpdir());
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "p3n1-")));
+  jetables.push(base);
+  const long = join(base, "x".repeat(48));
+  mkdirSync(long);
+  for (const t of [courant, long]) {
+    const ecarts = ecartsN1(ref, calculer("n1", t).plans);
+    propriete(ecarts.length === 0, `N1 sous TMPDIR de ${t.length} caractères : ${ecarts.length} écart(s)\n${ecarts.slice(0, 5).join("\n")}`);
+  }
 });
 
 preservation("PI-ADAPT-N2", "dispatch rejoue les quatre transcriptions synthétiques avec les projections de la base", () => {
