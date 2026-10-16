@@ -3,7 +3,26 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-*Mise à jour du 15-10-2026 (portage POST-3c).* **État courant :** branche `feat/subagent-extension`,
+*Mise à jour du 15-10-2026 (portage de la clôture de la phase 0).* **État courant :** branche
+`feat/subagent-extension`, tête distante et commit publié `604e89487e0eee2fa37ddfde7429aa3a41f785df` (code
+de la phase 0, parent unique `32e2b3cb…`), arbre `cffdccabbd958e22c5a30a249a40007eb02d2647`, au-dessus de
+`32e2b3cb7c1d014d64a79f24bf64ac5965b2cadd` (POST-3c, commit documentaire, parent unique `8ac87262…`), arbre
+documentaire `7ddf6c0d9aa2fd986699c621d2a1b1e08b6c3a6b`. Publication jugée conforme par Sol le 15-10 (tête
+distante relue avant `8ac87262…`, après `604e8948…`). **La phase 0 — mesure A et relevé de dépense — est
+achevée dans son périmètre de niveau B ; son résultat est « attribution non établie »**, le résultat prévu par
+le cadre et non un échec à réparer. Le rapport faisant référence est le rapport historique de r5
+(`69228b2b…`) : ses premiers postes sont des classements descriptifs estimés, jamais des causes, et la mesure
+ne qualifie rien (voir *Phase 0* et *Ce qui est fait*). **Le candidat technique qualifié demeure
+`2def810f56d96bb459716efda4d409028b14de72`, arbre `b1a99caa0e31e96cbc5279dbca19781335ac764b`** (LOT-PI-ADAPT,
+clos le 13-10) : la publication de l'instrument ne transforme pas la mesure en qualification, en gel ni en
+référence sur cette identité. La reprise de pi 0.86.0 en usage ordinaire, crochets actifs et configuration
+conservée, est autorisée (décision de Sol, 15-10). **Prochaine phase : la phase 3, avant la phase 2, sur un
+plan préalable à adjuger** ; aucune construction, activation ni exécution de phase 3 avant cette
+adjudication. maxParallel reste en phase 8 et la montée de pi en phase 9b. Le résultat non établi n'autorise ni
+optimisation des phases 5 ou 6, ni nouveau QD, ni changement de contexte.
+
+*État du 15-10-2026 (portage POST-3c), remplacé le 15-10 par le paragraphe ci-dessus et conservé — « le
+présent portage » y désigne POST-3c :* branche `feat/subagent-extension`,
 tête distante et commit publié `8ac87262ed01f38ad5e19dbf375a9420f04bcaf6` (POST-3b, commit
 documentaire, parent unique `aa0fc55c…`), arbre documentaire
 `a53c81ef3de406c5e83b3761f52a837544474ceb`. **Le candidat technique qualifié demeure
@@ -29,7 +48,8 @@ Branche `feat/subagent-extension`. Chaîne des états : `c42f2d4` (correctif pr�
 efficacité, arbre `8b821da4`), **gelé et poussé le 06-10**, puis `2def810f` (LOT-PI-ADAPT, arbre
 `b1a99caa`), **établi, gelé et poussé le 13-10**, puis `6a73e9ee` (POST-2, arbre `77d12c5b`),
 **établi et publié le 14-10**, puis `aa0fc55c` (POST-3, arbre `efb2ccd5`), **établi et publié le
-14-10**, puis `8ac87262` (POST-3b, arbre `a53c81ef`), **établi et publié le 15-10**.
+14-10**, puis `8ac87262` (POST-3b, arbre `a53c81ef`), **établi et publié le 15-10**, puis `32e2b3cb` (POST-3c, arbre `7ddf6c0d`) et `604e8948` (code de la
+phase 0, arbre `cffdccab`), **établis le 15-10 (13:34Z) et publiés le 15-10 (15:10Z)**.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste. Les références **[A]** désignent les sections de
 `SUIVI-en-attente.md`, boîte d'attente privée tenue par Mo hors du dépôt.
@@ -797,6 +817,138 @@ constats finaux conformes.*
       | Deux transports à couverture partielle | registre, §§ 2 et 4 | partielle | pièces du bac inaccessibles ; couverture Mac limitée aux éléments effectivement identifiés et vérifiés, sans preuve supplémentaire au-delà des retours déjà adjugés |
       | Distributions Node et installations pi privées | registre, § 4 | **non établie** | pas de copie d'éléments à identifiants ; artefacts reproductibles à préciser au plan de conservation |
 
+### Phase 0 — clôture : mesure A et relevé de dépense, niveau B (15-10)
+
+*Pièces faisant foi : les adjudications de Sol du 15-10 (revue regroupée de r3 ; revue de r4 ; réception de r5 et
+autorisation de l'acte 1 ; retour d'établissement ; autorisation de l'acte 2 ; publication conforme et
+achèvement), les retours d'établissement et de publication, la pièce d'identité du candidat r5, le rapport
+historique de r5 et le registre des résultats (§§ 25 à 30), hors dépôt. Ce portage distingue les actes
+(exécutés par Mo), les observations (rapportées par Claude) et les adjudications (de Sol), et distingue les
+passages remplacés des preuves retenues : un passage remplacé reste conservé comme historique et n'est pas
+attribué au candidat final. **Sol n'a exécuté aucun programme, test, banc, Git, pi ni crochet livré** : les
+résultats d'exécution ci-dessous sont ceux des passages et des actes consignés, reçus sur leurs pièces.*
+
+- [x] **Plan v3 révisé, posé au Projet avec sa limite de preuve.** Le plan consolidé de phase 0 a existé en
+      trois états : `8dd655a1…` (reçu à r3, version déclarée au Projet jusqu'à la pose), `1aa8a64f…` (r4, pose non
+      autorisée en l'état) et **`8750c76bd26199656c4baeae92506a0bca37458411aef7b2ce0f4bfd99b96a8b`** (r5, reçu).
+      Ce dernier a été posé au Projet sous `suivi/sources-post3c/PLAN-PHASE0-v3.md` **avant l'acte 1**, sur
+      autorisation de Sol, par envoi du fichier puis relecture intégrale du texte. **Limite conservée : aucun
+      SHA-256 n'a été recalculé depuis les octets du Projet** (l'interface ne rend que du texte) ; les empreintes
+      vérifiées par Sol sont celles des copies locales, et la concordance du Projet repose sur la méthode et la
+      relecture déclarées. Retour de pose : manifeste `31a38247…`, 3/3, vérifié par Sol.
+- [x] **Construction et revues de Sol — passages remplacés et preuves retenues.** Trois livraisons successives
+      du candidat (r3, r4, r5), chacune revue par Sol. Les identités des deux premiers candidats (r3 : patch
+      `55fb9eee…` ; r4 : patch `c90225ad…`) sont **historiques** et ne sont pas celles du candidat final.
+      - *r3 (décision `6ea3062b…`).* Constitution reçue (manifeste `c33f143e…`, 442/442) ; rejeu limité des
+        recettes admis pour les seules différences r2 → r3 ; **six corrections obligatoires, R1 à R6**, sur des
+        défauts de contrôle, de couverture et de traçabilité : unicité des séquences et sources de risque
+        exactes ; champ absent distinct d'un zéro, aussi dans l'artefact ; dénominateurs disponibles des
+        délégations sans transcription ; pièces sources structurées par origine ; encadrement d'un `read` tronqué
+        séparé des lignes nouvelles ; temporaires de la vérification native confinés à sa destination. Acte 1
+        non autorisé.
+      - *r4 (décision `27f08c00…`, livraison `758c4a2e…`, 613 empreintes).* R1, R4, R5 et R6 reçues ; R2 et R3
+        reçues avec une réserve (**correction C1 de la revue r4** : une masse attendue inconnue ne doit pas être
+        remplacée par la somme observée des tours) ; **correction C2** (identité périmée du candidat dans le
+        plan). Acte 1 non autorisé.
+      - *r5 (décision `07b8abe1…`, livraison `e86e8486…`, 861/861).* C1 et C2 levées (cas K48 et mutant M48 ; le
+        plan renvoie à la pièce d'identité du candidat) ; correctif de tri retenu : dans `rapport.py`, le nom
+        d'origine sert de clé secondaire à parts égales — il règle l'ordre des lignes, non les mesures. Acte 1
+        autorisé une fois, et pose du plan autorisée.
+
+      **Candidat final (r5).** Patch `64637e3709ad1ca48f84b4662a1e49caf6b120c55092592442504a179a2e49b9`, patch-id
+      `afab9bd2…` ; arbre du patch sur `8ac87262…` seul `94cd5a01…`, arbre final `cffdccab…` ; `bin/run-cost`
+      (mode 755) `22e83d39…`, `tests/test_run_cost.py` `f013be3c…`, `README.md` `5114e30f…` ; index de 78 lignes
+      (3 modifiés, 75 ajoutés) ; copie scellée de 77 fichiers, SPEC native `a21a0757…` ; 75 tests annoncés OK à
+      l'établissement, dont les 27 tests antérieurs, inchangés.
+      **Preuves retenues.** Passage formel 5 du candidat (gel à 12:25:43Z, table neuve) : P0 à P8 conformes, K et
+      M 48/48, préalable 8/8 à l'octet, quatre sorties de contexte de code 0. Passage 6 des recettes (gel à
+      12:34:13Z) : BANC `502ddd2f…`, 40/40 résultats conservés CONFORME, 731 contrôles annoncés.
+      **Passages remplacés, conservés comme historiques, non attribués au candidat final.** Passage formel 4 du
+      candidat (tri non déterministe à parts égales dans `rapport.py` ; l'essai sous trois graines est un essai
+      déclaré) ; passages formels 2 (r3) et 3 (r4), propres à leurs candidats ; passage 5 des recettes de r4 (gel
+      à 11:51:06Z, BANC `f0f4581f…`) et passage 4 des recettes de r3 (gel à 11:03:09Z, BANC `bb22c52d…`).
+- [x] **Établissement (acte 1) — conforme (15-10).** Lanceur r5 `9fcb4d0e…`, invoqué par Mo le 15-10 de 13:34:27Z à
+      13:34:33Z, pi arrêté, sans sudo : neuf identités précontrôlées, destinations absentes, aucune variable
+      `GIT_*` ; code brut 0, verdict « ÉTABLISSEMENT P0 — CONFORME ». Vérification native V1 à V6 conforme sur la
+      copie scellée et les archives authentifiées, avant toute pose ; interpréteur effectivement employé relevé :
+      Python 3.15.0, Darwin arm64 (relevé d'exécution, sans gel). Deux commits ordonnés, parents uniques, sans
+      signature : POST-3c `32e2b3cb7c1d014d64a79f24bf64ac5965b2cadd` (parent `8ac87262…`, arbre
+      `7ddf6c0d9aa2fd986699c621d2a1b1e08b6c3a6b`, message `docs(suivi): port tracking to 15-10 and record phase-0
+      plan v3`), qui porte exactement les deux textes préparés par ce suivi, `SUIVI.md` `3702aca3…` et
+      `CHANTIER.md` `a8e856f6…` ; puis code de phase 0 `604e89487e0eee2fa37ddfde7429aa3a41f785df` (parent
+      `32e2b3cb…`, arbre `cffdccabbd958e22c5a30a249a40007eb02d2647`, message `feat(run-cost): add --contexte
+      direct reading of child context`). Sol a recalculé les deux identités en SHA-1 à partir des objets commit
+      conservés (327 octets chacun), sans Git. Aucun push parmi les 67 commandes consignées ; configuration
+      locale inchangée avant/après (`42e28a8d…`), trois crochets actifs. Retour d'établissement : manifeste
+      `c5b62906…`, 608/608, vérifié par Sol, qui a aussi comparé à l'octet les 16 sorties du préalable et les huit
+      fichiers des quatre mesures de contexte à ceux du passage formel 5. **Déclaré, non observé par Sol :** la
+      tête distante n'a pas été relue à l'établissement ; l'absence de publication est reçue sur la recette et le
+      retour.
+- [x] **Publication (acte 2) — conforme (15-10).** Lanceur fixé `d8ffac09…` (le modèle `dc47c5a4…` avec deux
+      substitutions seulement, les deux identités de commit ; manifeste de réception `296bd53f…`, 3/3), invoqué
+      par Mo le 15-10 de 15:10:01Z à 15:10:07Z, pi arrêté, sans sudo : précontrôles d'identité conformes, audit
+      d'établissement présent, aucune variable `GIT_*` ; code brut du lanceur et du push 0, verdict « PUBLICATION
+      P0 — CONFORME ». **Un seul push** de `604e8948…` vers `refs/heads/feat/subagent-extension` sur origin, sans
+      force ni étiquette ; relecture distante avant `8ac87262…`, après `604e8948…` ; chaîne et arbres conformes à
+      l'établissement ; configuration locale inchangée (`42e28a8d…`), trois crochets actifs, pi absent pendant
+      l'acte. Retour de publication : manifeste `780dd07b…`, 174/174, vérifié par Sol. **Limites :** la tête distante
+      est reçue à l'instant de sa relecture consignée dans l'acte, Sol n'a pas interrogé le distant ; le contrôle
+      anonyme hors acte rapporté par la construction est une corroboration déclarée, non nécessaire à la preuve
+      principale. L'autorisation d'acte 2 est consommée : elle ne permet ni relance ni second push.
+- [x] **Phase 0 déclarée achevée au niveau B (décision de Sol `fd3b4208…`, 15-10).** D1 : publication conforme ;
+      D2 : phase 0 achevée dans son périmètre ; D3 : reprise de pi ; D4 : portage et suite. La chaîne autorisée
+      est complète : plan révisé reçu et posé au Projet avec sa limite, candidat r5 et preuves reçus,
+      vérification native conforme sur copie scellée, établissement puis publication conformes. Le résultat
+      **« attribution non établie »** est celui que le cadre prévoyait, non un échec à réparer pour obtenir une
+      dominance. Les preuves de mesure et de qualification de l'instrument sont celles déjà adjugées, complétées
+      par le retour natif d'établissement sous Python 3.15.0 ; Sol ne les a pas réexécutées. **Python 3.15.0
+      reste un relevé d'exécution, sans gel durable de version.** L'identité technique qualifiée `b1a99caa…`
+      (`2def810f…`) est inchangée : la publication de l'instrument ne transforme pas la mesure en qualification
+      technique, en gel ni en référence actuelle sur cette identité. Aucun nouveau QD ni changement de contexte
+      n'est ouvert ; le résultat non établi n'autorise pas d'optimisation des phases 5 ou 6.
+- [x] **Rapport historique de r5 — ce qu'il dit, et ce qu'il ne dit pas.** Rapport faisant référence :
+      `RAPPORT-HISTORIQUE.md`, SHA-256 `69228b2be00ab3b2d861c18ae9a9b445380ef977569b30225c5d734c3b97509f`, produit
+      en bac le 15-10 par `rapport.py`, sous Python 3.13.16, sur les sorties de `run-cost --contexte` du candidat
+      final (`22e83d39…`). Sorties gelées (JSON / texte) : QD-EFF-a `432790b0…` / `14f83297…` ; QD-EFF-b
+      `8a0353d0…` / `6918cf68…` ; pilote final `5fb91707…` / `09660386…` ; QD-P1b `0bf6eae3…` / `3f47209f…`.
+      **Aucune agrégation entre candidats, aucun montant monétaire.**
+      **Mesure A, lecture historique et datée (niveau B).** Verdict pour tout relevé et tout rôle : **attribution
+      non établie**. Le « premier poste estimé » est la tête d'un classement descriptif de textes observés,
+      estimés à caractères/4 (estimateur non calibré), avec résidence non prouvée, résidu signé non redistribué et
+      parts non renormalisées : ce n'est ni une cause, ni une origine dominante, et aucune correction de contexte
+      n'en découle. Les premiers postes estimés sont résumés ci-dessous ; les parts et les masses résiduelles
+      restent dans le rapport historique.
+
+      **Limites déclarées par le rapport et par les revues.** La masse résiduelle est élevée et variable
+      selon le relevé, le rôle, la variante et le segment ; le rapport ne rend aucun verdict pour
+      l'orchestrateur. **Les têtes diffèrent selon le rôle et le corpus** (O-lecture pour
+      les workers ; O-tâche sur le corpus principal puis O-préfixe sur les pilotes pour les reviewers ;
+      O-autres-outils ou O-préfixe pour le scout) et la dispersion a/b par origine est forte ; la cause 1 du plan
+      (dépense en findings lors d'une reprise) est « non
+      exercée », le corpus principal ne contenant aucune reprise ; le corpus entièrement rapproché (62/62
+      délégations) n'exerce pas la correction C1 de la revue r4, de sorte que l'absence de changement des premiers
+      postes ne prouve pas ce comportement sur source manquante ; le pilote final n'a pas de trace `transmis` (diff
+      injecté du reviewer « non établi ») ; l'en-tête de transcription ne porte pas la séquence (liaison par nom de
+      fichier et journal) ; le repli de modèle (délégation n° 43 du pilote final) est isolé et publié à part, et
+      les deux périodes du pilote sont séparées sans double compte.
+      **Relevé de dépense (B).** Grille par rôle dans le rapport : tokens facturés, orchestrateur compris au
+      dénominateur, `reasoning` compris dans `output` sans être additionné, durée cumulée des délégations
+      distincte de la durée écoulée, aucun montant. Les totaux par run, les durées et les compactions restent
+      dans le rapport historique, sans somme ni comparaison entre candidats.
+
+- [x] **Reprise de pi et suite (décision `fd3b4208…`, D3 et D4).** **La reprise de pi 0.86.0 en usage ordinaire est
+      autorisée**, avec les trois crochets actifs et la configuration conservée ; l'obligation temporaire de
+      maintenir pi arrêté pour les deux actes est levée. Elle n'ouvre ni installation, ni changement de version ou
+      de configuration, ni relance des recettes d'établissement ou de publication, ni nouvelle mesure de
+      qualification. **Prochaine phase technique : la phase 3, avant la phase 2** (décision d'ordre du 08-10 relue ;
+      sa copie de reprise est identique à l'original canonique, `73433179…`), sur un plan préalable à adjuger :
+      priorités maintenues — protection des registres durables, instruments hors dépôt, garde du push ; les autres
+      dettes à inclure ou à laisser au backlog sont nommées dans le plan ; pas de plafond automatique de trois
+      items ; aucune construction, activation, modification de production ni exécution de phase 3 avant son
+      adjudication. maxParallel reste en phase 8 ; la montée de pi reste en phase 9b. **Conservations :** toutes
+      les livraisons, archives, passages remplacés, modèles, lanceurs, originaux d'actes et retours restent
+      conservés ; aucun nettoyage ni retrait n'est ouvert.
+
 ---
 
 ## Ce qui reste
@@ -815,12 +967,13 @@ non qualifiée. Suivent **LOT-REPRISES** et son correctif, **qualifiés et clos 
 (objet final `1e07ae13`, efficacité toujours non qualifiée). Tout chantier suivant passe par
 un nouveau lot ; le suivant recommandé par Sol est **l'efficacité P1, diagnostic d'abord**.
 
-*Ordre actuel, adjugé le 08-10 et repris aux portages des 14-10 et 15-10 — il remplace celui du 06-10 :*
+*Ordre actuel, adjugé le 08-10 et repris aux portages des 14-10 et 15-10, puis à la clôture de la phase 0
+(15-10) — il remplace celui du 06-10 :*
 
 ```text
-LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, portage POST-3c
-→ phase 0 : mesure A et relevé de dépense (plan adjugé, réalisation à venir)
-→ phase 3 : dette prioritaire du chantier
+LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, POST-3c et phase 0 publiés
+→ phase 0 : mesure A et relevé de dépense (achevée au niveau B le 15-10 ; attribution non établie)
+→ phase 3 : dette prioritaire du chantier (plan préalable à adjuger)
 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9
 → phase 9b : versions, dont montée directe de pi
 → QD de référence sur l'environnement final de 9b
@@ -839,6 +992,12 @@ banc avant tout allègement, gel et pilote avant tout ce qui touche l'intégrati
 décision sur `.agents/memory/` ; les phases 5 et 6 viennent après la mesure A et leurs prérequis. Les
 versions, modèles, prompts et baselines historiques restent datés. **Cette mise à jour ne lance ni
 mesure A, ni phase suivante, ni montée de pi, ni QD.**
+
+*Précisé le 15-10 (clôture de la phase 0) :* la phase 0 est achevée au niveau B ; **la prochaine phase est la
+phase 3, avant la phase 2, sur un plan préalable à adjuger** ; cette mise à jour ne lance ni phase 3, ni
+phase suivante, ni montée de pi, ni QD. *Texte du portage POST-3c, remplacé par le bloc ci-dessus et conservé :*
+« LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, portage POST-3c → phase 0 : mesure A et
+relevé de dépense (plan adjugé, réalisation à venir) → phase 3 : dette prioritaire du chantier ».
 
 *[Remplacé le 08-10 par l'ordre ci-dessus ; conservé pour l'historique. « Trois items par lot par
 défaut » n'est plus la règle courante.]*
@@ -957,6 +1116,21 @@ rôle. N'attend pas le pilote ; se mène en parallèle de la phase 1.*
 *[14-10]* Première phase de la suite adjugée le 08-10, après la clôture de LOT-PI-ADAPT : la mesure A
 précède tout changement de contexte. **Non lancée** par le portage POST-3.
 
+**[15-10, clôture] Phase 0 achevée au niveau B ; résultat « attribution non établie ».** Le plan ci-dessous a
+été réalisé : option `--contexte` de `bin/run-cost`, tests et section d'usage du `README.md`, dans le commit de
+code `604e8948…` (index de 78 lignes : 3 modifiés — `bin/run-cost`, `tests/test_run_cost.py`, `README.md` — et
+75 ajoutés), publié le 15-10 au-dessus de POST-3c (`32e2b3cb…`). Le rapport historique de r5 (`69228b2b…`)
+publie la lecture directe par origine (mesure A) et le relevé de dépense par rôle (B) sur le corpus adopté
+(QD-EFF-a/b en principal ; pilote final et QD-P1b, distincts), sans agrégation entre candidats et sans montant.
+La tête d'un classement est un « premier poste estimé » : descriptif, estimé, jamais une cause. **Rien n'est
+qualifié :** ni qualification technique, ni gel, ni référence sur `b1a99caa…` ; le résultat n'autorise ni
+optimisation des phases 5 ou 6, ni nouveau QD, ni changement de contexte. Détail, passages remplacés et preuves
+retenues : *Ce qui est fait*, « Phase 0 — clôture ».
+
+*[Entrée du portage POST-3c, remplacée le 15-10 par l'entrée de clôture ci-dessus et conservée : ses mots
+« réalisation à venir », « rien n'est construit » et « aucun résultat n'est inscrit ici » décrivent l'état de
+ce portage, non l'état courant.]*
+
 **[15-10] Plan adjugé, réalisation à venir.** Le cadre est adjugé par Sol (décisions `4734d360…`,
 `74cbcec9…`, `5c42e0f0…`, précision Python `5c5a4a8e…`). Le plan consolidé — v3, construit selon ce cadre
 sans nouveau tour de cadrage — est livré avec le code et relu par Sol à cette occasion. **Rien n'est
@@ -1025,8 +1199,11 @@ et du rapport s'inscriront dans un commit documentaire ultérieur, après leur a
   d'ARRÊT ; l'écart, c'est une sortie canonique différente. Un échec effectif se rapporte avec son
   environnement et n'autorise aucun repli automatique vers une ancienne version. Aucune recherche de
   version sur Internet, installation, rétrogradation ni modification du système n'est ouverte.
+- *[15-10, clôture] Relevés d'exécution, sans gel.* L'établissement a relevé l'interpréteur effectivement
+  employé : Python 3.15.0, Darwin arm64 ; le rapport de r5 a été produit en bac sous Python 3.13.16. Ce sont des
+  relevés, ni une cible, ni un minimum, ni un gel ; la règle ci-dessus est inchangée.
 
-- [ ] **Écrire la commande d'analyse, versionnée sous `bin/` et testée.** *29-09 : la part
+- [x] **Écrire la commande d'analyse, versionnée sous `bin/` et testée.** *29-09 : la part
       coût existe — `bin/run-cost`, livrée dans ITE-1, reproduit la baseline fonctionnelle ;
       la part contexte (mesure A) reste à écrire.* `ANALYSE-f0797e`,
       que `CHANTIER.md` citait comme l'endroit où elle vivait, est **introuvable** — ni dans
@@ -1034,7 +1211,11 @@ et du rapport s'inscriront dans un commit documentaire ultérieur, après leur a
       directe de `.pi-subagent-runs/*.json` et des sessions, jamais par soustraction, contrôle
       du nombre de tours contre la session. *Troisième instrument perdu hors du dépôt* —
       après la porte S4 et la baseline `tsc`.
-- [ ] **Mesure A — ce qui remplit le contexte du worker.** *Remontée de « Dette, sans
+      *[15-10, clôture :]* faite sous la forme de l'option `--contexte` de `bin/run-cost` (lecture directe,
+      rapprochement des artefacts de run et des transcriptions, sans soustraction), publiée dans `604e8948…` ;
+      75 tests annoncés OK à l'établissement. Les phrases ci-dessus sont conservées : `ANALYSE-f0797e` n'est
+      pas retrouvé, et l'option est un instrument nouveau, versionné et testé, non ce script.
+- [x] **Mesure A — ce qui remplit le contexte du worker.** *Remontée de « Dette, sans
       urgence » le 26-09 : un pivot rangé en dette ne se lance pas.* Trois causes candidates,
       trois correctifs incompatibles : texte de tâche gonflé par les findings, sorties de
       `pi-lint-gate` restées en contexte, relectures dans la délégation. **Base : le run 10
@@ -1054,7 +1235,12 @@ et du rapport s'inscriront dans un commit documentaire ultérieur, après leur a
       *Débloque :* phases 5 et 6, la moitié « économie »
       de la scission d'`AGENTS.md`, l'adoption d'un bras court de l'épreuve de concision.
       [A] Partie 2, *Mesure A — le pivot, renvoi*.
-- [ ] **Relevé de dépense par agent, au pilote.** Orchestrateur, worker, scout, reviewer,
+      *[15-10, clôture :]* réalisée au niveau B sur le corpus révisé (QD-EFF-a/b ; pilote final et QD-P1b) :
+      **attribution non établie**, aucune cause n'est établie ; la cause 1 (findings d'une reprise) est « non
+      exercée » par le corpus principal, qui ne contient aucune reprise. La ligne *Débloque* ci-dessus est
+      conservée comme condition d'entrée, **non comme autorisation** : le résultat non établi n'autorise aucune
+      optimisation des phases 5 ou 6 (décision de Sol, 15-10).
+- [x] **Relevé de dépense par agent, au pilote.** Orchestrateur, worker, scout, reviewer,
       advisor, chacun séparément : `input`, `cacheRead`, `cacheWrite`, `output` (dont
       `reasoning`, qui ne s'additionne pas), délégations, tours, `durationMs` ; dénominateur
       = le run entier, orchestrateur compris ; ramené aussi par worker. Lu après coup, sans
@@ -1074,6 +1260,10 @@ et du rapport s'inscriront dans un commit documentaire ultérieur, après leur a
       complets ; 6 % de `bash`, 3 % des retours de délégation. L'hypothèse « extension
       `subagent` trop verbeuse » est écartée. Aucune correction imposée à ce stade. L'épuisement
       du quota dépend aussi de la facturation et du cache du fournisseur.
+      *[15-10, clôture :]* relevé historique publié par rôle selon la grille et le dénominateur du plan, sans
+      montant et sans agrégation entre candidats ; la durée cumulée des délégations reste distincte de la durée
+      écoulée. Les entrées ci-dessus (QD-P0, pilote du 27-09, sol/17, sol/18) sont conservées telles quelles ; ce
+      relevé ne tranche pas le modèle du reviewer.
 - *Seuil de bruit, à porter par toute comparaison :* 13 % de dispersion sur le coût entre
   deux runs identiques de `csv-to-bq`. Jamais mesuré sur Spark-C.
 
@@ -1462,6 +1652,14 @@ phase les distingue des autres dettes et propose explicitement celles qu'il incl
 automatique de trois items**. Les dettes ci-dessous, dont les deux issues de la clôture de
 LOT-PI-ADAPT en fin de liste, sont inscrites, non réalisées.
 
+*[15-10, clôture de la phase 0]* La phase 3 est la prochaine phase technique, **avant la phase 2** (décision de
+Sol, 15-10). Son plan préalable, **à adjuger**, borne son périmètre, ses conditions d'entrée, sa qualification et
+son retour arrière ; il nomme les autres dettes qu'il inclut ou laisse au backlog, sans plafond automatique de
+trois items. Priorités maintenues : protection des registres durables, instruments hors dépôt, garde du push.
+**Aucune construction, activation, modification de production ni exécution de phase 3 n'est autorisée avant
+l'adjudication de ce plan.** La préparation documentaire du plan peut avancer en parallèle du portage du suivi,
+à partir des pièces conservées. maxParallel reste en phase 8 ; la montée de pi reste en phase 9b.
+
 - [ ] **`.pi-subagent-runs/` est ignoré par git et porte les registres durables.** Un
       `git clean -xfd` détruit le registre d'un run en vol ; constaté le 08-09, douze
       artefacts réels perdus. Forme indécise : déplacer hors du dépôt, ou protéger sur place.
@@ -1833,3 +2031,8 @@ actif (POST-1) : voir le format dans *Ce qui est fait*.
 d'attente et le registre des résultats restent hors dépôt et hors push, et la boîte reste entière. Les
 résultats de la phase 0 (mesure, rapport) s'inscriront dans un commit documentaire ultérieur, après leur
 adjudication.
+
+*Portage de la clôture de la phase 0 (15-10) :* même régime. Le commit ne porte que ce fichier et
+`CHANTIER.md` ; la boîte d'attente et le registre des résultats restent hors dépôt et hors push, et la boîte
+reste entière. Sa base publiée est le commit `604e8948…` ; son établissement et sa publication ont leurs
+autorisations propres.

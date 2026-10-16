@@ -20,9 +20,13 @@ le dernier sans aucun échec. **Septembre — le chantier `3c`** : un audit exte
 la parallélisation des writers possible sous preuves. Aucune régression d'audit ne reste
 ouverte.
 
-**État courant (15-10) :** branche `feat/subagent-extension`, tête distante et commit publié
-`8ac87262ed01f38ad5e19dbf375a9420f04bcaf6` (POST-3b, commit documentaire, parent unique `aa0fc55c…`),
-arbre documentaire `a53c81ef3de406c5e83b3761f52a837544474ceb`. *État du 14-10, conservé :* commit publié
+**État courant (15-10, après la clôture de la phase 0) :** branche `feat/subagent-extension`, tête distante et
+commit publié `604e89487e0eee2fa37ddfde7429aa3a41f785df` (code de la phase 0, parent unique `32e2b3cb…`),
+arbre `cffdccabbd958e22c5a30a249a40007eb02d2647`, au-dessus de `32e2b3cb7c1d014d64a79f24bf64ac5965b2cadd`
+(POST-3c, commit documentaire, parent unique `8ac87262…`), arbre documentaire
+`7ddf6c0d9aa2fd986699c621d2a1b1e08b6c3a6b`. *État du 15-10 avant la clôture (portage POST-3c), conservé :* tête
+distante et commit publié `8ac87262ed01f38ad5e19dbf375a9420f04bcaf6` (POST-3b, commit documentaire, parent
+unique `aa0fc55c…`), arbre documentaire `a53c81ef3de406c5e83b3761f52a837544474ceb`. *État du 14-10, conservé :* commit publié
 `6a73e9ee1a84aad73e36756dad5556509a6019f9` (POST-2), arbre documentaire
 `77d12c5b89cd1ccb4eadfbe363231168955f86df`. Cinq éléments, distincts :
 
@@ -40,17 +44,31 @@ arbre documentaire `a53c81ef3de406c5e83b3761f52a837544474ceb`. *État du 14-10, 
   documentation seule, aucun changement de réglage. Le nettoyage borné est achevé, avec son écart de
   séquence P1/P2 maintenu ; l'écart d'authentification préalable du manifeste de POST-3b est maintenu comme
   écart historique ; aucune autre conservation n'est levée.
-- **Phase 0 : plan adjugé, réalisation à venir (15-10)** — mesure A et relevé de dépense par une option
-  `--contexte` de `bin/run-cost`, niveau B, sans nouveau run ; rien n'est construit dans le dépôt ni
-  mesuré. Ce registre n'en porte aucun résultat. Détail et raisons : § 5 ; plan et corpus : `SUIVI.md`,
-  *Phase 0*. Le portage POST-3c, documentaire, précède tout code de phase 0.
+- **Phase 0 : achevée au niveau B (15-10)** — mesure A et relevé de dépense par l'option `--contexte` de
+  `bin/run-cost` (code publié dans `604e8948…`, arbre `cffdccab…`, au-dessus de POST-3c `32e2b3cb…`, arbre
+  `7ddf6c0d…`), sans nouveau run. **Résultat : « attribution non établie »**, le résultat que le cadre
+  prévoyait ; le rapport historique de référence est celui de r5 (`69228b2b…`), daté, sans causalité, sans
+  montant, sans agrégation entre candidats. Ni qualification technique, ni gel, ni référence sur `b1a99caa…` ;
+  aucune optimisation des phases 5 ou 6 n'est autorisée par ce résultat. Le plan révisé v3 (`8750c76b…`) est posé
+  au Projet avec sa limite de preuve : son empreinte n'a pas été recalculée sur les octets du Projet. La reprise
+  de pi 0.86.0 en usage ordinaire, crochets actifs, est autorisée. Détail et raisons : § 5 ; passages remplacés
+  et preuves retenues : `SUIVI.md`, *Ce qui est fait*, « Phase 0 — clôture ».
+  *Texte du portage POST-3c, remplacé le 15-10 et conservé :* « **Phase 0 : plan adjugé, réalisation à venir
+  (15-10)** — mesure A et relevé de dépense par une option `--contexte` de `bin/run-cost`, niveau B, sans nouveau
+  run ; rien n'est construit dans le dépôt ni mesuré. Ce registre n'en porte aucun résultat. Détail et raisons :
+  § 5 ; plan et corpus : `SUIVI.md`, *Phase 0*. Le portage POST-3c, documentaire, précède tout code de phase 0. »
 
-*Ordre de la suite (adjugé le 08-10, repris les 14-10 et 15-10) :* LOT-PI-ADAPT clos, POST-1, POST-2,
-POST-3 et POST-3b achevés, portage POST-3c → phase 0 (mesure A et relevé de dépense ; plan adjugé,
-réalisation à venir) → phase 3 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9 →
-phase 9b (versions, dont montée directe de pi) → QD de référence sur l'environnement final de 9b →
-phase 10 (modèles). **Une phase par lot**, après plan adjugé. Aucune mesure A, phase suivante, montée de
-pi ni QD n'est lancée par ce portage. Détail : `SUIVI.md`.
+*Ordre de la suite (adjugé le 08-10, repris les 14-10 et 15-10, puis à la clôture de la phase 0) :* LOT-PI-ADAPT
+clos, POST-1, POST-2, POST-3 et POST-3b achevés, POST-3c et phase 0 publiés (phase 0 achevée au niveau B ;
+attribution non établie) → **phase 3, avant la phase 2, sur un plan préalable à adjuger** → phase 2 → 4 → 5 →
+6 → 7 → 8 → 9 → phase 9b (versions, dont montée directe de pi) → QD de référence sur l'environnement final de
+9b → phase 10 (modèles). **Une phase par lot**, après plan adjugé. Aucune construction, activation ni exécution
+de phase 3, aucune phase suivante, montée de pi ni QD n'est lancée par ce portage. Détail : `SUIVI.md`.
+*Texte du portage POST-3c, remplacé le 15-10 et conservé :* « LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b
+achevés, portage POST-3c → phase 0 (mesure A et relevé de dépense ; plan adjugé, réalisation à venir) →
+phase 3 → phase 2 → 4 → 5 → 6 → 7 → 8 → 9 → phase 9b (versions, dont montée directe de pi) → QD de référence
+sur l'environnement final de 9b → phase 10 (modèles). **Une phase par lot**, après plan adjugé. Aucune mesure A,
+phase suivante, montée de pi ni QD n'est lancée par ce portage. »
 
 **État au 06-10, conservé :** `555b202f` (arbre `8b821da4`, patch-id `7af97b68`), **lot efficacité,
 établi, gelé et poussé le 06-10** sur `1e07ae13` — quatre leviers d'efficacité et leur
@@ -176,7 +194,7 @@ remplacer —
 
 | Quoi | Ce qui le débloque |
 |:--|:--|
-| **Le coût de contexte du worker** — mesure A | `09-worker` de `f0797e` : 205 699 tokens pour 3 858 de sortie, 26,8k de contexte moyen par tour contre 12k sur les deux workers précédents. Trois causes possibles — texte de tâche gonflé par les findings de la revue, sorties de `pi-lint-gate` qui restent en contexte, relectures dans la délégation — et **trois correctifs incompatibles**. *La commande d'analyse, que ce registre disait être dans `ANALYSE-f0797e`, n'a jamais été versionnée et est introuvable* ; elle est à réécrire sous `bin/`, et la mesure à faire sur le run 10 `a1c83f`. C'est la phase 0 de `SUIVI.md`. Ne rien toucher au contexte avant |
+| **Le coût de contexte du worker** — mesure A | `09-worker` de `f0797e` : 205 699 tokens pour 3 858 de sortie, 26,8k de contexte moyen par tour contre 12k sur les deux workers précédents. Trois causes possibles — texte de tâche gonflé par les findings de la revue, sorties de `pi-lint-gate` qui restent en contexte, relectures dans la délégation — et **trois correctifs incompatibles**. *La commande d'analyse, que ce registre disait être dans `ANALYSE-f0797e`, n'a jamais été versionnée et est introuvable* ; elle est à réécrire sous `bin/`, et la mesure à faire sur le run 10 `a1c83f`. C'est la phase 0 de `SUIVI.md`. *[15-10, clôture de la phase 0 :] elle est achevée au niveau B ; le verdict est « attribution non établie » (§ 5), et la mesure s'est faite sur QD-EFF-a/b, pilote final et QD-P1b, non sur `a1c83f`.* Ne rien toucher au contexte avant |
 | **Plafond de rounds de revue** | `f0797e` a fait quatre alternances worker/reviewer et s'est arrêté proprement. La défaillance que le plafond corrige n'a pas eu lieu ; l'ajouter maintenant serait du mécanisme sur une intuition |
 | **Canal `needs_decision` pour le worker** | `pi-subagents` a `contact_supervisor`, bloquant, qui laisse le worker vivant pendant qu'il attend. Non transposable en `-p` ; l'équivalent atteignable est un champ d'enveloppe. Aucun run ne l'a encore rencontré |
 | **Fiabilité du parallélisme sur un vrai projet** | Le pilote. Tout le reste — plafonds, admission, registres, reprise — est prouvé en L0 et dans les lots ; aucune suite ne dit qu'une exécution parallèle tient sur une tâche de production entière |
@@ -551,7 +569,9 @@ qui est prouvé.
 | **La phase 3 vient avant la phase 2** *(08-10)* | Exception explicite à l'ordre numérique : ses trois priorités (registres durables, instruments hors dépôt, garde du push) précèdent, sans plafond automatique de trois items |
 | **Phase 0 : lecture directe, aucune origine par soustraction** *(15-10)* | Le solde d'un tour à l'autre (variation du contexte moins la sortie précédente) range dans une origine visible des éléments invisibles — sérialisation, schémas d'outils, raisonnement caché — et rend le résidu non indépendant : il s'annule par construction. Sont admis la lecture directe des textes observés, l'estimation caractères/4 indépendante des usages et un résidu signé, publié, jamais redistribué ; la résidence des textes reste une hypothèse non prouvée, affichée comme telle. Verdict « attribution non établie », tête du classement « premier poste estimé » : ni causalité ni correction de contexte n'en découlent, et aucun seuil n'est adopté faute de méthode validée pour borner l'erreur des catégories |
 | **Corpus de la phase 0 : QD-EFF-a/b en principal** *(15-10)* | Remplace la cible `a1c83f`, dont l'inventaire n'a trouvé aucune pièce (absence bornée à cet inventaire). Deux runs donnent un écart observé a/b, pas une bande de bruit générale. Le pilote final et QD-P1b, distincts, servent à l'échelle et aux reprises ; pas d'agrégation entre candidats ; les résultats restent historiques, sans transfert à l'environnement technique actuel |
-| **Python : aucun gel de version** *(15-10)* | Le Python stable courant de la machine est employé, résolu une fois puis invoqué explicitement ; son chemin et sa version sont relevés dans l'environnement réel de l'invocation, sans `PATH` imposé qui masquerait l'installation habituelle. Une version différente n'est pas un écart ; une sortie canonique différente l'est. Aucun repli automatique vers une ancienne version |
+| **Python : aucun gel de version** *(15-10)* | Le Python stable courant de la machine est employé, résolu une fois puis invoqué explicitement ; son chemin et sa version sont relevés dans l'environnement réel de l'invocation, sans `PATH` imposé qui masquerait l'installation habituelle. Une version différente n'est pas un écart ; une sortie canonique différente l'est. Aucun repli automatique vers une ancienne version. *Relevés d'exécution du 15-10 :* Python 3.15.0 à l'établissement, Python 3.13.16 pour le rapport r5 produit en bac — des relevés, non un gel, une cible ni un minimum |
+| **Phase 0 : achevée au niveau B, attribution non établie** *(15-10)* | Résultat prévu par le cadre reçu, non un échec à réparer pour obtenir une dominance. Les premiers postes sont des classements descriptifs estimés (caractères/4 non calibré, résidence non prouvée, résidu signé non redistribué, variantes avec et sans thinking) : aucune origine dominante ni cause n'est établie, aucun montant, aucune agrégation entre candidats ; le rapport de référence est celui de r5 (`69228b2b…`), historique et daté, sur les corpus déclarés. La publication de l'instrument ne transforme pas la mesure en qualification technique, gel ou référence sur `b1a99caa…` ; le résultat non établi n'autorise ni optimisation des phases 5 ou 6, ni nouveau QD. Les passages remplacés de la construction restent historiques et ne sont pas attribués au candidat final |
+| **Prochaine phase : la phase 3, avant la phase 2, sur plan préalable à adjuger** *(15-10)* | Ses trois priorités (registres durables, instruments hors dépôt, garde du push) sont maintenues ; les autres dettes à inclure ou à laisser au backlog sont nommées dans le plan, sans plafond automatique de trois items. Le plan borne périmètre, conditions d'entrée, qualification et retour arrière ; aucune construction, activation, modification de production ni exécution avant son adjudication. maxParallel reste en phase 8, la montée de pi en phase 9b |
 | **Conservations du bac précédent : devenues matériellement inaccessibles, non levées** *(15-10)* | L'inaccessibilité ne prouve pas la destruction ; aucune suppression n'est autorisée ou constatée ; aucune levée générale des conservations. Aucun acte ni résultat ne dépend d'une pièce présente seulement dans l'ancien bac |
 
 ---
@@ -892,3 +912,7 @@ identifiants ne sont pas copiés par cette règle.
 fichier de code n'y entre. Le commit documentaire précède le commit de code de la phase 0 ; si la seconde
 étape d'un établissement échoue, il n'y a ni push ni retour automatique, et l'état partiel est conservé et
 rapporté.
+
+*Portage de la clôture de la phase 0 (15-10) :* même régime. Il ne touche que `SUIVI.md` et `CHANTIER.md` ;
+aucun fichier de code n'y entre ; la boîte privée et le registre des résultats restent hors dépôt et hors push.
+Sa base publiée est le commit `604e8948…`.
