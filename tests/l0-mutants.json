@@ -2181,5 +2181,133 @@
     "file": "tests/l0-pi-surface.test.ts",
     "find": "if (fichiersTs(racine).length === 0) res.push(",
     "replace": "if (fichiersTs(racine).length === -1) res.push("
+  },
+  {
+    "test": "L0 REG P3-R1 — git clean -xfd laisse intact l'espace des runs ouvert par openRun",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  assurerMarqueur(dir);\n  /*\n   * L'ouverture participe",
+    "replace": "  void assurerMarqueur;\n  /*\n   * L'ouverture participe"
+  },
+  {
+    "test": "L0 REG P3-R2 — git clean -Xfd laisse intact l'espace des runs ouvert par openRun",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  assurerMarqueur(dir);\n  /*\n   * L'ouverture participe",
+    "replace": "  void assurerMarqueur;\n  /*\n   * L'ouverture participe"
+  },
+  {
+    "test": "L0 REG P3-R3 — git stash --all laisse intact l'espace des runs ouvert par openRun",
+    "file": "subagent-only/run-manifest.ts",
+    "find": "  assurerMarqueur(dir);\n  /*\n   * L'ouverture participe",
+    "replace": "  void assurerMarqueur;\n  /*\n   * L'ouverture participe"
+  },
+  {
+    "test": "L0 REG P3-R4 — le marqueur est posé avant la garde d'espace et avant tout fichier du run",
+    "edits": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  assurerMarqueur(dir);\n  /*\n   * L'ouverture participe",
+        "replace": "  /*\n   * L'ouverture participe"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "function openRunSousGuard(dir: string, baseCommit?: string): OpenRun {\n",
+        "replace": "function openRunSousGuard(dir: string, baseCommit?: string): OpenRun {\n  assurerMarqueur(dir);\n"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG P3-R5 — un HEAD absent, non ordinaire, trop long ou au contenu invalide fait refuser l'espace, sans écriture",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  if (!headValide(readFileSync(head, \"utf-8\"))) return { etat: \"invalide\", raison: `${MARQUEUR}/HEAD au contenu invalide` };\n",
+    "replace": "  void headValide;\n"
+  },
+  {
+    "test": "L0 REG P3-R5 — un HEAD absent, non ordinaire, trop long ou au contenu invalide fait refuser l'espace, sans écriture",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  if (lstatSync(head).size > HEAD_MAX) return { etat: \"invalide\", raison: `${MARQUEUR}/HEAD trop long` };\n",
+    "replace": "  void HEAD_MAX;\n"
+  },
+  {
+    "test": "L0 REG P3-R5 — un HEAD absent, non ordinaire, trop long ou au contenu invalide fait refuser l'espace, sans écriture",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  return m !== null && !m[1].includes(\"..\") && !m[1].split(\"/\").some((p) => p === \".\");\n",
+    "replace": "  return m !== null && !m[1].split(\"/\").some((p) => p === \".\" || p === \"..\");\n"
+  },
+  {
+    "test": "L0 REG P3-R6 — un marqueur sans objects, ou dont objects n'est pas un répertoire, fait refuser l'espace",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  for (const sous of [\"objects\", \"refs\"]) {\n",
+    "replace": "  for (const sous of [\"refs\"]) {\n"
+  },
+  {
+    "test": "L0 REG P3-R7 — un marqueur sans refs, ou dont refs n'est pas un répertoire, fait refuser l'espace",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  for (const sous of [\"objects\", \"refs\"]) {\n",
+    "replace": "  for (const sous of [\"objects\"]) {\n"
+  },
+  {
+    "test": "L0 REG P3-R8 — un marqueur lien symbolique fait refuser l'espace, même vers un marqueur valide",
+    "edits": [
+      {
+        "file": "subagent-only/repo-preflight.ts",
+        "find": "import { lstatSync, readFileSync } from \"node:fs\";\n",
+        "replace": "import { lstatSync, readFileSync, statSync } from \"node:fs\";\n"
+      },
+      {
+        "file": "subagent-only/repo-preflight.ts",
+        "find": "    st = lstatSync(chemin);\n",
+        "replace": "    st = statSync(chemin);\n"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG P3-R9 — un .git fichier (gitdir:) fait refuser l'espace",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  if (tGit !== \"repertoire\") return { etat: \"invalide\", raison: `${MARQUEUR} n'est pas un répertoire réel (${tGit})` };\n",
+    "replace": "  void tGit;\n"
+  },
+  {
+    "test": "L0 REG P3-R10 — une préparation interrompue reste un vestige nommé et n'est jamais prise pour le marqueur",
+    "edits": [
+      {
+        "file": "subagent-only/repo-preflight.ts",
+        "find": "import { lstatSync, readFileSync } from \"node:fs\";\n",
+        "replace": "import { lstatSync, readdirSync, readFileSync } from \"node:fs\";\n"
+      },
+      {
+        "file": "subagent-only/repo-preflight.ts",
+        "find": "  if (tGit === \"absent\") return { etat: \"absent\" };\n",
+        "replace": "  if (tGit === \"absent\") return readdirSync(dir).some((n) => n.startsWith(MARQUEUR_PREPARATION)) ? { etat: \"valide\" } : { etat: \"absent\" };\n"
+      }
+    ]
+  },
+  {
+    "test": "L0 REG P3-R11 — deux ouvertures concurrentes d'un espace neuf publient un seul marqueur complet",
+    "edits": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  const preparation = join(dir, `${MARQUEUR_PREPARATION}${process.pid}-${randomBytes(8).toString(\"hex\")}`);\n",
+        "replace": "  const preparation = join(dir, MARQUEUR);\n"
+      },
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  mkdirSync(preparation);\n",
+        "replace": "  mkdirSync(preparation);\n  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);\n"
+      }
+    ],
+    "control": [
+      {
+        "file": "subagent-only/run-manifest.ts",
+        "find": "  mkdirSync(preparation);\n",
+        "replace": "  mkdirSync(preparation);\n  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);\n"
+      }
+    ],
+    "runs": 20
+  },
+  {
+    "test": "L0 REG P3-R12 — le préflight refuse un marqueur invalide et dit pourquoi, sans rien écrire",
+    "file": "subagent-only/repo-preflight.ts",
+    "find": "  if (marqueur.etat === \"invalide\") {\n",
+    "replace": "  if (marqueur.etat === (\"jamais\" as string)) {\n"
   }
 ]

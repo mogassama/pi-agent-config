@@ -37,6 +37,7 @@ import {
   type LaneEventV1, type ProofMode, type RiskFact, type RiskTransition, type ViolationKind,
 } from "./lane-ledger.ts";
 import { verifierCompleted } from "./run-end.ts";
+import { etatMarqueur, HEAD_MARQUEUR, MARQUEUR, MARQUEUR_PREPARATION } from "./repo-preflight.ts";
 import { planGele, terminalite, type PlanGele } from "./terminal.ts";
 import type { IntegrationEvent } from "./integration-ledger.js";
 import { basename, dirname, join, resolve } from "node:path";
@@ -349,6 +350,15 @@ export interface OpenRun {
  */
 export function openRun(dir: string, baseCommit?: string): OpenRun {
   /*
+   * Le marqueur avant tout effet (phase 3, P1, recadrage R1).
+   *
+   * `withSpaceGuard` crée déjà le répertoire et `.espace.guard` : poser le marqueur
+   * plus tard laisserait un espace refusé déjà écrit, et des verrous, registres et
+   * artefacts écrits avant d'être protégés. Le contrôle d'un marqueur existant et la
+   * pose d'un marqueur neuf précèdent donc la garde N. L'ordre N puis R est inchangé.
+   */
+  assurerMarqueur(dir);
+  /*
    * L'ouverture participe à l'exclusion de N, et ce n'est pas une précaution.
    *
    * Sans elle, deux ouvertures concurrentes lisent le MÊME manifeste terminal : la
@@ -445,6 +455,53 @@ function openRunSousGuard(dir: string, baseCommit?: string): OpenRun {
    * Le perdant relit et rejoint le run du gagnant : il n'y a qu'un run actif par dépôt.
    */
   return createRunExclusive(dir, manifest);
+}
+
+/** Le marqueur de l'espace des runs existe sous une forme que le runtime ne reconnaît pas. */
+export class MarqueurInvalideError extends RecoveryError {}
+
+/**
+ * Pose le marqueur de dépôt imbriqué de `dir` s'il manque ; le contrôle s'il existe.
+ *
+ * Aucun processus git : un répertoire `.git` minimal — `HEAD`, `objects/`, `refs/` —
+ * suffit pour que `git clean` à simple force, `-x` comme `-X`, et `git stash --all`
+ * sautent l'espace. La forme et sa portée sont décrites à `etatMarqueur`.
+ *
+ * **Publication atomique.** Le marqueur se prépare dans un répertoire neuf au nom
+ * réservé (`.git.preparation-<pid>-<aléa>`), créé exclusivement, puis se publie par un
+ * seul `rename`. Un marqueur publié est donc complet ; une interruption laisse au plus
+ * une préparation, qui n'est jamais prise pour un marqueur. Deux ouvertures
+ * concurrentes : la seconde publication échoue sur le `.git` de la première, qui est
+ * alors contrôlé comme tout marqueur existant.
+ *
+ * **Vestiges.** Une préparation interrompue ou perdante reste en place, sous son nom :
+ * elle n'est ni réparée, ni retirée, ni lue.
+ *
+ * **Refus.** Un marqueur existant invalide lève `MarqueurInvalideError` avant tout autre
+ * effet : rien n'est réparé, aucune donnée existante n'est touchée.
+ */
+export function assurerMarqueur(dir: string): void {
+  const avant = etatMarqueur(dir);
+  if (avant.etat === "invalide") throw new MarqueurInvalideError(`marqueur de ${dir} : ${avant.raison}`);
+  if (avant.etat === "valide") return;
+  mkdirSync(dir, { recursive: true });
+  const preparation = join(dir, `${MARQUEUR_PREPARATION}${process.pid}-${randomBytes(8).toString("hex")}`);
+  mkdirSync(preparation);
+  writeFileSync(join(preparation, "HEAD"), HEAD_MARQUEUR, { flag: "wx" });
+  mkdirSync(join(preparation, "objects"));
+  mkdirSync(join(preparation, "refs"));
+  try {
+    renameSync(preparation, join(dir, MARQUEUR));
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EISDIR" && code !== "ENOTDIR") throw err;
+  }
+  const apres = etatMarqueur(dir);
+  if (apres.etat !== "valide") {
+    throw new MarqueurInvalideError(
+      `marqueur de ${dir} : ${apres.etat === "invalide" ? apres.raison : "absent après publication"}`,
+    );
+  }
 }
 
 /** Le nom sous lequel le manifeste d'un run terminé est publié, une fois pour toutes. */

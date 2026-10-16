@@ -213,6 +213,30 @@ The runtime and the operator tool use the same `observeLanes` and
 An unknown ledger version or malformed line is fail-closed: no partial state is
 published and no destructive cleanup plan is derived from the readable prefix.
 
+**The run space is shielded from ordinary Git hygiene.** `.pi-subagent-runs/` is
+ignored by Git, so a routine `git clean -xfd` used to delete a run in flight (twelve
+real delegation artefacts were lost that way on 8 September). Before its first
+write — before the space guard, locks, ledgers and artefacts — `openRun` now places
+a minimal nested-repository marker in the space: a real `.git/` directory with a
+valid `HEAD`, `objects/` and `refs/`, written through the file system without any Git
+process. Git does not remove a nested repository without double force, so
+`git clean -x`/`-X` with a single `-f`, and `git stash --all`, leave the space
+untouched. The marker is prepared under a reserved name
+(`.git.preparation-<pid>-<random>`) and published with one rename. A preparation
+left behind by an interruption or a lost race stays in place, under that name,
+and is never taken for the marker.
+
+What it does not cover: `git clean -ff…`, an explicit `rm`, or removing the
+marker itself. Runs created before this change are protected only once a session
+has opened them again. An existing marker in any other shape — a symbolic link, a
+`gitdir:` file, a `HEAD` that is missing, not a regular file, too long or invalid, a
+missing or non-directory `objects`/`refs` — is refused by the load-time preflight and
+by `openRun`, with nothing written and nothing repaired; the reason is returned at
+the first delegation. Two cases fail closed instead, as a load error of the
+extension: a marker the file system refuses to read (permissions), and an invalid
+marker in a working directory that is not a Git repository, where the preflight
+asks nothing and `openRun` refuses.
+
 Operator commands are explicit; none infers a missing business fact:
 
 ```bash
