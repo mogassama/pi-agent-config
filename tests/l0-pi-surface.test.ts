@@ -20,7 +20,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import * as nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -1036,6 +1036,16 @@ export function fichiersSous(racine: string, dossier: string, re: RegExp): strin
   return res.sort();
 }
 
+/** The one piece of macOS metadata the tooling scan admits (D2): its exact path. */
+export const METADONNEE_FINDER = "tests/pi-contrats/.DS_Store";
+function lstatOuNul(p: string): boolean {
+  try { lstatSync(p); return true; } catch { return false; }
+}
+/** True only for `tests/pi-contrats/.DS_Store` itself, as a regular file (no link, no directory). */
+export function metadonneeFinder(racine: string, f: string): boolean {
+  return f === METADONNEE_FINDER && lstatSync(join(racine, f)).isFile();
+}
+
 export const FICHIERS_DRAPEAU = ["subagent-only/spawn-args.ts", "subagent-only/pi-adapt.ts"];
 export const FICHIERS_FLUX = ["subagent-only/dispatch.ts", "subagent-only/test-command.ts", "subagent-only/pi-adapt.ts"];
 export const FICHIERS_PYTHON = ["bin/run-cost", "bin/subagent-trace", "bin/subagent-shadow"];
@@ -1258,7 +1268,14 @@ export function anomalies(racine: string, reg: Registre): string[] {
   }
 
   // Test tooling of item 1 (Q7).
-  const reels = new Set([...fichiersSous(racine, "tests/pi-contrats", /./), ...(existsSync(join(racine, "bin/pi-contrats")) ? ["bin/pi-contrats"] : [])]);
+  // D-P3-PI-SURFACE-METADONNEES (phase 3, D2): Finder's `.DS_Store`, as a regular file directly in
+  // tests/pi-contrats, is known macOS metadata, not an undeclared source. That exact name, type and
+  // place only: `.DS_Store.ts`, any other untracked file, a `.DS_Store` of another type or elsewhere
+  // in the surface are still reported. This is not a filter on untracked files in general.
+  const reels = new Set([...fichiersSous(racine, "tests/pi-contrats", /./).filter((f) => !metadonneeFinder(racine, f)), ...(existsSync(join(racine, "bin/pi-contrats")) ? ["bin/pi-contrats"] : [])]);
+  if (lstatOuNul(join(racine, METADONNEE_FINDER)) && !lstatSync(join(racine, METADONNEE_FINDER)).isFile()) {
+    res.push(`surface non au registre · outillage test-only · ${METADONNEE_FINDER} (métadonnée d'un autre type)`);
+  }
   const declares = new Set((reg.outillage ?? []).map((o) => o.fichier));
   for (const f of [...reels].sort()) if (!declares.has(f)) res.push(`surface non au registre · outillage test-only · ${f}`);
   for (const f of [...declares].sort()) if (!reels.has(f)) res.push(`entrée non reconnue · outillage test-only · ${f}`);
@@ -1291,6 +1308,9 @@ const NOUVEAU_PC = "tests/pi-contrats/pi-surface-epreuve.ts";
 type Preuve = (t: TestContext) => Promise<void> | void;
 function couverture(id: string, titre: string, fn: Preuve): void {
   test(`L0 COUV ${id} — ${titre}`, { timeout: 120_000 }, fn);
+}
+function regressionCorrigee(id: string, titre: string, fn: Preuve): void {
+  test(`L0 REG ${id} — ${titre}`, { timeout: 120_000 }, fn);
 }
 function propriete(vrai: boolean, message: string): void {
   assert.ok(vrai, `PROPRIÉTÉ — ${message}`);
@@ -1819,4 +1839,26 @@ couverture("PI-SURF-BALAYAGE-VIDE", "une liste de fichiers balayés vide échoue
   for (const rel of ["extensions", "subagent-only", "tests/pi-contrats"]) rmSync(join(d, rel), { recursive: true, force: true });
   const contre = anomalies(d, reg);
   propriete(contre.includes("balayage vide · extensions/**/*.ts, subagent-only/**/*.ts, tests/pi-contrats/**/*.{ts,mjs}"), `balayage vide non signalé : ${JSON.stringify(contre.slice(0, 5))}`);
+});
+
+// ── D-P3-PI-SURFACE-METADONNEES (phase 3, D2) ───────────────────────────────────────────────────
+
+regressionCorrigee("P3-O7", "un .DS_Store ordinaire dans tests/pi-contrats est admis ; toute autre forme, place ou source reste signalée", () => {
+  const reg = registreDe(RACINE);
+  const OUT = "surface non au registre · outillage test-only · ";
+  const avec = (preparer: (d: string) => void) => { const d = copie(); preparer(join(d, "tests/pi-contrats")); return anomalies(d, reg); };
+  precondition(anomalies(copie(), reg).length === 0, "la copie intacte est conforme");
+  const ordinaire = avec((pc) => writeFileSync(join(pc, ".DS_Store"), "Bud1 métadonnée Finder"));
+  propriete(ordinaire.length === 0, `un .DS_Store ordinaire est admis : ${JSON.stringify(ordinaire)}`);
+  const cas: Array<[string, (pc: string) => void, string]> = [
+    ["nom voisin", (pc) => writeFileSync(join(pc, ".DS_Store.ts"), "export {};\n"), `${OUT}tests/pi-contrats/.DS_Store.ts`],
+    ["autre non-suivi", (pc) => writeFileSync(join(pc, "notes.txt"), "n\n"), `${OUT}tests/pi-contrats/notes.txt`],
+    ["répertoire vide", (pc) => mkdirSync(join(pc, ".DS_Store")), `${OUT}tests/pi-contrats/.DS_Store (métadonnée d'un autre type)`],
+    ["lien", (pc) => { writeFileSync(join(pc, "..", "ds-cible"), "x"); symlinkSync(join(pc, "..", "ds-cible"), join(pc, ".DS_Store")); }, `${OUT}tests/pi-contrats/.DS_Store`],
+    ["hors de la place admise", (pc) => { mkdirSync(join(pc, "sous")); writeFileSync(join(pc, "sous", ".DS_Store"), "x"); }, `${OUT}tests/pi-contrats/sous/.DS_Store`],
+  ];
+  for (const [quoi, preparer, attendu] of cas) {
+    const a = avec(preparer);
+    propriete(a.includes(attendu), `${quoi} : signalé (${JSON.stringify(a)})`);
+  }
 });

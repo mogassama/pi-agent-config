@@ -2602,5 +2602,29 @@
     "file": "tests/l0-pi-adapt.test.ts",
     "find": "describePlan: describePlan({ ...plan, args: norm(plan.args) }) });",
     "replace": "describePlan: describePlan(plan) });"
+  },
+  {
+    "test": "L0 REG P3-O7 — un .DS_Store ordinaire dans tests/pi-contrats est admis ; toute autre forme, place ou source reste signalée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "fichiersSous(racine, \"tests/pi-contrats\", /./).filter((f) => !metadonneeFinder(racine, f))",
+    "replace": "fichiersSous(racine, \"tests/pi-contrats\", /./)"
+  },
+  {
+    "test": "L0 REG P3-O7 — un .DS_Store ordinaire dans tests/pi-contrats est admis ; toute autre forme, place ou source reste signalée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "  return f === METADONNEE_FINDER && lstatSync(join(racine, f)).isFile();\n",
+    "replace": "  return f.endsWith(\"/.DS_Store\") && lstatSync(join(racine, f)).isFile();\n"
+  },
+  {
+    "test": "L0 REG P3-O7 — un .DS_Store ordinaire dans tests/pi-contrats est admis ; toute autre forme, place ou source reste signalée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "  return f === METADONNEE_FINDER && lstatSync(join(racine, f)).isFile();\n",
+    "replace": "  return f === METADONNEE_FINDER;\n"
+  },
+  {
+    "test": "L0 REG P3-O7 — un .DS_Store ordinaire dans tests/pi-contrats est admis ; toute autre forme, place ou source reste signalée",
+    "file": "tests/l0-pi-surface.test.ts",
+    "find": "  if (lstatOuNul(join(racine, METADONNEE_FINDER)) && !lstatSync(join(racine, METADONNEE_FINDER)).isFile()) {\n",
+    "replace": "  if (false) {\n"
   }
 ]
