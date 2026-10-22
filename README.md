@@ -6,12 +6,16 @@ Delegation is handled by a local extension written for this setup, not by a
 third-party one. Everything below is measured; where a number appears, it came
 from a run, not from a guess.
 
+A session starts in the **simple profile**: no `task`, no delegation section in
+the prompt, no run. Delegation is switched on with `/subagents on` (see
+[Profiles](#profiles-simple-by-default-subagents-on-command)).
+
 ## Directory layout
 
 ```
 ~/.pi/agent/
-├── AGENTS.md                        # Global instructions, loaded every session
-├── APPEND_SYSTEM.md                 # Appended to pi's default system prompt
+├── AGENTS.md                        # Global instructions, loaded every session (both profiles)
+├── APPEND_SYSTEM.md                 # Appended to pi's default system prompt (both profiles)
 ├── CHANTIER.md                      # State of the config, decisions and why
 ├── SUBAGENTS-DESIGN.md              # Delegation design record
 ├── PLAN-V2-POST-MESURE.md           # Measurement log the design rests on
@@ -38,6 +42,8 @@ from a run, not from a guess.
 │   ├── pi-secret-gate/              # Refuses a write carrying a credential
 │   └── pi-project-brief/            # /brief — .pi/BRIEF.md orientation note
 ├── subagent-only/                   # Shared runtime mechanisms, not global config
+│   ├── DELEGATION.md                # Delegation instructions, in the prompt only in the subagents profile
+│   ├── profil.ts                    # Profiles: run classes, decisions and texts, pure
 │   ├── agents/{worker,reviewer,scout,advisor,integration-worker}.md
 │   ├── envelope/envelope.ts         # The `submit` tool, one schema per role
 │   ├── agents.ts                    # Agent definition schema and loader
@@ -77,15 +83,86 @@ it. Delegation here is `extensions/subagent/`.
 
 | Layer | What it is | Cost | When to use |
 |---|---|---|---|
-| **AGENTS.md** | Always-loaded global rules | ~4 200 tokens, every session | True for every session |
+| **AGENTS.md** | Always-loaded global rules | ~4 200 tokens, every session (measured before the split) | True for every session |
 | **APPEND_SYSTEM.md** | Appended to pi's system prompt | Every session, orchestrator only | Behavioural defaults, terse framing |
+| **`subagent-only/DELEGATION.md`** | The `delegation` section of the prompt | Subagents profile only; not measured | How to delegate, when delegating |
 | **Skills** | Description in the prompt, body on demand | ~145 tokens each until loaded | Domain rules |
 | **Prompt templates** | Manual via `/<name>` | 0 until invoked | Repeatable workflows |
 | **Subagents** | A fresh `pi` process per call | ~1 500–6 000 tokens, separate budget | Search, isolation, a different model |
 
-Orchestrator context at startup: **8 803 tokens** (print mode).
+Orchestrator context at startup: **8 803 tokens** (print mode), measured before
+the delegation instructions moved out of `AGENTS.md` and `APPEND_SYSTEM.md` into
+`subagent-only/DELEGATION.md`. The simple profile has not been re-measured; its
+cost is left to a later phase.
 
 ## Delegation
+
+### Profiles: simple by default, subagents on command
+
+| | Simple (default) | Subagents |
+|---|---|---|
+| `task` | registered but inactive; refused by its own first instruction | active |
+| Prompt | `AGENTS.md` and `APPEND_SYSTEM.md` | the same, then the `delegation` section (`subagent-only/DELEGATION.md`) and the `task` guidelines of the current run |
+| Run | none is opened, nothing is written under `.pi-subagent-runs/` | opened or resumed by `/subagents on` |
+| Run guards (P0-B, P0-C, C6.4, C6.6) | inert; the read-only rule below instead | unchanged |
+| General guards and git hooks | loaded, unchanged | loaded, unchanged |
+
+```text
+/subagents        # profile, run, its class and why
+/subagents on     # switch to the subagents profile
+/subagents off    # back to simple
+```
+
+Every `session_start` (`startup`, `new`, `resume`, `fork`, `reload`) starts in
+simple; the profile is not persisted. A switch happens only at rest — pi idle, no
+tool call in flight, no `task` running — and a refusal changes nothing: profile,
+active tools, ledgers and lease stay as they were. A refusal is shown through the
+UI; without one, pi gives an extension command no output channel, so it is not
+displayed, but it still has no effect. In simple, `task` is not an active tool, so
+a call to it is answered by pi itself (`Tool task not found`). Only if `task` has
+been reactivated by another extension, or is called directly, does its first
+instruction answer ``Refusé : profil simple — `/subagents on` pour l'activer.``
+
+The durable state of the working directory is read at `session_start` and again
+just before each `on` or `off`, with the same observers as the runtime and
+`bin/subagent-recover`. It falls into one class: *absent*, *empty*, *finished*,
+*unfinished* or *unreadable* (`/subagents` names them in French: absent, vide,
+terminé, non terminé, illisible).
+
+- `/subagents on` is refused before any effect when the state is *unreadable* or
+  `DELEGATION.md` cannot be read. Otherwise it opens or resumes the run as before.
+  A finished plan still activates nothing: the session stays on verified native
+  reads (P0-C).
+- `/subagents off` is accepted only on an *absent*, *empty* or *finished* run. An
+  unfinished run is ended with the operator tool (`bin/subagent-recover report`,
+  `run completed|abandoned --reason <reason>`, `cleanup`, or a unit verb), never
+  by switching profile.
+
+**Read-only on a run in progress.** In simple, on an *unfinished* or *unreadable*
+run, only verified native reads (`read`, `grep`, `find`, `ls` from pi itself) pass.
+Everything else is refused, and nothing is written: no lease, fingerprint, proof
+or git probe. The session says so at start, through the UI notification, with the
+run, its class or the reason it cannot be read, and the ways out (`/subagents on`,
+`/subagent-report`, `bin/subagent-recover`). Without a UI there is no automatic
+announcement before the first refusal. The footer status is not that warning: it
+shows the run identity and the access its lease gives, where `free` only means
+nobody holds the lease, not that writes are allowed; it carries neither the class
+nor the read-only state, and it is empty when no run can be identified. Restarting
+pi lifts nothing. *Absent*, *empty* and *finished* runs get no warning and no
+restriction: what remains to tidy is the business of `/subagent-report` and
+`cleanup`.
+
+**Composition.** In the subagents profile, the delegation section and the `task`
+guidelines are added at every prompt. If another extension has already forced the
+system prompt (for example `pi-project-brief` loaded first), they are appended to
+it once, at the end; a request whose delegation could not be composed refuses
+`task` before anything is reserved or launched. Under a custom system prompt (a
+project `.pi/SYSTEM.md`, a global `SYSTEM.md` or `--system-prompt`), pi renders no
+tool guidelines at all, so the `task` guidelines are neither added nor required
+there, while the delegation section still is; nothing claims they reach such a
+prompt.
+
+### The `task` tool
 
 One tool:
 
@@ -358,7 +435,7 @@ legitimately has no delta costs a whole run.
 | `pi-bq-cost-sentinel/` | Dry-runs every `bq query` issued through `bash`, subagents included. <1 GB passes, 1 GB–1 TB warns, >1 TB blocks. |
 | `pi-lint-gate/` | `ruff` after every `.py` edit, appended to the tool result the agent reads next. `mypy` once per turn on the files touched. |
 | `pi-secret-gate/` | Refuses a `write` or `edit` whose content carries a credential-shaped literal. AGENTS.md hard limit 1, at the moment of writing rather than at `/audit` time. Loaded by the worker and by the orchestrator; `.env.example` and obvious placeholders pass. |
-| `pi-check-config/` | `/check-config` — blocking and report tiers over skills, agent definitions, the `## Review delta` marker, and model-family diversity. |
+| `pi-check-config/` | `/check-config` — blocking and report tiers over skills, agent definitions, the `## Review delta` marker, `subagent-only/DELEGATION.md` (missing, unreadable or empty is blocking), and model-family diversity. The report does not depend on the profile. |
 | `pi-project-brief/` | `/brief` — writes `.pi/BRIEF.md`, a ≤40-line orientation note. The extension itself does not reach children (`-ne` is active); the file is injected directly by `spawn-args` for roles declaring `projectBrief: true` — no role does, since the brief audit found that a child handed a summary stops going to look. The orchestrator is its only reader. |
 | `@tmustier/pi-raw-paste` | Raw paste handling (npm). |
 
@@ -681,7 +758,9 @@ pi --model sonnet:high "..."               # override model + thinking level
 pi --tools read,grep,find,ls "..."         # read-only
 ```
 
-In-session: `/skill:<name>` force-loads a skill, `/<template>` expands a
+In-session: `/subagents on` enables delegation (the session starts in the simple
+profile), `/subagents off` returns to simple, `/subagents` shows where things
+stand. `/skill:<name>` force-loads a skill, `/<template>` expands a
 template, `/reload` picks up config changes, `/compact` summarises older
 context, `/check-config` runs the consistency check, `/footer` toggles the
 footer, `/tree` branches off a prior message. `shift+tab` cycles the thinking
