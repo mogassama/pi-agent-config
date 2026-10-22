@@ -3,7 +3,34 @@
 *Journal des runs et liste des tâches. Une ligne par run : ce qu'il a mesuré, ce qu'il a
 corrigé. Une case par tâche restante : sa condition d'entrée et son chiffre de contrôle.*
 
-*Mise à jour du 16-10-2026 (portage de la clôture de la phase 3).* **État courant :** branche
+*Mise à jour du 22-10-2026 (portage de la clôture de la phase 2).* **État courant :** branche
+`feat/subagent-extension`, tête distante et commit publié `f73ad694c14f98f01a8f1fc83a40e6d1bc514ed4` (C4 de la
+phase 2), arbre `071d7d3fab7b1010292bcc4dfe7fa2f4d7e3389d`, au bout d'une chaîne de quatre commits à parents
+uniques posée sur `0237b74e949eb1a826d491751216f758324f715d` (commit documentaire DOC3 de la clôture de la phase
+3, arbre `af6772dae5a03065cea0cdcf4dbc38b7f83a138a`, 362 fichiers suivis) : C1 `b1406c6c…`, C2 `0df69543…`, C3
+`0860f916…` et C4. Établissement (acte 1) et publication (acte 2) adjugés conformes par Sol le 22-10 ; une
+première tentative d'acte 1 (21-10) s'était arrêtée en V5-R, avant toute pose et sans commit, et l'établissement
+n'a abouti qu'à la seconde, après correction de l'instrument externe (D1′). **La phase 2 est techniquement close
+dans le périmètre du plan v3.11 (`43c997ff…`) et des décisions qui le bornent** (décision `c6f4056f…`, D2), ce
+qui n'est pas la fermeture de toute limite ni de toute dette : les limites, exclusions, exceptions de couverture
+et dettes reçues restent entières (voir *Phase 2* et *Ce qui est fait*). **La reprise ordinaire de pi 0.86.0,
+avec quatre crochets actifs (pre-push compris), est autorisée à Mo (décision `c6f4056f…`, D3) ; ce portage ne
+constate aucune reprise effective** : une reprise observée serait datée à part. Règle d'exploitation inchangée :
+tout push de ce dépôt exige une autorisation exacte à usage unique, créée par l'opérateur ou sa recette, jamais
+par un agent, et les agents ne contournent pas les crochets (`--no-verify` exclu) ; **trois consommations
+d'autorisation sont désormais historiques et conservées, aucune autorisation n'est disponible**. **Le candidat
+technique qualifié historique demeure `2def810f56d96bb459716efda4d409028b14de72`, arbre
+`b1a99caa0e31e96cbc5279dbca19781335ac764b`** (LOT-PI-ADAPT, clos le 13-10) ; la chaîne de la phase 2 est une
+identité nouvelle et distincte. Aucune qualification générale de pi, montée de version, mesure QD ni
+modification de maxParallel n'est déduite de la phase 2 ; la phase 0 reste close au niveau B, « attribution non
+établie », et la phase 3 reste close au niveau A dans son périmètre antérieur ; la décision ne nomme aucun
+niveau pour la phase 2, et ce portage n'en inscrit pas. **Aucune phase suivante n'est ouverte** : l'ordre du
+08-10 reste inchangé (la suivante dans cet ordre est la phase 4, qui attend la décision sur `.agents/memory/`).
+maxParallel reste en phase 8 et la montée de pi en phase 9b.
+
+*État du 16-10-2026 (portage de la clôture de la phase 3), remplacé le 22-10 par le paragraphe ci-dessus et
+conservé — « Prochaine phase selon l'ordre du 08-10 : la phase 2 » et « sa construction n'est pas autorisée » y
+décrivent l'état du 16-10 :* branche
 `feat/subagent-extension`, tête distante et commit publié `186aac98a207b84cd0ddfca6fe0a34b4b127ed07` (C5), arbre
 `2ec4adf4089ee01bb60d1e30f7769c14bf05660f`, au bout d'une chaîne de six commits à parents uniques posée sur
 `604e89487e0eee2fa37ddfde7429aa3a41f785df` (code de la phase 0, arbre `cffdccab…`) : C0 `59ab3aee…` (portage de
@@ -72,7 +99,11 @@ efficacité, arbre `8b821da4`), **gelé et poussé le 06-10**, puis `2def810f` (
 phase 0, arbre `cffdccab`), **établis le 15-10 (13:34Z) et publiés le 15-10 (15:10Z)**, puis
 `59ab3aee` (C0 : portage de la clôture de la phase 0, arbre `65b1d2c1`), `54eb40e6` (C1, arbre `55c04cfd`),
 `1672db59` (C2, arbre `768735ea`), `3bc6ba86` (C3, arbre `50e065a8`), `4ca90fda` (C4, arbre `948262e9`) et
-`186aac98` (C5, arbre `2ec4adf4`), **établis le 16-10 (08:41Z à 09:15Z) et publiés le 16-10 (10:09Z)**.
+`186aac98` (C5, arbre `2ec4adf4`), **établis le 16-10 (08:41Z à 09:15Z) et publiés le 16-10 (10:09Z)**, puis `0237b74e` (DOC3 : portage
+documentaire de la clôture de la phase 3, arbre `af6772da`), **établi le 16-10 (13:02Z) et publié le 16-10
+(14:18Z)**, puis `b1406c6c` (C1 de la phase 2, arbre `0b02d807`), `0df69543` (C2, arbre `eb655755`), `0860f916`
+(C3, arbre `f77d16a1`) et `f73ad694` (C4, arbre `071d7d3f`), **établis le 22-10 (14:12Z à 14:59Z) et publiés le
+22-10 (15:39Z à 15:40Z)**.
 `CHANTIER.md` fait foi sur les décisions et leurs raisons ; ce fichier sur ce qui a été fait
 et ce qui reste. Les références **[A]** désignent les sections de
 `SUIVI-en-attente.md`, boîte d'attente privée tenue par Mo hors du dépôt.
@@ -1145,6 +1176,264 @@ passages et des actes consignés, reçus sur leurs pièces.*
   construction n'est pas autorisée par la clôture de la phase 3. maxParallel reste en phase 8, la montée de pi
   en phase 9b.
 
+### Phase 2 — clôture : profil simple par défaut, scission de la délégation, deux actes, clôture technique bornée (22-10)
+
+*Pièces faisant foi : les adjudications de Sol du 16-10 au 22-10 (plan préalable avec recadrages ; décisions sur
+les questions Q-P2 ; livraisons des 20-10, 21-10 et 22-10 ; arrêt V5-R ; établissement ; autorisation de l'acte
+2 ; publication et clôture), les trois retours (arrêt V5-R, établissement, publication), le LISEZ-MOI de la
+livraison du 22-10, le plan v3.11 et le registre des résultats (§§ 55 à 89), hors dépôt. Les empreintes de
+manifeste citées sont celles des dossiers de décision de Sol. Ce portage distingue les actes (exécutés par Mo),
+les observations (rapportées par Claude) et les adjudications (de Sol), les états constatés pendant les actes de
+toute nouvelle lecture, et les passages remplacés ou interrompus des preuves retenues : un passage remplacé
+reste conservé comme historique et n'est pas attribué au candidat final. **Sol n'a exécuté aucun programme
+livré, test, banc, Git, pi, crochet ni lanceur, et n'a accédé ni à la production, ni au Projet, ni à un service
+externe** : les résultats d'exécution ci-dessous sont ceux des passages et des actes consignés, reçus sur leurs
+pièces. Un résultat attendu par le cadre n'est pas présenté comme un échec, et une limite reçue n'est pas
+présentée comme une garantie nouvelle.*
+
+- [x] **Plan adjugé avec recadrages (16-10), puis cadre précisé par les questions Q-P2-1 à Q-P2-24.** Plan
+      préalable v1 `6b5487b8…` adjugé (décision `24286226…`) : D-P2-1 à D-P2-17 accordées dans les portées des
+      recadrages R-P2-1 à R-P2-7 (découverte fermée et état frais ; table unique des transitions ; capacités
+      réellement exécutables ; prompt effectif et composition ; preuves et contrats ; partition vérifiable ;
+      portée des écritures), sur la base `0237b74e…` (arbre `af6772da…`, 362 suivis). Le plan consolidé v2
+      (`324167e5…`) a été figé avant le code ; les décisions `3aa05865…` (Q-P2-1, voie (a) de composition avec
+      `pi-project-brief` ; Q-P2-2 ; corrections C1 et C2), `f5ffe6d9…`, `142cb15d…`, `e1901916…`, `89b911f0…`,
+      `bfa3e204…`, `5ffc732c…`, `20dddb3b…`, `9f5b3b38…` et `b5cf332a…` (G3 : Q-P2-21 à Q-P2-24) ont précisé le
+      cadre, chacune suivie d'une note d'application avant les écritures qu'elle concerne (plans v3 à v3.9). Le
+      candidat `0059c088…`, examiné par la première revue G3, a été jugé non recevable ; son premier passage
+      formel, interrompu, est conservé sans qualification. Les snapshots du bac sont des objets de travail,
+      distincts des commits établis.
+- [x] **Contenu de la chaîne C1 à C4.** Delta de 29 chemins sur la base `0237b74e…` ; arbre final `071d7d3f…`,
+      archive de 374 fichiers (`a8c35bfe…`).
+      - *C1* (52 caractères) `feat(subagent): add the pure profile contract module` : module pur de profils et
+        ses contrats (K) ; aucun changement de comportement.
+      - *C2* (67) `feat(subagent): default to the simple profile, subagents on command` : l'extension ; la
+        scission de la délégation vers `subagent-only/DELEGATION.md` (`4027a6e3…`), par une partition figée
+        avant écriture de 31 fragments d'`AGENTS.md` et de 4 d'`APPEND_SYSTEM.md`, retouches R1 à R15
+        avant/après et octets retirés comptés ; le profil simple posé à chaque `session_start`, non hérité ;
+        `/subagents` (consulter), `/subagents on` (monter) et `/subagents off` (descendre), tout autre argument
+        étant un refus d'usage ; la table des transitions T0 à T14, transitions au repos, refus sans effet ni
+        journal ; les cinq classes de run (illisible avant absent, terminé, vide, non terminé) ; `task`
+        enregistré mais désactivé en simple et refusé dans `execute` avant tout effet hors sous-agents ; lecture
+        seule par la provenance native des lecteurs sur un run non terminé ou illisible ; l'avertissement
+        durable ; les adaptations de `pi-contrats` (corpus modifié, identité distincte) ; le registre de surface
+        ; les mutants. C2 garde son atomicité : ni la scission seule ni le profil seul ne laissent un arbre
+        cohérent.
+      - *C3* (57) `test(profiles): prove guard loading in the simple profile` : preuves G du chargement des
+        gardes en profil simple et contrôles de `/check-config` (contrôles sous-agents maintenus bloquants et
+        indépendants du profil, plus un contrôle bloquant de `DELEGATION.md`).
+      - *C4* (56) `docs(readme): describe the simple and subagents profiles` : README.
+
+- [x] **Livraison du 20-10 refusée sur un point, corrigée le 21-10 et reçue.** La livraison `c73c6d38…` (29 437
+      entrées) a été reçue sur ses pièces, mais l'acte 1 n'a pas été autorisé : la décision `e9a5c3a5…` a
+      **refusé D2** (RAR2-9 : les retours d'enfants survivants n'étaient fermés que par le bail capturé, non par
+      l'identité d'exécution ; RAR2-10 : le diagnostic de descente affirmait un état de bail non établi) et
+      retenu D1 (cache npm historique du Mac, inventaire `de44f09f…`), D3 (configuration `42e28a8d…` et Git
+      épinglé) et D4. Corrections en bac, candidat régénéré : génération changée en tête de T8, identité
+      contrôlée au départ d'une lane en file, au rappel d'un worker, au retour du lot et au retour de la
+      délégation, signal terminal post-retour conditionné à la même identité ; bail relevé après une erreur de
+      descente (présent, absent ou indéterminé avec motif), en lecture seule. Livraison corrigée `3b81b5a8…` (29
+      694 entrées), reçue par la décision `9a2f15e1…` avec les adjudications 1 à 5 (voir *Limites maintenues*).
+      *Preuves :* passage formel 4 (table `7e025369…`, P0 à P9 conformes, 198 contrôles, mutants
+      417/521/527/527, P8 81/81 conformes à leurs attendus, P9 : 20 exécutions conformes, falsifications 20/20,
+      mutants du pilote 15/15) ; banc 94 cas et 1 881 contrôles ; qualification native au profil du bac
+      conforme. **Passages conservés et non attribués au candidat final :** passages 1 et 3 interrompus, passage
+      2 attaché à l'ancien candidat ; livraison du 20-10, conservée intacte, dont l'ancien lanceur n'a jamais
+      été autorisé.
+- [x] **Première tentative d'acte 1 : arrêt en V5-R, avant toute pose (21-10).** Lanceur `f5502bb2…`, invoqué
+      une seule fois par Mo le 21-10 de 21:08:15Z à 21:55:04Z, pi arrêté, sans sudo : code brut de la recette 3,
+      code 1 du vérificateur ; précontrôles conformes (configuration `42e28a8d…`, deux consommations historiques
+      à leurs empreintes, aucune autorisation disponible, distant et suivi à `0237b74e…`) ; **V1 à V5 conformes
+      sur le Mac** (V4 : 1 159/1 159, `l0-check` 390 déclarées et anomalies 0, lanes 4/4, instruments 6/6, 527
+      mutants et anomalies 0 ; V5 : témoins P1, preuves P3, monde jouet), puis **V5-R non conforme** : sur les
+      20 exécutions de la table R (`1b44ea03…`), 19 divergentes, **1 035 constats `trace-node-hors`** (855 sous
+      la première invocation, 180 sous la reprise), tous des résolutions Node réussies vers 39 noms de fichiers
+      `.ts` du candidat (`subagent-only`), avec pour parents `extensions/subagent/index.ts`,
+      `subagent-only/agents.ts`, `spawn-args.ts` et `dispatch.ts` ; seule `C2.9/b-syntaxe` était conforme.
+      **Constat d’environnement :** le pilote R avait été qualifié sous Node 22.22.0 ; sur le Mac en Node
+      v26.12.0, ces résolutions apparaissent. Ce contraste n’isole pas à lui seul une causalité de version ; le juge
+      `trace-node-hors` du corpus commité n'intègre pas D1′ (limite O2-1). Défaut de la construction, déclaré :
+      la vérification native sous le Node réel du Mac n'avait pas été éprouvée avant la livraison. **Aucun acte
+      :** aucun patch, aucun commit, aucun push, aucune autorisation de production créée ni consommée ; rien n'a
+      été relancé, réparé ni nettoyé. Retour : manifeste `886d6727…`, 25 830/25 830, vérifié par Sol. Décision
+      `adb00744…` : arrêt reçu, D5 consommée (aucune relance), correction autorisée en bac. **Précision de
+      portée :** « 31 verdicts identiques ligne à ligne » vaut pour les 31 clauses, leurs états et leurs comptes
+      ; 21 détails sont égaux et 10 diffèrent (racines, identifiant de run, longueur du préfixe), expliqués et
+      égaux à l'octet après normalisation de ces seuls éléments ; l'égalité des clauses ne neutralise aucun
+      constat d'invalidité de trace.
+- [x] **Correction de l'instrument externe selon D1′, candidat strictement inchangé ; qualifications et portées
+      (22-10).** Décision `adb00744…` (D-B (a), D-C) : l'autorité est le § 2 d'une adjudication du 13-10 (D1′,
+      manifeste `c9b3a05f…`), distincte de l'ancienne règle D1 qui imposait un ordre ; l'exception est limitée
+      aux résolutions Node réussies de fichiers `.ts` sous la frontière exacte `candidat/subagent-only/`, avec
+      cible F et parent P fichiers identifiés, chacun évalué par le jiti contrôlé dans le même fil que la
+      résolution, aucun chargement Node de F, et **aucun ordre relatif imposé**. Le juge dérivé (`harnais.ts`
+      `4d992fbe…` vers le dérivé `3494d4fc…`, 12 remplacements exacts, hors dépôt) et le pilote corrigé (porte
+      G7, bilan avant/après sur les traces brutes, Node de ligne pour le pilote, la CLI et les enfants) forment
+      **un instrument externe** ; table R inchangée (`1b44ea03…`) ; verrou du profil Mac à Node v26.12.0
+      exactement, relu en tête de V5-R avant l'installation de pi. *Qualifications, chacune dans sa portée :*
+      passage formel de la correction (table `6f55d8e5…`, Q0 à Q16 conformes, 194 lignes de contrôle) — épreuves
+      D1′ 52/52 et mutants D1′ 32/32 sous 26 et sous 22, corpus Mac rejugé 24 traces et 1 035/1 035 admissions,
+      falsifications du pilote 47/47, mutants du pilote 34/34 sous 26 et 33/33 sous 22 (M-BIL1 dispose de
+      l'intégration I2 sous 26 seulement), pilote R 20/20 sous 26 avec 1 035 admissions et 20/20 sous 22 avec 0
+      ; banc `c81e7e33…`, 100/100 cas et 1 935 contrôles ; deux qualifications natives **au profil du bac**
+      (Linux, Node 22.22.0 puis 26.12.0 ; V1 à V6, R et publication vers un distant local conformes ; commits
+      neufs, distincts de C1 à C4) ; épreuve négative du verrou par le vrai vérificateur (Node 22.22.0 sous une
+      SPEC 26.12.0 : arrêt en tête de V5-R, pi non lancé). **Ce n'est pas un passage natif sur le Mac.** *Portée
+      :* D1′ qualifie l'instrument externe selon sa relation exacte ; ce n'est ni le juge commité, ni le corpus,
+      ni une qualification générale de pi (**O2-1 entière**). Node 26.12.0 du bac : paquet privé, archive
+      `9448b0d9…`, binaire `caa24deb…`, signatures du registre déclarées vérifiées, attestation sigstore non
+      vérifiée (limite). Livraison neuve `6f386682…` (61 392 entrées), reçue par la décision `dfcae990…` ;
+      l'incident du clone canonique du bac écrit par un mutant à travers un lien (rétabli, corrigé par un dépôt
+      canonique exigé) est déclaré.
+- [x] **Établissement (acte 1, seconde tentative) — conforme (22-10).** Décision `dfcae990…` (D5-R2) : une
+      invocation du lanceur `a991a404…` après revérifications (manifeste de livraison 61 392/61 392, huit
+      pièces, quatre destinations neuves absentes, Node v26.12.0 relevé par Mo, motif pi du lanceur rendant 1 ;
+      un premier motif trop large avait relevé Codex, non crédité comme détection de pi). Invoqué par Mo le
+      22-10 de 14:12:11Z à 14:59:03Z, pi arrêté, sans sudo : code brut 0, stderr vide, verdict « ÉTABLISSEMENT
+      P2 — CONFORME ». **Vérification native réelle V1 à V6 sur le Mac, conforme avant toute pose :** Darwin
+      arm64, Python 3.15.0, Node v26.12.0, npm 11.20.0, Git 2.56.0 ; archive `a8c35bfe…` (374 fichiers) et arbre
+      natif reconstruit `071d7d3f…` ; V4 égale au bac sur les cinq portes (1 159/1 159, 390 déclarées et zéro
+      anomalie, lanes 4/4, instruments 6/6, **527 mutants et zéro anomalie**, TMPDIR de 111 caractères) ; V5
+      (P1, P3, monde jouet) ; **V5-R : 20 exécutions conformes à la table, 24 analyses, 1 035 admissions D1′**,
+      Node v26.12.0 pour le pilote et la CLI, aucun processus fils Node consigné dans ces parcours ; V6
+      (intégrité 25/25, paquet r4 64/64, vingt copies égales). **Quatre commits réels établis**, à parents
+      uniques depuis `0237b74e…`, arbres égaux aux adjugés, messages de 52, 67, 57 et 56 caractères, sans
+      signature, quatre crochets actifs sans contournement : C1 `b1406c6cbfcdd3868ec2f7d2d4188f3a998cde4a`
+      (arbre `0b02d807…`), C2 `0df6954322b7db457103e9065fb5c78c9fc70521` (`eb655755…`), C3
+      `0860f9168d622419821350ccf27e9a77b7aa8392` (`f77d16a1…`), C4 `f73ad694c14f98f01a8f1fc83a40e6d1bc514ed4`
+      (`071d7d3f…`) ; Sol a recalculé les quatre identités sans Git. Elles sont neuves, datées de l'acte, et
+      distinctes des snapshots du bac (`aa9488e8…`, `53e0a0a2…`, `829b7e7f…`, `b16d1994…`). Configuration
+      `42e28a8d…` inchangée ; **distant et suivi restés à `0237b74e…`, aucun push**. Retour : manifeste
+      `ca6d38e6…` (26 146/26 146 ; 26 141 fichiers ordinaires copiés à l'octet, 134 liens symboliques listés et
+      non copiés), adjugé par la décision `7da8f1cb…`. **Périmètre exact des relevés (précision de Sol) :**
+      `pi-avant.tsv` et `pi-apres.tsv` n'inventorient que les entrées `.allow-push*` de `~/.pi` ; ils ne
+      prouvent pas l'identité de tout `~/.pi`, et la généralisation à tout `~/.pi` n'est pas reprise. Dans ce
+      périmètre ils sont égaux à l'octet : deux consommations historiques, aucune autorisation disponible ni
+      consommation nouvelle. Le commit local de reconstruction sous `natif/` et son `core.hooksPath` neutralisé
+      appartiennent à la copie de vérification, non à l'établissement de production.
+- [x] **Lanceur de publication fixé (22-10) et correction « 97 lignes ».** Décision `7da8f1cb…` (D4) :
+      préparation en bac, par quatre substitutions seules (`COMMIT_C1` à `COMMIT_C4`), du lanceur à partir du
+      modèle `7f0bdac2…` et de `COMMITS.txt` `2defe431…` ; empreinte attendue par Sol puis constatée
+      `20e8cf6b189eeda223ee6b4dd23b160a46f2faa6722f595ca0d0aa04430e2a76`, mode 0600 sans bit d'exécution ;
+      dossier sous manifeste `e897b8ee…` (7/7). **Correction documentaire (décision `fa4a7204…`) :** le modèle
+      et le lanceur comptent 97 lignes terminées par LF, non 98 ; un découpage sur `\n` qui garde le segment
+      vide final donne 98 segments, ce qui n'est pas un nombre de lignes. Le contenu, les quatre positions
+      (lignes 16 à 19) et l'empreinte étaient exacts ; les retours figés ne sont pas réécrits.
+- [x] **Publication (acte 2) — conforme (22-10).** Décision `fa4a7204…` : une invocation du lanceur fixé
+      `20e8cf6b…` après revérification sur le Mac (dossier 7/7, SHA du lanceur comparé à l'attendu, mode 0600,
+      sources et recettes à leurs identités, deux destinations absentes ; manifeste des revérifications
+      `71e40e2d…`, 1/1). Invoqué par Mo le 22-10 de 15:39:52Z à 15:40:00Z, pi arrêté, sans sudo : code brut 0,
+      stderr du lanceur vide (le fichier `push.err` contient le compte rendu normal du transport Git), verdict «
+      PUBLICATION P2 — CONFORME ». **Un seul push** (de 15:39:55Z à 15:39:58Z) de `f73ad694…` vers
+      `refs/heads/feat/subagent-extension` sur origin, sans force ni étiquette, code 0 ; tête distante avant
+      `0237b74e…`, après `f73ad694c14f98f01a8f1fc83a40e6d1bc514ed4` ; HEAD et suivi local à C4 ; Sol a rapproché
+      les 55 commandes conservées et leurs codes. Autorisation de sept lignes créée exclusivement par la recette
+      (fichier ordinaire, mode 600, lien unique, SHA-256
+      `1d3c641d6d027da424be514e920fe73bf60505da06d86f6d34bf78c8691a2c82`), **consommée une fois** et conservée
+      sous un nom horodaté ; les deux consommations historiques (`6563304e…`, `12b229f4…`) sont conservées sous
+      leurs noms reçus, lignes d'inventaire entières identiques avant et après, inodes compris ; **trois
+      consommations en tout, aucune autorisation disponible** ; aucune suppression, remise à disposition ni
+      recréation n'est autorisée. Le périmètre de l'inventaire est `~/.pi/.allow-push*`, non tout `~/.pi` ; les
+      inodes établissent une identité aux points de relevé, sans garantie de continuité entre observations. Les
+      29 chemins du delta sont aux octets finaux ; configuration `42e28a8d…` inchangée ; quatre crochets actifs,
+      pre-push compris. Retour : manifeste `b4f0c10f…` (229/229 ; 224 fichiers copiés à l'octet, `LIENS.tsv`
+      sans entrée de lien). **Limites :** Sol n'a pas lu les fichiers d'autorisation en production ; les états
+      physiques reçus sont ceux des instants de l'acte, non une nouvelle observation directe ; la lecture
+      anonyme du distant par le bac est reçue comme corroboration déclarée, non reproduite par Sol,
+      l'adjudication reposant sur les sorties brutes de la recette. L'autorisation d'acte 2 est consommée : ni
+      relance de publication ou d'établissement, ni second push.
+- [x] **Phase 2 déclarée techniquement close (décision de Sol `c6f4056f…`, 22-10).** D1 : publication conforme,
+      acte 2 achevé, autorisation consommée ; D2 : phase 2 techniquement close **dans le périmètre du plan v3.11
+      `43c997ff…` et des décisions qui le bornent**, sur la chaîne C1–C4 établie, vérifiée nativement puis
+      publiée, ce qui satisfait l'étape « Clôture » du § 14 du plan ; D3 : reprise ordinaire de pi autorisée ;
+      D4 : préparation seule du présent portage, pour adjudication de Sol avant tout remplacement dans le
+      Projet, établissement, commit ou publication. Le périmètre reçu comprend le contrat pur de profils, la
+      scission de la délégation, le simple par défaut et les commandes de sous-agents, les transitions et refus
+      adjugés, l'avertissement durable, les contrôles indépendants du profil et leurs preuves ; le passage
+      formel du candidat, les corrections G7, les recettes, les qualifications de bac, puis V1 à V6 sur le Mac
+      avec R corrigé sont ceux déjà reçus. **La publication n'est pas un nouveau rejeu de ces campagnes.** Les
+      propositions de clôture d'items cochées dans *Phase 2 — profil simple, part structure* sont des
+      propositions soumises à Sol, chacune avec sa preuve et sa portée.
+- [x] **Reprise de pi 0.86.0 : autorisée, non constatée par ce portage (décision `c6f4056f…`, D3).** Mo peut
+      reprendre l'usage ordinaire de pi 0.86.0, avec les **quatre** crochets actifs, pre-push compris, sans
+      manipulation supplémentaire de garde ; la décision lève expressément le maintien de pi à l'arrêt imposé
+      jusqu'à l'adjudication du retour de publication. Sol ne lance pas pi : **« reprise autorisée » n'est pas «
+      reprise effectivement constatée »** ; aucune pièce de reprise effective n'est portée ici, et une reprise
+      observée serait datée séparément. *Chronologie des permissions, non des constatations :* usage ordinaire
+      autorisé le 16-10 (`095312d6…`, D3) ; pi maintenu à l'arrêt après l'acte du 21-10 (`9a2f15e1…`), puis
+      usage ordinaire autorisé pendant la correction (`adb00744…`, D-D) ; pi arrêté pour l'acte 1 du 22-10 et
+      jusqu'à l'adjudication du retour de publication (`dfcae990…`, `7da8f1cb…`, `fa4a7204…`) ; usage ordinaire
+      de nouveau autorisé le 22-10 (`c6f4056f…`, D3). Le comportement simple par défaut et la montée explicite
+      sont ceux du code reçu ; aucun changement de configuration ni d'outillage n'est ouvert. **Règle
+      d'exploitation :** la reprise ne crée aucune autorisation de push ; la règle demeure l'autorisation exacte
+      à usage unique sur acte adjugé, créée par l'opérateur ou sa recette, jamais par un agent ; les trois
+      consommations sont conservées, sans réutilisation ni contournement des crochets (`--no-verify` exclu).
+
+- **Limites maintenues par la clôture** (adjugées ou reçues au fil de la phase, sans garantie plus large que leur
+  périmètre éprouvé ; décision `c6f4056f…`, § 2) :
+  - *Exclusions de mutation et exceptions de couverture :* les exclusions bornées E-T5, E-B, E3-bornée et E4 ne
+    sont pas comptées comme mises à mort (décision `e9a5c3a5…`) ; E-T5/E-B et « génération seule » ne deviennent
+    ni vertes ni tuées. « Génération seule » (décision `9a2f15e1…`, demande 2) : exclusion analysée de la seule
+    contre-modification qui supprime le conjoint `RUN_ID === identite.runId` de `identiteIntacte`, hors corpus
+    exécuté ; le code livré conserve les deux conjoints, et l'exclusion ne permet ni de supprimer les incréments
+    de génération ni de remplacer la comparaison par le run seul. Le total de 527 mutants n'est pas un décompte
+    de 527 invariants indépendants.
+  - *H16 et M-Q9 :* le volet nommé « remontée en file » de H16 ne prouve pas une remontée et son contrôle
+    d'historique après reprise est non discriminant : aucun crédit de preuve historique ; M-Q9 est tué par le
+    refus nommé d'identité changée, non par un historique repeuplé (décision `9a2f15e1…`, demande 4). H30 et H31
+    portent les preuves par effets, dans leurs propres limites.
+  - *Même instance, remontée avant le retour :* limite d'atteignabilité reçue (une exécution en vol conserve
+    `TASKS_EN_COURS > 0`, H30 constate le refus) ; le volet `/reload` est un modèle de harnais, qui ne prouve ni
+    une remontée dans l'ancienne instance ni l'acceptation de `/reload` pendant un outil sur pi réel.
+  - *Écritures héritées de `dispatch` :* la garantie reçue est la fermeture des mutations d'autorité par
+    l'extension après retour, **non** « aucune écriture après T8 » ; `dispatch` écrit, avant les barrières, les
+    artefacts et transcriptions du run capturé et une comptabilité mémoire d'essais. La promesse d'absence
+    d'écriture vise les effets de l'extension `subagent` et son instrumentation en profil simple, et l'absence
+    d'exécution mutatrice par les outils du modèle sous lecture seule ; elle ne signifie pas que pi entier, ses
+    extensions ou l'opérateur n'écrivent jamais (R-P2-7).
+  - *Post-signalement terminal :* exception de couverture explicite et strictement bornée à D-P2-16 (décision
+    `9a2f15e1…`, demande 5) ; parcours non construit, non démontré impossible ; la garde, conditionnée par
+    `identiteIntacte` (obligatoire, inchangée), n'a ni mutant ni preuve causale et n'est déclarée ni
+    équivalente, ni verte, ni tuée ; aucun comportement après un `/reload` terminal n'est qualifié ; au backlog
+    de preuve.
+  - *D1′, fils Node et instrument externe :* D1′ qualifie l'instrument externe, non le juge commité ni une
+    qualification générale de pi (O2-1 entière) ; aucun processus fils Node n'est consigné dans les parcours R,
+    leurs contrôles ayant des falsifications séparées ; les mutants M-G4a/F4 et M-G7f/F14 du pilote sont
+    discriminés par un verdict absent après retrait de la garde, ce qui n'établit ni une poursuite dangereuse ni
+    un refus structuré ; G3/G4b, doublés par G7, ne sont pas crédités comme barrières indépendantes ;
+    déterminisme non isolé dans tous ses contrôles, M2.16 non rejoué, angles morts des contrôles Node des
+    descendants.
+  - *Provenance :* la vérification sigstore/TUF de Node 26.12.0 reste non acquise ; les signatures du registre
+    sont déclarées vérifiées, non rejouées par Sol, et le fichier joint conserve un échec de `npm audit` qui ne
+    démontre pas à lui seul le « 2/2 » déclaré ; l'archive et le binaire du bac ne sont pas joints.
+    Qualifications natives au profil du bac : Linux, historiques factices, non le Mac.
+  - *Coût de la bascule et composition du prompt :* la bascule à chaud (choix C1, mécanismes structurés de pi
+    0.86.0) est adoptée **sans mesure et sans garantie de conservation du cache** ; son chiffrage est reporté en
+    phase 6 et ne devient pas une économie établie. **O-P2-1** (le brief force le prompt) reste au backlog de la
+    phase 7 ; la phase 2 n'a traité que la composition sans perte, sans modifier `pi-project-brief`. En mode
+    sans interface, l'avertissement ne notifie pas : la restriction et les refus restent effectifs, sans
+    qualification générale de TUI.
+  - *Runs anciens :* un ancien run sans marqueur garde la limite d'exposition à `git clean` jusqu'à sa
+    préparation par une montée ; aucune protection équivalente n'est prétendue (D-P2-10). Les limites de la
+    phase 3 (ci-dessus) restent redéclarées par le plan, sans être levées.
+  - *Incidents et passages remplacés, déclarés et conservés :* écriture d'un mutant à travers un lien dans le
+    clone canonique du bac (rétabli ; dépôt canonique désormais exigé ; mises à mort ultérieures de cet essai
+    invalidées) ; monde « complet » du banc recopiant l'ancien pilote (arrêté par le scellement de la SPEC,
+    corrigé avant les passages retenus) ; passages du banc et qualifications natives interrompus puis remplacés
+    ; conteneur du bac recyclé deux fois ; un dossier d'essai vide supprimé au lieu d'être déplacé ; `/dev/null`
+    du bac rendu 0644 puis rétabli. Ces incidents ne modifient pas le candidat final livré ni la table
+    finalement retenue ; cela n’efface ni l’écriture dans le clone ni les passages invalidés ou remplacés.
+
+- **Conservations et suite.** Toutes les conservations demeurent : livraisons des 20-10, 21-10 et 22-10,
+  passages remplacés ou interrompus, essais, retours, audits originaux avec leurs liens, décisions, corpus, et
+  les **trois consommations historiques** (`6563304e…`, `12b229f4…`, `1d3c641d…`) ; aucun nettoyage n'est
+  autorisé. Le portage reste une suite distincte : après adjudication des textes seulement viendront les
+  éventuels réalignements du Projet, puis l'établissement et la publication documentaires, sur autorisations
+  propres ; les trois consommations seront les conservations d'entrée d'une éventuelle recette documentaire, la
+  troisième ne pouvant être omise pour réemployer une garde à deux historiques. L'ordre du 08-10 reste inchangé
+  : **aucune phase suivante n'est ouverte** ; aucun nouveau prototype, essai de phase suivante, mesure QD ni
+  montée de pi n'est autorisé par ce portage. maxParallel reste en phase 8, la montée de pi en phase 9b.
+
 ---
 
 ## Ce qui reste
@@ -1164,20 +1453,22 @@ non qualifiée. Suivent **LOT-REPRISES** et son correctif, **qualifiés et clos 
 un nouveau lot ; le suivant recommandé par Sol est **l'efficacité P1, diagnostic d'abord**.
 
 *Ordre actuel, adjugé le 08-10 et repris aux portages des 14-10 et 15-10, à la clôture de la phase 0
-(15-10), puis à la clôture de la phase 3 (16-10) — il remplace celui du 06-10 :*
+(15-10), puis à la clôture de la phase 3 (16-10) et à celle de la phase 2 (22-10) — il remplace celui du 06-10 :*
 
 ```text
-LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, POST-3c, phase 0 et phase 3 publiés
+LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés, POST-3c, phase 0, phase 3 et phase 2 publiés
 → phase 0 : mesure A et relevé de dépense (achevée au niveau B le 15-10 ; attribution non établie)
 → phase 3 : dette prioritaire du chantier (achevée au niveau A le 16-10 ; périmètre P1, P2, P3, D1, D2)
-→ phase 2 (plan préalable à soumettre) → 4 → 5 → 6 → 7 → 8 → 9
+→ phase 2 : profil simple, part structure (techniquement close le 22-10 ; périmètre du plan v3.11)
+→ 4 → 5 → 6 → 7 → 8 → 9 (aucune phase suivante ouverte)
 → phase 9b : versions, dont montée directe de pi
 → QD de référence sur l'environnement final de 9b
 → phase 10 : modèles
 ```
 
 **La phase 3, qui précédait la phase 2 par exception explicite à « phases 2 à 9 dans l'ordre », est achevée
-(16-10) ; la phase 2 est la suivante, sur son plan préalable à soumettre, construction non autorisée.** *Texte
+(16-10) ; la phase 2, qui la suit, est techniquement close (22-10) dans le périmètre de son plan v3.11 ; aucune
+phase suivante n'est ouverte.** *Texte du 16-10, remplacé le 22-10 et conservé :* « La phase 3, qui précédait la phase 2 par exception explicite à « phases 2 à 9 dans l'ordre », est achevée (16-10) ; la phase 2 est la suivante, sur son plan préalable à soumettre, construction non autorisée. » *Texte
 du 15-10, remplacé et conservé :* « La phase 3 reste avant la phase 2 (exception explicite à « phases 2 à 9 dans
 l'ordre »). Ses trois priorités — protection des registres durables, instruments hors dépôt, garde du push —
 restent prioritaires, sans plafond automatique de trois items ; les nouvelles dettes restent à inclure
@@ -1205,6 +1496,16 @@ phase 0 publiés → phase 0 : mesure A et relevé de dépense (achevée au nive
 établie) → phase 3 : dette prioritaire du chantier (plan préalable à adjuger) → phase 2 → 4 → 5 → 6 → 7 → 8 → 9
 → phase 9b : versions, dont montée directe de pi → QD de référence sur l'environnement final de 9b → phase 10 :
 modèles ».
+
+*Précisé le 22-10 (clôture de la phase 2) :* la phase 2 est techniquement close dans le périmètre du plan v3.11
+et des décisions qui le bornent (décision `c6f4056f…`) ; **aucune phase suivante n'est ouverte**, l'ordre du
+08-10 restant inchangé ; cette mise à jour ne lance ni phase 4, ni autre phase, ni montée de pi, ni QD, ni
+mesure de coût. La phase 4 garde sa condition d'entrée (décision sur `.agents/memory/`). *Bloc du 16-10,
+remplacé par le bloc ci-dessus et conservé :* « LOT-PI-ADAPT clos, POST-1, POST-2, POST-3 et POST-3b achevés,
+POST-3c, phase 0 et phase 3 publiés → phase 0 : mesure A et relevé de dépense (achevée au niveau B le 15-10 ;
+attribution non établie) → phase 3 : dette prioritaire du chantier (achevée au niveau A le 16-10 ; périmètre P1,
+P2, P3, D1, D2) → phase 2 (plan préalable à soumettre) → 4 → 5 → 6 → 7 → 8 → 9 → phase 9b : versions, dont
+montée directe de pi → QD de référence sur l'environnement final de 9b → phase 10 : modèles ».
 
 *[Remplacé le 08-10 par l'ordre ci-dessus ; conservé pour l'historique. « Trois items par lot par
 défaut » n'est plus la règle courante.]*
@@ -1837,20 +2138,73 @@ du pilote.* [A] Partie 2, 2B à 2D.
 préalable, à soumettre, et sa construction n'est pas autorisée par la clôture de la phase 3. Aucun item
 ci-dessous n'est ouvert, modifié ni coché par ce portage.
 
-- [ ] **Scission d'`AGENTS.md` — cohérence.** Bloquant pour le profil simple : en simple,
+*[22-10, clôture de la phase 2]* **La phase 2 est techniquement close dans le périmètre du plan v3.11 et des
+décisions qui le bornent** (décision `c6f4056f…` ; voir *Ce qui est fait*, « Phase 2 — clôture »). Le paragraphe
+du 16-10 ci-dessus (plan « à soumettre », construction non autorisée, aucun item coché) décrit un état antérieur
+et est conservé. **Les cases cochées le 22-10 sont des propositions de clôture, soumises à Sol, chacune avec sa
+preuve et sa portée** ; aucune ne ferme une limite, une exclusion, une exception de couverture ou une dette
+reçues (voir *Limites maintenues*), ni les items des phases 6 et 7 qui en dépendent, laissés ouverts.
+
+*Lecture des quatre items :* leurs formulations initiales décrivent le besoin du 13-09 et sont conservées
+comme historique. Le comportement courant est celui des notes du 22-10 ci-dessous : `task` enregistré mais
+désactivé en simple, montée sous préconditions et contrôles sous-agents de `/check-config` bloquants dans
+les deux profils. Les anciennes formulations ne constituent pas des exigences actuelles contraires.
+
+- [x] **Scission d'`AGENTS.md` — cohérence.** Bloquant pour le profil simple : en simple,
       aucun outil `task` n'existe et la moitié du fichier explique comment déléguer. *Ce qui
       se décide ici :* quelle moitié est chargée dans quel profil. *Ce qui attend la mesure
       A :* ce que la scission fait économiser (phase 6).
-- [ ] **Profil simple par défaut, sous-agents sur commande.** Bascule asymétrique (montée
+      *[22-10, proposition de clôture]* **Traité (C2 `0df69543…`).** Partition figée avant écriture (31
+      fragments d'`AGENTS.md`, 4 d'`APPEND_SYSTEM.md`, couverture exacte) ; la moitié délégation vit dans
+      `subagent-only/DELEGATION.md` (`4027a6e3…`), nommée et posée à chaque invite en sous-agents seulement ;
+      retouches R1 à R15 avant/après, octets retirés comptés ; `AGENTS.md:30` inchangée. *Preuve :* corpus S
+      (`tests/l0-agents-scission.test.ts`), S01 à S06 reçus en préservation, sans mutant, portée bornée aux
+      textes et à leur partition ; pilote R sur le prompt et les outils réellement transmis au fournisseur
+      scripté (20 exécutions conformes à la table, V5-R du 22-10) ; passage formel 4 et V1 à V6 sur le Mac.
+      *Limite :* cohérence structurelle, non économie : ce que la scission fait économiser reste à mesurer en
+      phase 6 (item « Scission d'`AGENTS.md` — part économie » laissé ouvert) ; la conservation des règles se
+      juge sur le socle et le texte composé, non sur une liste de vocabulaire.
+- [x] **Profil simple par défaut, sous-agents sur commande.** Bascule asymétrique (montée
       toujours permise ; descente refusée sur run non terminé ; état illisible = refus, le
       refus nomme le run et renvoie à `bin/subagent-recover`) ; gardes toutes chargées,
       inchangées. *Coût caché :* monter à chaud ajoute `task`, donc invalide le préfixe en
       cache — à trancher avant d'écrire.
-- [ ] **Avertissement de run durable au démarrage**, dérivé des observateurs existants, sans
+      *[22-10, proposition de clôture]* **Traité (C2 `0df69543…`, C1 `b1406c6c…` pour le contrat pur).** Simple
+      posé à chaque `session_start`, non hérité (démarrage, new, resume, fork) ; `/subagents` consulte, `on`
+      monte, `off` descend, tout autre argument est un refus d'usage ; transitions au repos, refus sans effet ni
+      journal ; descente refusée sur run non terminé ou illisible ; **montée refusée avant tout effet sur état
+      durable ou `DELEGATION.md` illisible** (révision explicite du « toujours autorisée » du 13-09 ; la
+      condition de repos et les autres refus adjugés restent applicables) ; `task` enregistré mais désactivé
+      en simple et refusé avant tout effet hors sous-agents ; gardes générales chargées et inchangées, gardes
+      de run inertes en simple. *Coût caché :* tranché (choix C1, bascule à chaud par
+      les mécanismes structurés de pi 0.86.0), **non mesuré**. *Preuve :* contrat pur K, extension H (dont H21b,
+      H21c, H30, H31), pilote R sur pi réel privé hors ligne, passage formel 4 (198 contrôles, mutants 527) ; V1
+      à V6 sur le Mac, dont V5-R 20/20 avec 1 035 admissions D1′. *Limite :* aucune économie ni garantie de
+      cache, chiffrage en phase 6 ; O-P2-1 au backlog de la phase 7 ; exclusions, exceptions de couverture et
+      limites de *Limites maintenues* (« génération seule », H16, dispatch, post-signalement terminal).
+- [x] **Avertissement de run durable au démarrage**, dérivé des observateurs existants, sans
       sondage git propre ; un état illisible avertit aussi.
-- [ ] **Tests du chargement en profil simple** — aucune garde ne dépend de
+      *[22-10, proposition de clôture]* **Traité (C2 `0df69543…`).** Projection pure de l'état relu par les
+      observateurs communs, avec leurs sondes existantes, sans collecte ni sondage Git propre ; priorité «
+      illisible avant absent, terminé, vide, non terminé » ; run non terminé ou illisible : session simple en
+      lecture seule et avertissement durable ; `subagent-footer` et `run-state.ts` intacts. *Preuve :* contrats
+      K et H du plan (§ 12), pilote R, passage formel 4, V1 à V6 sur le Mac. *Limite :* en mode sans interface,
+      aucune notification (la restriction et les refus restent effectifs) ; aucune qualification générale de TUI
+      ; un état modifié sur disque par un acteur externe entre deux observations n'est pas couvert (aucune
+      atomicité générale revendiquée, R-P2-1).
+- [x] **Tests du chargement en profil simple** — aucune garde ne dépend de
       `PI_SUBAGENT_ROLE` ni d'un état de run ; la bascule et son refus ; l'avertissement ;
       `/check-config` sans dispositif sous-agents. Mutation sur les gardes seulement.
+      *[22-10, proposition de clôture]* **Traité (C3 `0860f916…`, avec C2).** Preuves G du chargement en profil
+      simple : gardes générales et quatre crochets inchangés, gardes de run inertes en simple ; contrôles
+      sous-agents de `/check-config` maintenus bloquants et indépendants du profil, plus un contrôle bloquant de
+      `DELEGATION.md` (D-P2-11, révision explicite du compromis du 13-09, aucun contrôle n'étant conditionnel au
+      profil) ; mutants M-G, retrait réel des cinq gardes générales, mutants des invariants de profil et de
+      prompt (D-P2-16). *Preuve :* passage formel 4 (mutants 527 déclarés, anomalies 0) ; V4 natif sur le Mac
+      égal au bac (1 159/1 159, 390 déclarées, 527 mutants, anomalies 0). *Limite :* 527 n'est pas un décompte
+      de 527 invariants indépendants ; exclusions E-T5/E-B, « génération seule », post-signalement terminal sans
+      mutant, H16 sans crédit discriminant (*Limites maintenues*) ; l'item de la phase 3 « Mutation sur les
+      gardes seulement » n'est pas rouvert.
 
 ### Phase 3 — dette du chantier `3c`
 
@@ -2020,6 +2374,11 @@ le justifie.* [A] Partie 2, 2H, *Coût de contexte*, et 2E.
 *Décision du 06-10 :* la clôture de LOT-EFFICACITÉ n'ouvre pas de nouveau lot dédié aux
 tokens. Leur traitement est rangé ici, après la mesure A de phase 0.
 
+*[22-10, clôture de la phase 2]* La phase 2 a adopté la bascule à chaud (choix C1) **sans mesure et sans
+garantie de conservation du cache** ; le chiffrage de son coût est reporté ici, sur plan propre, et ne devient
+pas une économie établie. La part économie de la scission et la forme de `task` en profil simple restent à
+mesurer. Aucune case ci-dessous n'est cochée ni modifiée par ce portage.
+
 - [ ] Amaigrissement du préfixe du reviewer — le seul poste facturé. *En premier.*
 - [ ] Interdictions en prose d'`AGENTS.md` déplacées vers les gardes.
 - [ ] Socle d'`AGENTS.md` sous 200 lignes, budget testé.
@@ -2038,6 +2397,12 @@ tokens. Leur traitement est rangé ici, après la mesure A de phase 0.
 ### Phase 7 — profil simple, usages
 
 *Après la mémoire portable (phase 4), dont `HANDOFF` est la matière.* [A] Partie 2, 2D et 2H.
+
+*[22-10, clôture de la phase 2]* **O-P2-1** : `pi-project-brief` retourne un `systemPrompt`, que le runner
+transforme en prompt forcé dont la projection remplace les messages système envoyés. Sa correction et son
+économie sont inscrites à ce backlog ; la phase 2 n'a traité que la composition sans perte avec le brief
+inchangé (voie (a) de Q-P2-1) et n'a modifié ni le brief ni `/brief`. Aucun item ci-dessous n'est ouvert,
+modifié ni coché par ce portage.
 
 - [ ] `/brief` évalué pour le profil simple seul ; lecteur de `HANDOFF` et d'une queue bornée
       de `DECISIONS` à l'ouverture.
@@ -2316,3 +2681,10 @@ autorisations propres.
 ; la boîte d'attente et le registre des résultats restent hors dépôt et hors push, et la boîte reste entière. Sa
 base publiée est le commit `186aac98…` ; son établissement et sa publication auraient chacun leur autorisation
 propre, et son push exigerait, comme tout push de ce dépôt, une autorisation exacte à usage unique.
+
+*Portage de la clôture de la phase 2 (22-10) :* même régime. Le commit ne porte que ce fichier et `CHANTIER.md`
+; la boîte d'attente et le registre des résultats restent hors dépôt et hors push, et la boîte reste entière. Sa
+base publiée est le commit `f73ad694…` ; son établissement et sa publication auraient chacun leur autorisation
+propre, et son push exigerait, comme tout push de ce dépôt, une autorisation exacte à usage unique. Les trois
+consommations historiques (`6563304e…`, `12b229f4…`, `1d3c641d…`) sont les conservations d'entrée d'une
+éventuelle recette documentaire : la troisième ne peut être omise pour réemployer une garde à deux historiques.
