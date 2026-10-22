@@ -2666,5 +2666,233 @@
     "file": "tests/l0-instruments.test.ts",
     "find": "  if (couverts.length === 0) anomalies.push(\"aucun fichier examiné\");\n",
     "replace": ""
+  },
+  {
+    "test": "L0 COUV P2-K01 — espace des runs absent : absent, descente admise, pas de lecture seule",
+    "file": "subagent-only/profil.ts",
+    "find": "if (r.espace.etat === \"absent\") return { classe: \"absent\", unitesOuvertes: [] };",
+    "replace": "if (r.espace.etat === \"absent\") return illisible(\"mutant K01\");"
+  },
+  {
+    "test": "L0 COUV P2-K02 — espace présent, manifeste absent, aucune autre pièce : absent",
+    "file": "subagent-only/profil.ts",
+    "find": "    return { classe: \"absent\", unitesOuvertes: [] };\n  }\n\n  const run = r.run;",
+    "replace": "    return illisible(\"mutant K02\");\n  }\n\n  const run = r.run;"
+  },
+  {
+    "test": "L0 COUV P2-K03 — inspection de l'espace en échec : illisible, jamais absent",
+    "file": "subagent-only/profil.ts",
+    "find": "if (r.espace.etat === \"echec\") return illisible(`l'espace des runs ne s'inspecte pas : ${r.espace.raison}`);",
+    "replace": "if (r.espace.etat === \"echec\") return { classe: \"absent\", unitesOuvertes: [] };"
+  },
+  {
+    "test": "L0 COUV P2-K04 — espace non répertoire, manifeste non ordinaire : illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (r.manifeste.etat === \"echec\") return illisible(`le manifeste ne s'inspecte pas : ${r.manifeste.raison}`);",
+    "replace": "if (r.manifeste.etat === \"echec\") return { classe: \"absent\", unitesOuvertes: [] };"
+  },
+  {
+    "test": "L0 COUV P2-K05 — planning, nextSeq 1, aucune entrée préfixée, aucune lane : vide",
+    "file": "subagent-only/profil.ts",
+    "find": "return { classe: vide ? \"vide\" : \"non-termine\", ...base, unitesOuvertes };",
+    "replace": "void vide; return { classe: \"non-termine\", ...base, unitesOuvertes };"
+  },
+  {
+    "test": "L0 COUV P2-K06 — un plan attaché rend le run non vide",
+    "file": "subagent-only/profil.ts",
+    "find": "    run.plan.etat === \"non-attache\" &&\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 COUV P2-K07 — nextSeq > 1 rend le run non vide",
+    "file": "subagent-only/profil.ts",
+    "find": "    run.nextSeq === 1 &&\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 COUV P2-K08 — un continuation_block rend le run non vide",
+    "file": "subagent-only/profil.ts",
+    "find": "    !run.continuation &&\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 COUV P2-K09 — une entrée préfixée par le runId rend le run non vide",
+    "file": "subagent-only/profil.ts",
+    "find": "    prefixees.length === 0 &&\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 COUV P2-K10 — un run active est non terminé",
+    "file": "subagent-only/profil.ts",
+    "find": "    run.statut === \"planning\" &&\n",
+    "replace": ""
+  },
+  {
+    "test": "L0 COUV P2-K11 — completed et abandoned sont terminés, lanes à ranger comprises",
+    "file": "subagent-only/profil.ts",
+    "find": "if (run.statut === \"completed\" || run.statut === \"abandoned\") return { classe: \"termine\", ...base, unitesOuvertes };",
+    "replace": "/* mutant K11 : terminé non reconnu */"
+  },
+  {
+    "test": "L0 COUV P2-K12 — manifeste illisible, version inconnue ou runId absent : illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!run.ok) return illisible(`manifeste illisible ou invalide : ${run.raison}`);",
+    "replace": "if (!run.ok) return { classe: \"absent\", unitesOuvertes: [] };"
+  },
+  {
+    "test": "L0 COUV P2-K13 — un marqueur existant invalide rend l'état illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (r.marqueur.etat === \"invalide\") return illisible(`marqueur de l'espace des runs invalide : ${r.marqueur.raison}`);",
+    "replace": "/* mutant K13 : marqueur invalide ignoré */"
+  },
+  {
+    "test": "L0 COUV P2-K14 — une liste du répertoire impossible rend l'état illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!r.entrees.ok) return illisible(`l'espace des runs ne se liste pas : ${r.entrees.raison}`);",
+    "replace": "if (!r.entrees.ok) return { classe: \"absent\", unitesOuvertes: [] };"
+  },
+  {
+    "test": "L0 COUV P2-K15 — un registre des lanes partiel ou malformé rend l'état illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!run.lanes.ok) return illisible(`registre des lanes inexploitable : ${run.lanes.raison}`, base);",
+    "replace": "if (!run.lanes.ok) return { classe: \"non-termine\", ...base, unitesOuvertes: [] };"
+  },
+  {
+    "test": "L0 COUV P2-K16 — un plan attaché incohérent rend l'état illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (run.plan.etat === \"rompu\") return illisible(`plan attaché incohérent : ${run.plan.raison}`, base);",
+    "replace": "if (run.plan.etat === \"rompu\") return { classe: \"non-termine\", ...base, unitesOuvertes: [] };"
+  },
+  {
+    "test": "L0 COUV P2-K17 — registre des intégrations inexploitable, run planning ou active : illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!run.integrations.ok) return illisible(`registre des intégrations inexploitable : ${run.integrations.raison}`, base);",
+    "replace": "/* mutant K17 : intégrations ignorées par la découverte */"
+  },
+  {
+    "test": "L0 COUV P2-K17b — registre des intégrations inexploitable, run terminé : illisible, jamais terminé",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!run.integrations.ok) return illisible(`registre des intégrations inexploitable : ${run.integrations.raison}`, base);",
+    "replace": "if (!run.integrations.ok && run.statut !== \"completed\" && run.statut !== \"abandoned\") return illisible(`registre des intégrations inexploitable : ${run.integrations.raison}`, base);"
+  },
+  {
+    "test": "L0 COUV P2-K18 — priorité : illisible et terminé à la fois donne illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!run.lanes.ok) return illisible(`registre des lanes inexploitable : ${run.lanes.raison}`, base);",
+    "replace": "if (!run.lanes.ok) return run.statut === \"completed\" || run.statut === \"abandoned\" ? { classe: \"termine\", ...base, unitesOuvertes: [] } : illisible(`registre des lanes inexploitable : ${run.lanes.raison}`, base);"
+  },
+  {
+    "test": "L0 COUV P2-K19 — des archives historiques ne changent pas la classe du run courant",
+    "file": "subagent-only/profil.ts",
+    "find": "return noms.filter((n) => n !== NOM_MARQUEUR && !ARCHIVE.test(n) && !archivee(n)).sort();",
+    "replace": "void archivee; return noms.filter((n) => n !== NOM_MARQUEUR).sort();"
+  },
+  {
+    "test": "L0 COUV P2-K20 — une exception de lecture donne illisible, jamais absent ni vide",
+    "file": "subagent-only/profil.ts",
+    "find": "if (r.exception !== undefined) return illisible(`la découverte a échoué : ${r.exception}`);",
+    "replace": "/* mutant K20 : exception ignorée */"
+  },
+  {
+    "test": "L0 COUV P2-K27 — manifeste absent, marqueur existant invalide : illisible, jamais absent",
+    "file": "subagent-only/profil.ts",
+    "find": "if (r.marqueur.etat === \"invalide\") return illisible(",
+    "replace": "if (r.marqueur.etat === \"invalide\" && r.manifeste?.etat !== \"absent\") return illisible("
+  },
+  {
+    "test": "L0 COUV P2-K28 — manifeste absent, pièces non identifiables : illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "    if (autres.length > 0) {\n",
+    "replace": "    if (autres.length < 0) {\n"
+  },
+  {
+    "test": "L0 COUV P2-K29 — manifeste absent, seulement marqueur valide, archives et pièces archivées : absent",
+    "file": "subagent-only/profil.ts",
+    "find": " && !archivee(n)).sort();",
+    "replace": ").sort();"
+  },
+  {
+    "test": "L0 COUV P2-K21 — T2–T7 : décisions et refus sur préconditions, argument inconnu",
+    "file": "subagent-only/profil.ts",
+    "find": "    if (c.classe === \"non-termine\" || c.classe === \"illisible\") {\n      return {\n        action: \"refus\",\n        texte:\n          `Descente refusée",
+    "replace": "    if (c.classe === \"__mutant__\") {\n      return {\n        action: \"refus\",\n        texte:\n          `Descente refusée"
+  },
+  {
+    "test": "L0 COUV P2-K22 — refus de descente : runId, statut, unités et bin/subagent-recover avec ses verbes",
+    "file": "subagent-only/profil.ts",
+    "find": "`Descente refusée : ${designation(c)} (classe ${nomClasse(c.classe)}). Le run n'est pas terminé ; ` +\n          `il se termine par l'outil opérateur : ${VERBES_RECOVER}. Rien n'a changé.`",
+    "replace": "\"Descente refusée : le run n'est pas terminé. Rien n'a changé.\""
+  },
+  {
+    "test": "L0 COUV P2-K23 — avertissement : run, lecture seule, suites ; rien pour absent, vide ou terminé",
+    "file": "subagent-only/profil.ts",
+    "find": "  if (!lectureSeuleRequise(c)) return undefined;\n  return (\n    `Run durable",
+    "replace": "  if (c.classe !== \"non-termine\") return undefined;\n  return (\n    `Run durable"
+  },
+  {
+    "test": "L0 COUV P2-K24 — lecture seule : la lecture native vérifiée passe ; non natif, inconnu, sans nom refusés",
+    "file": "subagent-only/profil.ts",
+    "find": "if (typeof nom === \"string\" && nom !== \"\" && lectureVerifiee(nom)) return { bloquer: false };",
+    "replace": "void lectureVerifiee; if (typeof nom === \"string\" && [\"read\", \"grep\", \"find\", \"ls\"].includes(nom)) return { bloquer: false };"
+  },
+  {
+    "test": "L0 COUV P2-K25 — outils : base, restrictions, levée ; task jamais en simple ; jamais tous les outils",
+    "file": "subagent-only/profil.ts",
+    "find": "const base = [...new Set(input.base)].filter((n) => connus.has(n) && n !== \"task\");",
+    "replace": "const base = [...connus].filter((n) => n !== \"task\");"
+  },
+  {
+    "test": "L0 COUV P2-K25 — outils : base, restrictions, levée ; task jamais en simple ; jamais tous les outils",
+    "file": "subagent-only/profil.ts",
+    "find": "if (input.profil === \"simple\") return input.lectureSeule ? base.filter(input.lectureVerifiee) : base;",
+    "replace": "if (input.profil === \"simple\") return input.lectureSeule ? base.filter(input.lectureVerifiee) : [...base, \"task\"];"
+  },
+  {
+    "test": "L0 COUV P2-K26 — relevé sans identité : aucune désignation ni chemin sur un runId vide",
+    "file": "subagent-only/profil.ts",
+    "find": "    return { classe: \"absent\", unitesOuvertes: [] };\n  }\n\n  const run = r.run;",
+    "replace": "    return { classe: \"absent\", runId: \"\", unitesOuvertes: [] };\n  }\n\n  const run = r.run;"
+  },
+  {
+    "test": "L0 COUV P2-K30 — voie (a) : texte préexistant gardé à l'octet, ajout à la fin, une seule fois",
+    "file": "subagent-only/profil.ts",
+    "find": "const resultat = `${prompt}\\n\\n${ajouts.join(\"\\n\\n\")}`;",
+    "replace": "const resultat = `${ajouts.join(\"\\n\\n\")}\\n\\n${prompt}`;"
+  },
+  {
+    "test": "L0 COUV P2-K30 — voie (a) : texte préexistant gardé à l'octet, ajout à la fin, une seule fois",
+    "file": "subagent-only/profil.ts",
+    "find": "if (!prompt.includes(bloc)) ajouts.push(bloc);",
+    "replace": "ajouts.push(bloc);"
+  },
+  {
+    "test": "L0 COUV P2-K31 — voie (a) : composition partielle — bloc présent, guidelines dues absentes, elles seules ajoutées",
+    "file": "subagent-only/profil.ts",
+    "find": "  return lignesDeGuidelines(guidelinesDues).every((l) => lignePresente(prompt, l));",
+    "replace": "  void guidelinesDues; return true;"
+  },
+  {
+    "test": "L0 COUV P2-K32 — voie (a) : sans guideline due, seul le bloc de délégation est ajouté",
+    "file": "subagent-only/profil.ts",
+    "find": "if (manquantes.length > 0) ajouts.push(",
+    "replace": "if (manquantes.length >= 0) ajouts.push("
+  },
+  {
+    "test": "L0 COUV P2-K28 — manifeste absent, pièces non identifiables : illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "n === `${id}.lease`",
+    "replace": "n.startsWith(`${id}.`) /* mutant M-K : toute pièce <id>.… d'un run archivé admise (Q-P2-24) */"
+  },
+  {
+    "test": "L0 COUV P2-K29 — manifeste absent, seulement marqueur valide, archives et pièces archivées : absent",
+    "file": "subagent-only/profil.ts",
+    "find": " || n === `${id}.lease`",
+    "replace": " /* mutant M-K : bail exact d'un run archivé refusé (Q-P2-24) */"
+  },
+  {
+    "test": "L0 COUV P2-K28 — manifeste absent, pièces non identifiables : illisible",
+    "file": "subagent-only/profil.ts",
+    "find": "const ARCHIVE = /^([0-9a-f]{16})-run\\.json$/;",
+    "replace": "const ARCHIVE = /^(.+)-run\\.json$/; // mutant M-K : grammaire d'archive relâchée (Q-P2-24)"
   }
 ]
