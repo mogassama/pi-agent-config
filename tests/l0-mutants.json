@@ -3541,5 +3541,41 @@
     "file": "extensions/subagent/index.ts",
     "find": "      const reglesRendues = !options.customPrompt;",
     "replace": "      const reglesRendues = !options.customPrompt?.trim(); // mutant M-H : exemption après trim (Q-P2-22)"
+  },
+  {
+    "test": "L0 COUV P2-G02 — au chargement en simple, chaque garde est enregistrée et rend son verdict de référence sur un cas témoin",
+    "file": "extensions/bash-guard/index.ts",
+    "find": "export default function (pi: ExtensionAPI): void {",
+    "replace": "export default function (pi: ExtensionAPI): void {\n  return; // mutant M-G02 : bash-guard retirée au chargement"
+  },
+  {
+    "test": "L0 COUV P2-G02 — au chargement en simple, chaque garde est enregistrée et rend son verdict de référence sur un cas témoin",
+    "file": "extensions/pi-secret-gate/index.ts",
+    "find": "export default function (pi: ExtensionAPI): void {",
+    "replace": "export default function (pi: ExtensionAPI): void {\n  return; // mutant M-G02 : pi-secret-gate retirée au chargement"
+  },
+  {
+    "test": "L0 COUV P2-G02 — au chargement en simple, chaque garde est enregistrée et rend son verdict de référence sur un cas témoin",
+    "file": "extensions/pi-lint-gate/index.ts",
+    "find": "export default function (pi: ExtensionAPI): void {",
+    "replace": "export default function (pi: ExtensionAPI): void {\n  return; // mutant M-G02 : pi-lint-gate retirée au chargement"
+  },
+  {
+    "test": "L0 COUV P2-G02 — au chargement en simple, chaque garde est enregistrée et rend son verdict de référence sur un cas témoin",
+    "file": "extensions/pi-bq-cost-sentinel/index.ts",
+    "find": "export default function (pi: ExtensionAPI): void {",
+    "replace": "export default function (pi: ExtensionAPI): void {\n  return; // mutant M-G02 : pi-bq-cost-sentinel retirée au chargement"
+  },
+  {
+    "test": "L0 COUV P2-G02 — au chargement en simple, chaque garde est enregistrée et rend son verdict de référence sur un cas témoin",
+    "file": "extensions/compaction-guard/index.ts",
+    "find": "export default function compactionGuard(pi: ApiGarde): void {",
+    "replace": "export default function compactionGuard(pi: ApiGarde): void {\n  return; // mutant M-G02 : compaction-guard retirée au chargement"
+  },
+  {
+    "test": "L0 COUV P2-G04 — /check-config rend le même rapport en simple et en sous-agents ; DELEGATION.md absent, illisible ou vide est bloquant",
+    "file": "extensions/pi-check-config/index.ts",
+    "find": "      if (delegation) blocking.push(delegation);",
+    "replace": "      if (false) blocking.push(delegation); // mutant M-G04 : le contrôle de DELEGATION.md est retiré"
   }
 ]

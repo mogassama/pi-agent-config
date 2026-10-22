@@ -15,6 +15,8 @@
  * `subagents.agentOverrides` loadouts, which no longer exist — the domain
  * belongs to the task and the orchestrator passes it per call. Added: the
  * `## Review delta` marker guard, and validation of the agent definitions.
+ * Phase 2: a blocking check that `subagent-only/DELEGATION.md` is present, readable and
+ * not empty. No check depends on the profile.
  *
  * The marker guard is the important one. The slicer used to throw at runtime on
  * a missing marker, which aborted a whole delegation over a skill that
@@ -197,6 +199,29 @@ print(json.dumps(out))
   } catch {
     return {};
   }
+}
+
+// ------------------------------------------------------------- delegation prompt
+
+/**
+ * `subagent-only/DELEGATION.md`: the delegation half of the orchestrator prompt.
+ *
+ * The subagent extension reads it at `/subagents on` and poses it at every prompt in the
+ * subagents profile; missing, unreadable or empty, that profile refuses `task` until it is fixed. Blocking whatever the profile: this
+ * reads the file, never the profile, so the report is the same in both.
+ */
+function delegationProblem(root: string): string | undefined {
+  const rel = "subagent-only/DELEGATION.md";
+  let text: string;
+  try {
+    text = readFileSync(join(root, rel), "utf-8");
+  } catch (e) {
+    const code = (e as { code?: unknown }).code;
+    if (code === "ENOENT") return `${rel}: missing — the subagents profile cannot compose its prompt, task stays refused`;
+    return `${rel}: unreadable (${typeof code === "string" ? code : "error"}) — the subagents profile cannot compose its prompt, task stays refused`;
+  }
+  if (text.trim() === "") return `${rel}: empty — the subagents profile cannot compose its prompt, task stays refused`;
+  return undefined;
 }
 
 // ------------------------------------------------------------- agent checks
@@ -413,6 +438,9 @@ export default function (pi: ExtensionAPI): void {
       } catch {
         blocking.push("subagent-only/agents/ unreadable — no delegation is possible");
       }
+      const delegation = delegationProblem(root);
+      if (delegation) blocking.push(delegation);
+
       const models = new Set<string>();
       const chains = new Map<string, string[]>();
       for (const f of agentFiles) {

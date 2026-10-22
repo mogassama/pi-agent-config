@@ -438,6 +438,7 @@ export const RAPPORT_C2_7 = [
   "1 skills — 0 reviewer-facing, 0 mechanism, 0 orchestrator-only. 0 agents on 0 model families",
   "",
   "BLOCKING  subagent-only/agents/ unreadable — no delegation is possible",
+  "BLOCKING  subagent-only/DELEGATION.md: missing — the subagents profile cannot compose its prompt, task stays refused",
   "BLOCKING  subagent-only/envelope/envelope.ts: no role schema found. Expected a `const payloads = {` map whose keys are role names. Every per-role check below is suspended.",
   "report    README.md unreadable — documentation drift not checked",
   "report    skills/contrats-config: in none of reviewer-facing, mechanism, orchestrator-only — intentional?",
