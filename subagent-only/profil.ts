@@ -11,7 +11,8 @@
  * Classes, par priorité (la première qui s'applique) :
  *
  *   illisible     échec d'inspection ; marqueur existant invalide (manifeste présent ou non) ;
- *                 liste du répertoire impossible ; pièces non identifiables sans manifeste ;
+ *                 liste du répertoire impossible ; pièces non identifiables sans manifeste
+ *                 (les preuves `ite-p0b/` de runs archivés exceptées, Q-P2-14) ;
  *                 manifeste illisible ou invalide ; registre des lanes ou des intégrations
  *                 inexploitable ; plan attaché incohérent ; toute exception de lecture
  *   absent        absence établie du manifeste, sans pièce non identifiable
@@ -47,12 +48,31 @@ export type LectureDuRun =
     };
 
 /** Le relevé de la découverte. Les champs absents n'ont pas été lus, faute d'objet. */
+/**
+ * Q-P2-14 (`5ffc732c…` § 3) : ce que la découverte a relevé d'`ite-p0b/` — l'échec de son
+ * inspection ou de sa liste, ou, pour chaque entrée directe, son `lstat` attendu « fichier
+ * ordinaire », et le `lstat` de chaque archive `<id>-run.json` nommée par une entrée.
+ */
+export type PreuvesP0B =
+  | { etat: "echec"; raison: string }
+  | {
+      etat: "present";
+      entrees: Array<{ nom: string; inspection: Inspection }>;
+      /** Par identifiant de run lu dans un nom d'entrée : le `lstat` de son archive, si listée. */
+      archives: Record<string, Inspection>;
+    };
+
 export interface Releve {
   espace: Inspection;
   manifeste?: Inspection;
   marqueur?: EtatDuMarqueur;
   entrees?: { ok: true; noms: string[] } | { ok: false; raison: string };
   run?: LectureDuRun;
+  /**
+   * Q-P2-14 : les faits d'`ite-p0b/`, relevés seulement quand le manifeste est absent et que la
+   * liste de l'espace porte ce nom. Absent du relevé alors que le dossier est listé : illisible.
+   */
+  preuvesP0B?: PreuvesP0B;
   /** Une exception pendant la découverte : la classe est illisible, jamais absente ni vide. */
   exception?: string;
 }
@@ -71,6 +91,56 @@ export const NOM_MARQUEUR = ".git";
 
 /** Q-P2-24 : une archive `<id>-run.json`, l'identité dans la grammaire du runtime : 16 chiffres hexadécimaux minuscules. */
 const ARCHIVE = /^([0-9a-f]{16})-run\.json$/;
+
+/**
+ * Le dossier des preuves de P0-B (`empreinte.ts`, `DOSSIER_PREUVES_P0B`), qu'aucun run ne préfixe.
+ * Égalité vérifiée par K35 : le module pur n'importe pas `empreinte.ts`.
+ */
+export const NOM_PREUVES_P0B = "ite-p0b";
+
+/** La grammaire d'une identité de run : `randomBytes(8).toString("hex")`. */
+export const ID_RUN = /^[0-9a-f]{16}$/;
+
+/** Le nom d'une preuve rattachable : `<id>-<suffixe non vide>`, l'identité en tête. */
+const PREUVE_P0B = /^([0-9a-f]{16})-(.+)$/;
+
+/**
+ * Q-P2-14 : `ite-p0b/` d'un espace sans manifeste ne contient-il que des preuves de runs archivés ?
+ * `undefined` si oui ; sinon la raison. Répertoire réel et listé (vide admis) ; chaque entrée un
+ * fichier ordinaire `<id>-<suffixe>` dont l'archive exacte `<id>-run.json` est listée et est un
+ * fichier ordinaire. Tout le reste, et l'absence des faits, refuse. Le contenu des preuves n'est
+ * pas lu : l'appartenance est nominale.
+ */
+export function jugerPreuvesP0B(noms: readonly string[], p: PreuvesP0B | undefined): string | undefined {
+  if (p === undefined) return `${NOM_PREUVES_P0B} n'a pas été inspecté`;
+  if (p.etat === "echec") return `${NOM_PREUVES_P0B} : ${p.raison}`;
+  const ecarts: string[] = [];
+  for (const { nom, inspection } of p.entrees) {
+    if (inspection.etat === "absent") {
+      ecarts.push(`${nom} a disparu pendant le relevé`);
+      continue;
+    }
+    if (inspection.etat === "echec") {
+      ecarts.push(`${nom} : ${inspection.raison}`);
+      continue;
+    }
+    const m = PREUVE_P0B.exec(nom);
+    if (m === null) {
+      ecarts.push(`${nom} : nom inconnu`);
+      continue;
+    }
+    const archive = `${m[1]}-run.json`;
+    if (!noms.includes(archive) || !ARCHIVE.test(archive)) {
+      ecarts.push(`${nom} : aucune archive ${archive}`);
+      continue;
+    }
+    const a = p.archives[m[1]];
+    if (a === undefined) ecarts.push(`${nom} : archive ${archive} non inspectée`);
+    else if (a.etat === "echec") ecarts.push(`${nom} : archive ${a.raison}`);
+    else if (a.etat === "absent") ecarts.push(`${nom} : archive ${archive} disparue pendant le relevé`);
+  }
+  return ecarts.length === 0 ? undefined : `${NOM_PREUVES_P0B} : ${ecarts.join(" ; ")}`;
+}
 
 /**
  * Les entrées d'un espace sans manifeste qui ne permettent pas d'identifier sûrement le run.
@@ -116,10 +186,13 @@ export function classer(r: Releve): Classement {
   if (r.manifeste.etat === "echec") return illisible(`le manifeste ne s'inspecte pas : ${r.manifeste.raison}`);
 
   if (r.manifeste.etat === "absent") {
-    const autres = piecesNonIdentifiables(r.entrees.noms);
+    // Q-P2-14 : `ite-p0b` n'est retiré des pièces non identifiables que s'il est admis.
+    const preuves = r.entrees.noms.includes(NOM_PREUVES_P0B) ? jugerPreuvesP0B(r.entrees.noms, r.preuvesP0B) : undefined;
+    const autres = piecesNonIdentifiables(r.entrees.noms).filter((n) => n !== NOM_PREUVES_P0B || preuves !== undefined);
     if (autres.length > 0) {
       return illisible(
-        `manifeste absent, mais des pièces ne permettent pas d'identifier le run courant : ${autres.join(", ")}`,
+        `manifeste absent, mais des pièces ne permettent pas d'identifier le run courant : ${autres.join(", ")}` +
+          (preuves === undefined ? "" : ` (${preuves})`),
       );
     }
     return { classe: "absent", unitesOuvertes: [] };
@@ -158,6 +231,14 @@ export const VERBES_RECOVER =
   "`bin/subagent-recover report`, `bin/subagent-recover run completed|abandoned --reason <raison>`, " +
   "`bin/subagent-recover cleanup`, `bin/subagent-recover <unité> adopt|integrated|abandoned|discard`";
 
+/**
+ * Une phrase terminée par un seul point : la raison d'un observateur peut déjà finir par un point,
+ * qui n'est alors pas doublé (décision `e1901916…` § 5). Le texte reçu reste à l'octet.
+ */
+function finDePhrase(texte: string): string {
+  return texte.endsWith(".") ? texte : `${texte}.`;
+}
+
 /** Ce qui désigne le run : identité, statut, unités ouvertes — ou la raison d'illisibilité. */
 export function designation(c: Classement): string {
   if (c.classe === "illisible") {
@@ -182,7 +263,7 @@ export const nomClasse = (c: Classe): string => NOMS_CLASSE[c];
 export function avertissement(c: Classement): string | undefined {
   if (!lectureSeuleRequise(c)) return undefined;
   return (
-    `Run durable ${nomClasse(c.classe)} : ${designation(c)}.\n` +
+    `Run durable ${nomClasse(c.classe)} : ${finDePhrase(designation(c))}\n` +
     "Profil simple en lecture seule : seule la lecture native vérifiée passe, rien n'est écrit.\n" +
     "Suites : `/subagents on` pour reprendre le run en profil sous-agents, `/subagent-report` pour le relevé, " +
     `ou l'outil opérateur : ${VERBES_RECOVER}.`
@@ -253,7 +334,7 @@ export function deciderCommande(argument: string, s: EtatDeCommande, c: Classeme
       return {
         action: "refus",
         texte:
-          `Montée refusée : ${designation(c)}. Rien n'a été ouvert ni écrit. ` +
+          `Montée refusée : ${finDePhrase(designation(c))} Rien n'a été ouvert ni écrit. ` +
           `Relevé : \`/subagent-report\` ; outil opérateur : ${VERBES_RECOVER}.`,
       };
     }

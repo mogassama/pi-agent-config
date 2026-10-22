@@ -1010,22 +1010,34 @@ regressionCorrigee("PG-LOST-APPEND", "un registre des lanes LOST n'est ni recré
   }
 
   // 2. Le chemin nominal de délégation, dans un processus à part sous le chargeur.
+  //    Phase 2 (Q-P2-5, `142cb15d…`, `e1901916…`) : la corruption suit une montée admise dans la même
+  //    session (volet en session, porte du runtime), puis une session neuve reprend l'état LOST : sa
+  //    montée est refusée, le profil reste simple et `task` y est refusé par la garde de profil.
   const harnais = join(REPO, "tests", "l0-b2-harness.ts");
+  const profil = join(REPO, "subagent-only", "profil.ts");
   const code =
     `import { existsSync, readFileSync, rmSync } from "node:fs";\n` +
     `import { join } from "node:path";\n` +
-    `import { compter, monter, tache, texte } from ${JSON.stringify(harnais)};\n` +
+    `import { compter, contexteDEpreuve, monter, tache, texte } from ${JSON.stringify(harnais)};\n` +
+    `import { REFUS_PROFIL_SIMPLE } from ${JSON.stringify(profil)};\n` +
     `const h = await monter();\n` +
     `const p = () => join(h.runDir, \`\${h.runId}-lanes.jsonl\`);\n` +
     `const lire = () => (existsSync(p()) ? readFileSync(p(), "utf-8") : null);\n` +
+    `const m = () => readFileSync(join(h.runDir, "active-run.json"), "utf-8");\n` +
     `const r1 = await h.outil.execute("1", tache("W03"));\n` +
     `const apres1 = lire();\n` +
     `rmSync(p(), { force: true });\n` +
-    `const h2 = await h.recharger();\n` +
-    `const workers = compter("worker");\n` +
-    `const r2 = await h2.outil.execute("2", tache("W09"));\n` +
-    `const sortie = { premier: !r1.isError, registre1: apres1, erreur: r2.isError === true, texte: texte(r2),\n` +
-    `  registre: lire(), workers: compter("worker") - workers, manifeste: readFileSync(join(h.runDir, "active-run.json"), "utf-8") };\n` +
+    `let workers = compter("worker");\n` +
+    `const rs = await h.outil.execute("2", tache("W09"));\n` +
+    `const session = { erreur: rs.isError === true, texte: texte(rs), registre: lire(), workers: compter("worker") - workers };\n` +
+    `const manifesteAvant = m();\n` +
+    `const h2 = await h.recharger({ refusAdmis: true });\n` +
+    `const vu = []; await h2.commande("subagents")?.("", contexteDEpreuve({ notifications: vu }));\n` +
+    `workers = compter("worker");\n` +
+    `const r2 = await h2.outil.execute("3", tache("W09"));\n` +
+    `const sortie = { premier: !r1.isError, registre1: apres1, session, montee: h2.montee,\n` +
+    `  etat: vu.map((n) => n.texte).join("\\n"), erreur: r2.isError === true, texte: texte(r2), refusProfil: texte(r2) === REFUS_PROFIL_SIMPLE,\n` +
+    `  registre: lire(), workers: compter("worker") - workers, manifesteIntact: m() === manifesteAvant, manifeste: m() };\n` +
     `console.log("PGLA " + JSON.stringify(sortie));\n` +
     `h.fin();\n`;
   const p = spawnSync(process.execPath, [...flags(), "--import", "./tests/stubs/loader.mjs", "--input-type=module", "-e", code], {
@@ -1035,16 +1047,31 @@ regressionCorrigee("PG-LOST-APPEND", "un registre des lanes LOST n'est ni recré
   precondition(ligne !== undefined, `runtime : le processus doit rendre son relevé ; code ${p.status}, ${`${p.stderr}`.slice(-400)}`);
   const vu = JSON.parse(ligne!.slice(5)) as {
     premier: boolean; registre1: string | null; erreur: boolean; texte: string; registre: string | null; workers: number;
-    manifeste: string;
+    manifeste: string; manifesteIntact: boolean; refusProfil: boolean; etat: string;
+    session: { erreur: boolean; texte: string; registre: string | null; workers: number };
+    montee: { ok: boolean; erreur?: string; erreurs?: number };
   };
   // La première délégation est le témoin EMPTY du runtime : elle crée le registre et publie le témoin.
   if (!(vu.premier && (vu.registre1 ?? "").includes('"event":"OPENED"') && vu.manifeste.includes('"lanes": 2'))) {
     temoins.push(`runtime EMPTY : la première délégation n'ouvre pas W03 ou ne publie pas le témoin ; ` +
       `${JSON.stringify(vu).slice(0, 300)}`);
-  } else if (!(vu.erreur && /ouverture non enregistrée|\[run: registre des lanes LOST\][^]*Aucune délégation n'a été lancée/.test(vu.texte) &&
-    vu.registre === null && vu.workers === 0)) {
-    ecarts.push(`runtime LOST : erreur ${vu.erreur}, workers lancés ${vu.workers}, registre ${JSON.stringify(vu.registre)}, ` +
-      `texte ${JSON.stringify(vu.texte.slice(0, 200))}`);
+  } else {
+    // Volet en session : la porte du runtime, après une montée admise.
+    if (!(vu.session.erreur && /ouverture non enregistrée|\[run: registre des lanes LOST\][^]*Aucune délégation n'a été lancée/.test(vu.session.texte) &&
+      vu.session.registre === null && vu.session.workers === 0)) {
+      ecarts.push(`runtime LOST en session : erreur ${vu.session.erreur}, workers lancés ${vu.session.workers}, ` +
+        `registre ${JSON.stringify(vu.session.registre)}, texte ${JSON.stringify(vu.session.texte.slice(0, 200))}`);
+    }
+    // Reprise : montée refusée sur la raison de l'observateur, profil simple, refus de profil, aucun effet.
+    const mt = vu.montee.erreur ?? "";
+    const monteeRefusee = vu.montee.ok === false && vu.montee.erreurs === 1 && mt.startsWith("Montée refusée : run ") &&
+      /état durable illisible/.test(mt) && /registre des lanes inexploitable/.test(mt) && /\(LOST\)/.test(mt) &&
+      /registre absent, alors que le manifeste l'atteste/.test(mt) && /Rien n'a été ouvert ni écrit/.test(mt);
+    const simple = /Profil : simple\./.test(vu.etat) && /Lecture seule : oui\./.test(vu.etat);
+    if (!(monteeRefusee && simple && vu.erreur && vu.refusProfil && vu.registre === null && vu.workers === 0 && vu.manifesteIntact)) {
+      ecarts.push(`reprise LOST : montée ${JSON.stringify(vu.montee).slice(0, 240)}, état ${JSON.stringify(vu.etat)}, ` +
+        `refus de profil ${vu.refusProfil}, workers ${vu.workers}, registre ${JSON.stringify(vu.registre)}, manifeste intact ${vu.manifesteIntact}`);
+    }
   }
 
   propriete(
@@ -1085,7 +1112,8 @@ regressionCorrigee("PG-DELEGATION-C4-GATE", "une délégation liée à une lane 
     `import { execFileSync } from "node:child_process";\n` +
     `import { join } from "node:path";\n` +
     `import { PILOTE } from ${JSON.stringify(join(REPO, "tests", "stubs", "dispatch.ts"))};\n` +
-    `import { compter, ecrire, monter, revue, tache, texte } from ${JSON.stringify(harnais)};\n` +
+    `import { compter, contexteDEpreuve, ecrire, monter, revue, tache, texte } from ${JSON.stringify(harnais)};\n` +
+    `import { REFUS_PROFIL_SIMPLE } from ${JSON.stringify(join(REPO, "subagent-only", "profil.ts"))};\n` +
     `import { laneState, readLaneEvents, readWitnesses } from ${JSON.stringify(manifesteC4)};\n` +
     `const etat = (h) => { const lu = readLaneEvents(h.runDir, h.runId); return laneState(readWitnesses(h.runDir, h.runId), { ...lu, version: lu.version }, h.runId); };\n` +
     `const lire = (p) => (existsSync(p) ? readFileSync(p, "utf-8") : null);\n` +
@@ -1119,13 +1147,24 @@ regressionCorrigee("PG-DELEGATION-C4-GATE", "une délégation liée à une lane 
     `    PILOTE.resultat = undefined; PILOTE.pendant = undefined;\n` +
     `    if (!premier) { sortie.push({ forme, chemin, premier }); return; }\n` +
     `    (poser ?? abimer[forme])(h);\n` +
-    `    if (recharger) h = await h.recharger();\n` +
+    `    // Phase 2 (Q-P2-5) : une reprise sur état illisible voit sa montée refusée ; l'outil réel reste, et\n` +
+    `    // la fenêtre de la montée est relevée aussi. Deux clés en sont retirées : le bail, relâché par la fin\n` +
+    `    // de l'ancienne session, et le compteur de lancements, que le harnais remet à zéro en instanciant ;\n` +
+    `    // un lancement pendant la montée se lit alors sur le compteur neuf (lancementsMontee).\n` +
+    `    const sansBail = (x) => { const { bail, lancements, ...reste } = x; return reste; };\n` +
+    `    const avantMontee = sansBail(releve(h));\n` +
+    `    if (recharger) h = await h.recharger({ refusAdmis: true });\n` +
+    `    const apresMontee = sansBail(releve(h));\n` +
+    `    const lancementsMontee = recharger ? compter("worker") + compter("reviewer") : 0;\n` +
+    `    const vu = []; if (!h.montee.ok) await h.commande("subagents")?.("", contexteDEpreuve({ notifications: vu }));\n` +
     `    const e = etat(h); const avant = releve(h);\n` +
     `    const r = await h.outil.execute("2", appels[chemin === "reprise" || chemin === "neuve-en-session" ? "neuve" : chemin === "continuation-en-session" ? "continuation" : chemin]());\n` +
     `    PILOTE.resultat = undefined;\n` +
     `    const apres = releve(h);\n` +
     `    sortie.push({ forme, chemin, premier, etat: e, erreur: r.isError === true, texte: texte(r),\n` +
-    `      effets: Object.keys(avant).filter((k) => avant[k] !== apres[k]) });\n` +
+    `      effets: Object.keys(avant).filter((k) => avant[k] !== apres[k]),\n` +
+    `      effetsMontee: Object.keys(avantMontee).filter((k) => avantMontee[k] !== apresMontee[k]), lancementsMontee, recharge: recharger,\n` +
+    `      montee: h.montee, etatProfil: vu.map((n) => n.texte).join("\\n"), refusProfil: texte(r) === REFUS_PROFIL_SIMPLE });\n` +
     `  } finally { h.fin(); }\n` +
     `}\n` +
     `for (const forme of Object.keys(abimer)) for (const chemin of Object.keys(appels)) await cas(forme, chemin);\n` +
@@ -1159,9 +1198,15 @@ regressionCorrigee("PG-DELEGATION-C4-GATE", "une délégation liée à une lane 
   const ligne = `${p.stdout}`.split("\n").find((l) => l.startsWith("PGDG "));
   precondition(ligne !== undefined, `runtime : le processus doit rendre son relevé ; code ${p.status}, ${`${p.stderr}`.slice(-400)}`);
   type Cas = { forme: string; chemin: string; premier?: boolean; etat?: string; erreur?: boolean; texte?: string;
-    effets?: string[]; lancements?: number; ouverte?: boolean };
+    effets?: string[]; lancements?: number; ouverte?: boolean; effetsMontee?: string[]; lancementsMontee?: number; recharge?: boolean;
+    montee?: { ok: boolean; erreur?: string; erreurs?: number }; etatProfil?: string; refusProfil?: boolean };
   const vus = JSON.parse(ligne!.slice(5)) as Cas[];
   precondition(vus.length === 21, `runtime : vingt et un relevés attendus, ${vus.length} rendus`);
+  // Table figée (Q-P2-5) : les dix-sept reprises rechargées sont refusées à la montée ; les cas en
+  // session, EMPTY et KNOWN montent. Une reprise admise est un écart, non un passage par la porte du runtime.
+  const rechargees = vus.filter((c) => c.recharge === true && c.forme !== "EMPTY" && c.forme !== "KNOWN");
+  precondition(rechargees.length === 17, `runtime : dix-sept reprises rechargées attendues, ${rechargees.length} relevées`);
+  for (const c of rechargees) if (c.montee?.ok !== false) ecarts.push(`reprise ${c.forme} ${c.chemin} : montée admise sur état illisible`);
   for (const c of vus) {
     if (c.forme === "EMPTY" || c.forme === "KNOWN") {
       const ok = c.etat === c.forme && !c.erreur && c.lancements === 1 && (c.forme === "KNOWN" ? c.premier === true : c.ouverte === true);
@@ -1174,8 +1219,23 @@ regressionCorrigee("PG-DELEGATION-C4-GATE", "une délégation liée à une lane 
       continue;
     }
     precondition(c.etat === c.forme, `runtime ${c.forme} ${c.chemin} : état C4 observé ${c.etat}`);
+    if (c.montee?.ok === false) {
+      // Reprise refusée (Q-P2-5) : raison de l'observateur, profil simple, refus de profil, aucun effet.
+      const mt = c.montee.erreur ?? "";
+      const monteeRefusee = c.montee.erreurs === 1 && mt.startsWith("Montée refusée : run ") && /état durable illisible/.test(mt) &&
+        /registre des lanes inexploitable/.test(mt) && mt.includes(`(${c.forme})`) && /Rien n'a été ouvert ni écrit/.test(mt);
+      const simple = /Profil : simple\./.test(c.etatProfil ?? "") && /Lecture seule : oui\./.test(c.etatProfil ?? "");
+      if (!(monteeRefusee && simple && c.erreur === true && c.refusProfil === true &&
+        (c.effets ?? []).length === 0 && (c.effetsMontee ?? []).length === 0 && c.lancementsMontee === 0)) {
+        ecarts.push(`reprise ${c.forme} ${c.chemin} : montée ${JSON.stringify(c.montee).slice(0, 200)}, profil ${JSON.stringify(c.etatProfil)}, ` +
+          `refus de profil ${c.refusProfil}, effets ${JSON.stringify(c.effets)}, effets de la montée ${JSON.stringify(c.effetsMontee)}, ` +
+          `lancements pendant la montée ${c.lancementsMontee}`);
+      }
+      continue;
+    }
+    // Montée admise (cas en session) : la porte du runtime, inchangée.
     const refus = c.erreur === true && /Aucune délégation n'a été lancée/.test(c.texte ?? "");
-    if (!(refus && (c.effets ?? []).length === 0)) {
+    if (!(refus && (c.effets ?? []).length === 0 && (c.effetsMontee ?? []).length === 0 && c.lancementsMontee === 0)) {
       ecarts.push(`runtime ${c.forme} ${c.chemin} : refus ${refus}, effets ${JSON.stringify(c.effets)} ; ${(c.texte ?? "").slice(0, 160)}`);
     }
   }

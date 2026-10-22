@@ -1,0 +1,138 @@
+[
+ {
+  "cas": "R1",
+  "fragment": "P02",
+  "cote": "S",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": "Full operating rules, delegation policy, and coding standards live in AGENTS.md.",
+  "apres": "Full operating rules and coding standards live in AGENTS.md."
+ },
+ {
+  "cas": "R2",
+  "fragment": "A01",
+  "cote": "D",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": " This question belongs here",
+  "apres": "The question whether a thing needs to exist: This question belongs here"
+ },
+ {
+  "cas": "R3",
+  "fragment": "A03",
+  "cote": "D",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": " **A worker writes straight",
+  "apres": "Critical files (env, manifests, deployed artifacts, IaC state): **A worker writes straight"
+ },
+ {
+  "cas": "R4",
+  "fragment": "A06",
+  "cote": "S",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": "decomposing one backlog item into worker-executable steps",
+  "apres": "decomposing one backlog item into steps"
+ },
+ {
+  "cas": "R5",
+  "fragment": "A11",
+  "cote": "S",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison ; point final accordé (Q-P2-3, 3, f5ffe6d9)",
+  "avant": " — which is also the only route on which `advisor` sits, under the conditions stated there.",
+  "apres": "."
+ },
+ {
+  "cas": "R6",
+  "fragment": "A13",
+  "cote": "S",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison ; point final accordé (Q-P2-3, 3, f5ffe6d9)",
+  "avant": ", through the orchestrator.",
+  "apres": "."
+ },
+ {
+  "cas": "R7",
+  "fragment": "A16",
+  "cote": "D",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": " Not for repo-wide search:",
+  "apres": "The `bash` tool is not for repo-wide search:"
+ },
+ {
+  "cas": "R8",
+  "fragment": "A22",
+  "cote": "S",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison ; point final accordé (Q-P2-3, 3, f5ffe6d9)",
+  "avant": ",",
+  "apres": "."
+ },
+ {
+  "cas": "R8",
+  "fragment": "A23",
+  "cote": "D",
+  "statut": "corrigé au texte exact (C2, 3aa05865)",
+  "avant": " ce que les enveloppes",
+  "apres": "Après `/compact` en régime libre, reconstruire aussi depuis ce que les enveloppes"
+ },
+ {
+  "cas": "R9",
+  "fragment": "A25",
+  "cote": "D",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": " **Orchestrateur seulement**",
+  "apres": "`APPEND_SYSTEM.md` : **Orchestrateur seulement**"
+ },
+ {
+  "cas": "R10",
+  "fragment": "A26",
+  "cote": "S",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison ; point final accordé (Q-P2-3, 3, f5ffe6d9)",
+  "avant": "",
+  "apres": "."
+ },
+ {
+  "cas": "R10",
+  "fragment": "A27",
+  "cote": "D",
+  "statut": "cadre D-P2-2, texte reçu avec la livraison",
+  "avant": " for the orchestrator;",
+  "apres": "`DESIGN.md` : stable for the orchestrator;"
+ },
+ {
+  "cas": "R11",
+  "fragment": "A29",
+  "cote": "D",
+  "statut": "accordé au texte exact (Q-P2-2, 3aa05865)",
+  "avant": "Its rule is\nin `## Execution regimes` and its five",
+  "apres": "Its rule is\nstated above and its five"
+ },
+ {
+  "cas": "R12",
+  "fragment": "A09",
+  "cote": "D",
+  "statut": "accordé au texte exact (Q-P2-3, 1, f5ffe6d9)",
+  "avant": "**`advisor` sits inside that first route,",
+  "apres": "**`advisor` sits inside the free regime's first route,"
+ },
+ {
+  "cas": "R13",
+  "fragment": "P03",
+  "cote": "D",
+  "statut": "accordé au texte exact (Q-P2-3, 1, f5ffe6d9)",
+  "avant": "This file no longer reaches a child",
+  "apres": "APPEND_SYSTEM.md no longer reaches a child"
+ },
+ {
+  "cas": "R14",
+  "fragment": "A05",
+  "cote": "D",
+  "statut": "accordé au texte exact (Q-P2-3, 1, f5ffe6d9)",
+  "avant": "templates appear in neither chain.",
+  "apres": "templates appear in neither chain of `## Authority & precedence`."
+ },
+ {
+  "cas": "R15",
+  "fragment": "A14",
+  "cote": "D",
+  "statut": "accordé au texte exact (Q-P2-3, 1, f5ffe6d9)",
+  "avant": "with the note in its summary",
+  "apres": "with the divergence note in its summary"
+ }
+]

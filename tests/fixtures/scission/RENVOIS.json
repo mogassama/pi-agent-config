@@ -1,0 +1,128 @@
+[
+  {
+    "texte": "socle",
+    "ancre": "See `## Authority & precedence`",
+    "cible": "## Authority & precedence",
+    "nature": "titre",
+    "sens": "aucun"
+  },
+  {
+    "texte": "socle",
+    "ancre": "The \"Code style — defaults\" section below",
+    "cible": "## Code style — defaults",
+    "nature": "titre",
+    "sens": "below"
+  },
+  {
+    "texte": "socle",
+    "ancre": "per \"Execution regimes\"",
+    "cible": "## Execution regimes",
+    "nature": "titre",
+    "sens": "aucun"
+  },
+  {
+    "texte": "socle",
+    "ancre": "per \"Free regime\" above",
+    "cible": "### Free regime",
+    "nature": "titre",
+    "sens": "above"
+  },
+  {
+    "texte": "socle",
+    "ancre": "`## Hard limits` above",
+    "cible": "## Hard limits",
+    "nature": "titre",
+    "sens": "above"
+  },
+  {
+    "texte": "socle",
+    "ancre": "see \"Authority & precedence\" above",
+    "cible": "## Authority & precedence",
+    "nature": "titre",
+    "sens": "above"
+  },
+  {
+    "texte": "compose",
+    "ancre": "neither chain of `## Authority & precedence`",
+    "cible": "## Authority & precedence",
+    "nature": "titre",
+    "sens": "above"
+  },
+  {
+    "texte": "compose",
+    "ancre": "See \"Searching is scout work\"",
+    "cible": "### Searching is scout work",
+    "nature": "titre",
+    "sens": "aucun"
+  },
+  {
+    "texte": "compose",
+    "ancre": "**Eleven skills carry a `## Review delta`**",
+    "cible": "## Review delta",
+    "nature": "externe",
+    "sens": "aucun"
+  },
+  {
+    "texte": "compose",
+    "ancre": "Judges against the domain's `## Review delta`",
+    "cible": "## Review delta",
+    "nature": "externe",
+    "sens": "aucun"
+  },
+  {
+    "texte": "compose",
+    "ancre": "Its rule is\nstated above and its five",
+    "cible": "**`advisor` sits inside the free regime's first route,",
+    "nature": "passage",
+    "sens": "above"
+  },
+  {
+    "texte": "compose",
+    "ancre": "Its rule is\nstated above and its five",
+    "cible": "- and choosing one commits a **durable boundary**",
+    "nature": "passage",
+    "sens": "above"
+  },
+  {
+    "texte": "compose",
+    "ancre": "- the free-regime rules above already require escalation;",
+    "cible": "### Free regime",
+    "nature": "titre",
+    "sens": "above"
+  },
+  {
+    "texte": "compose",
+    "ancre": "The five conditions above",
+    "cible": "- the free-regime rules above already require escalation;",
+    "nature": "passage",
+    "sens": "above"
+  },
+  {
+    "texte": "socle",
+    "ancre": "see the three cases below",
+    "cible": "### The three cases — one of them stops",
+    "nature": "titre",
+    "sens": "below"
+  },
+  {
+    "texte": "socle",
+    "ancre": "(see airflow-engineering skill)",
+    "cible": "skills/airflow-engineering/SKILL.md",
+    "nature": "skill",
+    "sens": "aucun"
+  },
+  {
+    "texte": "socle",
+    "ancre": "(see dbt-engineering skill)",
+    "cible": "skills/dbt-engineering/SKILL.md",
+    "nature": "skill",
+    "sens": "aucun"
+  },
+  {
+    "texte": "simple",
+    "ancre": "Behavioral defaults: see AGENTS.md.",
+    "cible": "# AGENTS.md (global)",
+    "nature": "titre",
+    "sens": "below"
+  }
+]

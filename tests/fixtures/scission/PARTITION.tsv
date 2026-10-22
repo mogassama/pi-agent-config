@@ -1,0 +1,36 @@
+id	source	debut	fin	octets	ligne_debut	ligne_fin	destination	retouches	sha256_fragment	extrait
+A00	AGENTS.md	0	2494	2494	1	26	S	-	afa1855c356e785422bea5130edf8eba59533be375a13991d336e04bb09c0efa	# AGENTS.md (global)⏎⏎Loaded for every Pi session. Project-l
+A01	AGENTS.md	2494	2706	212	26	26	D	R2	ea9bd7f4d2bc2229aadced2f623b873ca92d56b0705589fe590e1fc3f7742d13	 This question belongs here and to the advisor, **never to a
+A02	AGENTS.md	2706	5350	2644	26	42	S	-	88e8f3e7c3dfeb4ffee9e764d03b5421909df4cfca15c52fc71fa5f849e8fcb3	⏎- **Defensible code.** Every line must be justifiable. That
+A03	AGENTS.md	5350	5843	493	42	42	D	R3	2fab0b900789647edcab4adb743c56fe521735261b2a73afcf4b5f536e2de505	 **A worker writes straight to the working tree and has no w
+A04	AGENTS.md	5843	7207	1364	42	67	S	-	8d8fc1fe97c73d60a5cbc5b22ce8d28c0e0f8eb63272e1ff9bf8809558898bba	⏎4. Adding a heavy or transitively-large dependency without 
+A05	AGENTS.md	7207	7501	294	68	69	D	R14	e760e8c824cd6e1ee457255dc794fce280f808ec22e42d0d3fe5fc3a8efbc549	> UNRESOLVED — `APPEND_SYSTEM.md` and the `subagents/*.md` t
+A06	AGENTS.md	7501	9247	1746	70	89	S	R4	8f3b4a053fe52355fd0f8361ad333691629602c481cc81ec0504afd8a4473937	The "Code style — defaults" section below applies only where
+A07	AGENTS.md	9247	11252	2005	90	133	D	-	def10dd72c341632e6be3601dc6ee9e15566386dcd6f7a9f1a17b1bf84caa97f	**DESIGN.md status updates:** the orchestrator never edits a
+A08	AGENTS.md	11252	11857	605	134	142	S	-	08df5ca6e6e04e6326f4328a586a908a041e04ee3064bb3f9e2fc25ffe0b8d8b	The bundle is a *direction*, not a specification. It is sile
+A09	AGENTS.md	11857	13880	2023	143	176	D	R12	536d6fe7559f53dad25c0e042f962cf5effabcd9e95da852478b8e94c2bb6ce6	**`advisor` sits inside that first route, and does not creat
+A10	AGENTS.md	13880	14791	911	177	182	S	-	9309f6df8cfbb6b77e0cafdacbdbc167f5f56a1b5511b9a577af66ee72820e7d	### The three cases — one of them stops⏎⏎Applies in both reg
+A11	AGENTS.md	14791	14884	93	182	182	S	R5	a663c33b83c1c9e478dba18a262e8e68f07a9f4442e55921270fdf67b825105c	 — which is also the only route on which `advisor` sits, und
+A12	AGENTS.md	14884	15097	213	182	183	S	-	2f7720288717597a6874a2c14e1464691a1c53def8885707e10f55d4d6b5df09	 Silence covers what is cheap to undo; nothing else.⏎3. **Th
+A13	AGENTS.md	15097	15124	27	183	183	S	R6	9328c094765a2708e413618fc8578d7ad507609db06b0731afc715dbd134558c	, through the orchestrator.
+A14	AGENTS.md	15124	15284	160	183	183	D	R15	48cfcb621df100b2380188513477a2debaee0f59903102246df0e1bd2392b7c4	 A subagent has no channel to the operator: it returns `stat
+A15	AGENTS.md	15284	17039	1755	183	201	S	-	110eed4d61735c4457198359c472c6e33e60328c2ded2da41754d9f20c43c4ed	⏎⏎**Never a fourth case.** `## Hard limits` above is the onl
+A16	AGENTS.md	17039	17148	109	201	201	D	R7	6c3f4590d08f9772ddf189f5522c212fcdfa2bc3c8d15e1c090861baa1684ccb	 Not for repo-wide search: `rg`, `fd` and `find` across the 
+A17	AGENTS.md	17148	17327	179	201	202	S	-	3efca1a755679d593f81ebdad72b1a82901dbea03995fc547b49833b798e47f9	 Synchronous only — for long-running things (dev servers, `a
+A18	AGENTS.md	17327	17503	176	202	202	D	-	7f974757c9a4f93fa4b2aca3c27eb290924d6807ad5d06ad87c01d41add1dd2e	 A question that spans files — where is this, who calls it, 
+A19	AGENTS.md	17503	19821	2318	202	243	S	-	c6a531c71e479ee4768221442c42d37053c30f60b8cef242ee2e703ffeceb696	⏎- **`edit`** preferred over `write` for existing files. Res
+A20	AGENTS.md	19821	20357	536	244	247	D	-	a32a03da98b900b8a8a23ef101f972b2a955492122b886e223d5ccac0a7ee96a	Orchestrator-only skills are never injected into a child and
+A21	AGENTS.md	20357	21109	752	248	254	S	-	146dd567a29c60bb23f6c1f45d493cb51caf3a316f6470b9a6527fbbadc7b6c4	## Workflow pi — Gestion du contexte⏎⏎- Lancer `/compact` à 
+A22	AGENTS.md	21109	21110	1	254	254	S	R8	d03502c43d74a30b936740a9517dc4ea2b2ad7168caa0a774cefe793ce0b33e7	,
+A23	AGENTS.md	21110	21242	132	254	254	D	R8	8df71c05f5cfeb48cf127b62e980c38ac8f188df78240f1abb72c93c230e42ca	 ce que les enveloppes des délégations passées ont rendu — e
+A24	AGENTS.md	21242	21527	285	254	260	S	-	77b0367c8784baeed7750ea07a82dc7af58dd56ef39b02927f02b60cd6045ce4	 Ne rien re-décider qui ait déjà été décidé sans donnée nouv
+A25	AGENTS.md	21527	21667	140	260	260	D	R9	c28a259ac12dcde06506d7986888e71abfa4a830f42c511fe1266dbb545d146f	 **Orchestrateur seulement** : passer un `--append-system-pr
+A26	AGENTS.md	21667	21879	212	260	265	S	R10	1f8a724c8dbf1b0efee38ee3cb9898d0e699a2df1da7a7d9b6c8edb1f015a89d	⏎2. `AGENTS.md` (global, puis projet)⏎3. Skills — chargées à
+A27	AGENTS.md	21879	22020	141	265	266	D	R10	831b08a48ba9a98be3974224045dce00f01f5987b66c05516e02876ff56f7be1	 for the orchestrator; after a real integration, only the⏎  
+A28	AGENTS.md	22020	22265	245	266	271	S	-	006756a826e7701c5d1c40b5a71975328f1bb4a692b5c146fee3fc2e03de57bb	⏎7. `INSTRUCTIONS.md` — backlog vivant⏎8. `.pi/BRIEF.md` — p
+A29	AGENTS.md	22265	38568	16303	272	535	D	R11	2d9eae8e872d48546bc5eedfb5b80ec2b6aacf7bd01da20f568591dba1b6879f	## Delegation⏎⏎Extension `subagent`, one tool: `task({ agent
+A30	AGENTS.md	38568	38965	397	536	540	S	-	d3d1d28469c028a81121850d070fec90a16fc9edc13509dded8c8d883fe291aa	## Output discipline⏎⏎- After a substantial change, output: 
+P00	APPEND_SYSTEM.md	0	898	898	1	12	S	-	4336b31d80b5cd3d350643ffb175525f719ca4d3987856471c031bc69e31afe5	# APPEND_SYSTEM.md (global)⏎⏎This file APPENDS to pi's defau
+P01	APPEND_SYSTEM.md	898	1044	146	13	13	D	-	b935e7abe5a8da9565922fdbbca432c8e3b13ba35957787367d5df16653a663d	- When delegating to a subagent, state which agent and why i
+P02	APPEND_SYSTEM.md	1044	1400	356	14	15	S	R1	dec179d1655e315abb4c9e0aff9000033911cbaac9749571f718d32582c0574e	- Response economy. Match response length to the complexity 
+P03	APPEND_SYSTEM.md	1400	2009	609	16	28	D	R13	70ede8ad4d11e8d64b6d6831bcbbba68004b20105bd282bdc442cda52b3dcfb7	⏎## Subagent output⏎⏎Nothing here. A subagent returns its re

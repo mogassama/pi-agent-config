@@ -18,7 +18,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { builtinModules } from "node:module";
 import { accessSync, constants, statSync } from "node:fs";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,6 +101,19 @@ export type Tentative = {
     journalFixture?: { chemin: string; dossier: string; mode: string; inscriptible: boolean; presentAvant: boolean };
     extensionsSha: Record<string, string>;
     sortiesFils?: any[];
+  };
+  /** Phase 2 : la seconde invocation (`-c`) d'un scénario qui déclare `reprise`. */
+  reprise?: {
+    argv: string[];
+    rc: number | null;
+    signal: string | null;
+    stdout: string;
+    stderr: string;
+    brutes: Brutes;
+    captures: Captures;
+    inventaireAvant: EntreeCwd[];
+    inventaireApres: EntreeCwd[];
+    fichiers: Record<string, string | null>;
   };
 };
 
@@ -243,6 +256,7 @@ export function tenter(o: Options): Tentative {
     const r2 = analyserCaptures(t.brutes, t.contexte);
     t.captures = r2.captures;
     t.constats.push(...r2.constats);
+    if (s.reprise) reprendre(t, s, iso, argv, env, cwd, o.delaiMs);
   } catch (e) {
     if (e instanceof Refus || e instanceof Indetermine) t.refus = e;
     else {
@@ -263,6 +277,36 @@ export function tenter(o: Options): Tentative {
     }
   }
   return t;
+}
+
+/**
+ * Phase 2 : seconde invocation, avec `-c`, dans le même isolement et le même répertoire de sessions.
+ * Les captures de la première sont mises de côté dans `obs/premiere/` avant qu'elle commence ; ses
+ * invites et ses tours sont ceux de `reprise`. Les contrôles de lancement et d'isolement s'y
+ * appliquent comme à la première.
+ */
+function reprendre(t: Tentative, s: Scenario, iso: Isolement, argv: string[], env: Record<string, string>, cwd: string, delaiMs: number | undefined): void {
+  const r = s.reprise!;
+  if (s.session !== "dossier") throw new Error("reprise sans répertoire de sessions déclaré");
+  const invites = 1 + (s.prompts?.length ?? 0);
+  const argv2 = [...argv.slice(0, argv.length - invites), "-c", r.prompt, ...(r.prompts ?? [])];
+  const premiere = join(iso.chemins.obs, "premiere");
+  mkdirSync(premiere);
+  for (const e of readdirSync(iso.chemins.obs)) if (e !== "premiere") renameSync(join(iso.chemins.obs, e), join(premiere, e));
+  writeFileSync(env.PI_CONTRATS_SCENARIO, JSON.stringify({ ...s, tours: r.tours }));
+  verifierLancement(argv2, t.pi!);
+  verifierIsolement(iso, env, cwd, argv2, s.envDeclare ?? {});
+  const inventaireAvant = inventaireCwd(iso.chemins.cwd);
+  const x = spawnSync(t.node!.reel, argv2, { cwd, env, input: "", encoding: "utf8", timeout: delaiMs ?? 120000, maxBuffer: 64 * 1024 * 1024 });
+  const inventaireApres = inventaireCwd(iso.chemins.cwd);
+  const lireRel = (f: string) => (existsSync(join(iso.chemins.cwd, f)) ? readFileSync(join(iso.chemins.cwd, f), "utf8") : null);
+  const fichiers = Object.fromEntries((s.releverFichiers ?? []).map((f) => [f, lireRel(f)]));
+  writeFileSync(join(iso.chemins.obs, "stdout.jsonl"), x.stdout ?? "");
+  writeFileSync(join(iso.chemins.obs, "stderr.txt"), x.stderr ?? "");
+  const brutes = lireBrutes({ ...t, stdout: x.stdout, stderr: x.stderr });
+  const a = analyserCaptures(brutes, { ...t.contexte!, argv: argv2 });
+  t.constats.push(...a.constats.map((c) => ({ ...c, id: `reprise/${c.id}` })));
+  t.reprise = { argv: argv2, rc: x.status, signal: x.signal, stdout: x.stdout ?? "", stderr: x.stderr ?? "", brutes, captures: a.captures, inventaireAvant, inventaireApres, fichiers };
 }
 
 /** M2.12 : un seul `--import`, le traceur du dépôt, et aucun autre chargeur. */
@@ -1762,7 +1806,15 @@ export function observer(t: Tentative): ObservationsMesure | null {
     ...(t.releves ? { extensionsSha: t.releves.extensionsSha, fichiersAvant: t.releves.fichiersAvant } : {}),
     ...(t.releves?.sortiesFils ? { sortiesFils: t.releves.sortiesFils } : {}),
     ...(t.releves?.journalFixture ? { journalFixture: t.releves.journalFixture } : {}),
+    ...(t.reprise ? { reprise: observerReprise(t) } : {}),
   };
+}
+
+/** Phase 2 : observations de la seconde invocation, distinguées de celles de la première. */
+function observerReprise(t: Tentative): ObservationsMesure {
+  const r = t.reprise!;
+  const seconde = observer({ ...t, reprise: undefined, rc: r.rc, stderr: r.stderr, captures: r.captures, argv: r.argv, releves: t.releves ? { ...t.releves, inventaireAvant: r.inventaireAvant, inventaireApres: r.inventaireApres, fichiers: r.fichiers } : undefined })!;
+  return seconde;
 }
 
 /** Copie des pièces d'une tentative (hors copie du candidat, remplacée par son manifeste). */

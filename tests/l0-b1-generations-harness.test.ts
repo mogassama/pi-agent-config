@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
+import { monteeExplicite, type Commande, type Rappel } from "./l0-b2-harness.ts";
 import { readManifest } from "../subagent-only/run-manifest.ts";
 import { openLanes, runBranches } from "../subagent-only/worktree.ts";
 
@@ -105,12 +106,21 @@ async function monter() {
   generation += 1;
   const module = await import(`../extensions/subagent/index.ts?l0b1g=${generation}`);
   let outil: { execute: (id: string, params: unknown, ctx?: unknown) => Promise<unknown> } | undefined;
+  const evenements = new Map<string, Rappel>();
+  const commandes = new Map<string, Commande>();
   module.default({
-    on: () => {},
+    on: (nom: string, h: Rappel) => { evenements.set(nom, h); },
     registerTool: (t: unknown) => { outil = t as typeof outil; },
-    registerCommand: () => {},
+    registerCommand: (nom: string, c: { handler: Commande }) => { commandes.set(nom, c.handler); },
     ui: { setStatus: () => {}, setFooter: () => {} },
   });
+  // Phase 2 : le profil simple est le défaut ; la preuve porte sur le profil sous-agents (H12).
+  const montee = await monteeExplicite({
+    evenement: (nom) => evenements.get(nom),
+    commande: (nom) => commandes.get(nom),
+    actifs: () => ["read", "bash", "edit", "write", "task"],
+  });
+  precondition(montee.ok, `la montée explicite doit réussir : ${montee.ok ? "" : montee.erreur}`);
   const manifeste = readManifest(join(root, RUNS));
   precondition(manifeste !== undefined && outil !== undefined, "le run et l'outil doivent exister");
   const runDir = join(root, RUNS);

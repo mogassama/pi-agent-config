@@ -25,6 +25,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
+import { contexteDEpreuve, monteeExplicite, type Notification, type OptionsDEpreuve } from "./l0-b2-harness.ts";
+import { REFUS_PROFIL_SIMPLE } from "../subagent-only/profil.ts";
 import {
   acquireRunOwnership,
   appendFrozenEvent,
@@ -129,6 +131,17 @@ async function remonter(root: string, avecPlan: boolean) {
     registerCommand: (nom: string, c: { handler: CommandHandler }) => commandes.set(nom, c.handler),
     ui: { setStatus: () => {}, setFooter: () => {} },
   });
+  /*
+   * La reprise d'un dépôt dont l'état durable est devenu illisible : la montée y est refusée
+   * (phase 2, T3, D-P2-5), sans effet. La session reste en profil simple, et `task` y est
+   * refusé par la garde de profil. Le refus de la montée est gardé pour la preuve.
+   */
+  const montee = await monteeExplicite({
+    evenement: (nom) => evenements.get(nom),
+    commande: (nom) => commandes.get(nom) as ((a: string, c: unknown) => unknown) | undefined,
+    actifs: () => ["read", "bash", "edit", "write", "task"],
+  });
+  const options: OptionsDEpreuve = montee.ok ? montee.options : { selectedTools: [], toolGuidelines: {}, sections: {} };
 
   const manifeste = readManifest(join(root, RUNS));
   if (avecPlan && manifeste) {
@@ -140,6 +153,8 @@ async function remonter(root: string, avecPlan: boolean) {
     runDir: join(root, RUNS),
     runId: manifeste?.runId ?? "",
     outil: outil!,
+    options,
+    montee,
     evenement: (nom: string) => evenements.get(nom),
     commande: (nom: string) => commandes.get(nom),
     done: () => {
@@ -149,6 +164,24 @@ async function remonter(root: string, avecPlan: boolean) {
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * La montée explicite du profil sous-agents (phase 2, H12) : `session_start`,
+ * `/subagents on`, puis une invite. Ce harnais ne donne pas d'API d'outils à
+ * l'extension ; l'invite déclare les outils par défaut de pi et `task`.
+ */
+async function monterLeProfil(
+  evenements: Map<string, (...a: unknown[]) => unknown>,
+  commandes: Map<string, CommandHandler>,
+): Promise<OptionsDEpreuve> {
+  const montee = await monteeExplicite({
+    evenement: (nom) => evenements.get(nom),
+    commande: (nom) => commandes.get(nom) as ((a: string, c: unknown) => unknown) | undefined,
+    actifs: () => ["read", "bash", "edit", "write", "task"],
+  });
+  assert.ok(montee.ok, `la montée explicite doit réussir : ${montee.ok ? "" : montee.erreur}`);
+  return montee.options;
 }
 
 async function monter(options: {
@@ -223,6 +256,7 @@ async function monter(options: {
     ui: { setStatus: () => {}, setFooter: () => {} },
   };
   module.default(pi);
+  const optionsDuPrompt = await monterLeProfil(evenements, commandes);
 
   // Le plan gelé, écrit là où le runtime le cherche. Omis pour les scénarios du
   // régime libre : sans plan, il n'y a ni unité, ni lane, ni `laneView`, et une
@@ -238,6 +272,7 @@ async function monter(options: {
     runDir: join(root, RUNS),
     runId: manifeste?.runId ?? "",
     outil: outil!,
+    options: optionsDuPrompt,
     evenement: (nom: string) => evenements.get(nom),
     commande: (nom: string) => commandes.get(nom),
     done: () => {
@@ -257,6 +292,39 @@ const tache = (unite: string) => ({
 const texte = (r: unknown): string =>
   ((r as { content?: Array<{ text?: string }> })?.content ?? []).map((c) => c.text ?? "").join("");
 const enErreur = (r: unknown): boolean => (r as { isError?: boolean })?.isError === true;
+
+/**
+ * La reprise d'un état durable illisible (phase 2, Q-P2-5, `142cb15d…` § 2) : la montée est refusée
+ * avec la raison de l'observateur, la session reste en profil simple et en lecture seule, et `task`
+ * y est refusé par la garde de profil, sans lancement. Les assertions propres à chaque preuve
+ * (raison, absence d'effet) restent dans la preuve.
+ */
+async function repriseRefusee(
+  h: { runId: string; montee?: { ok: boolean; erreur?: string; erreurs?: number }; outil: { execute: (id: string, p: unknown) => Promise<unknown> };
+    commande: (nom: string) => unknown },
+  raison: RegExp[],
+  unite = "W09",
+): Promise<unknown> {
+  assert.ok(h.montee, "une montée de reprise est attendue");
+  assert.equal(h.montee.ok, false, "la montée doit être refusée");
+  const erreur = h.montee.erreur ?? "";
+  assert.equal(h.montee.erreurs, 1, "une seule notification de genre error");
+  assert.ok(erreur.startsWith(`Montée refusée : run ${h.runId} (`), erreur);
+  assert.match(erreur, /état durable illisible/);
+  for (const r of raison) assert.match(erreur, r);
+  assert.match(erreur, /Rien n'a été ouvert ni écrit/);
+  const vu: Notification[] = [];
+  await (h.commande("subagents") as (a: string, c: unknown) => unknown)("", contexteDEpreuve({ notifications: vu }));
+  const etat = vu.map((n) => n.texte).join("\n");
+  assert.match(etat, /Profil : simple\./, etat);
+  assert.match(etat, /Lecture seule : oui\./, etat);
+  const avant = APPELS.length;
+  const r = await h.outil.execute("reprise", tache(unite));
+  assert.ok(enErreur(r), texte(r));
+  assert.equal(texte(r), REFUS_PROFIL_SIMPLE);
+  assert.equal(APPELS.length, avant, "aucun lancement");
+  return r;
+}
 const lanes = (root: string): string[] => {
   const dir = join(root, ".git", "pi-lanes");
   return existsSync(dir)
@@ -487,12 +555,15 @@ test("une session reprise retrouve la lane ouverte par la précédente", async (
   compteur += 1;
   const module = await import(`../extensions/subagent/index.ts?scenario=${compteur}`);
   let outil2: { execute: (id: string, p: unknown) => Promise<unknown> } | undefined;
+  const evenementsMontee = new Map<string, (...a: unknown[]) => unknown>();
+  const commandesMontee = new Map<string, CommandHandler>();
   module.default({
-    on: () => {},
+    on: (nom: string, h: (...a: unknown[]) => unknown) => evenementsMontee.set(nom, h),
     registerTool: (t: unknown) => { outil2 = t as typeof outil2; },
-    registerCommand: () => {},
+    registerCommand: (nom: string, c: { handler: CommandHandler }) => commandesMontee.set(nom, c.handler),
     ui: { setStatus: () => {}, setFooter: () => {} },
   });
+  await monterLeProfil(evenementsMontee, commandesMontee);
 
   try {
     // Le run est le même, et la lane de W03 est reconnue comme ouverte.
@@ -537,12 +608,15 @@ test("une contradiction ferme le run, et sa résolution le rouvre", async () => 
       compteur += 1;
       const module = await import(`../extensions/subagent/index.ts?scenario=${compteur}`);
       let outil: { execute: (id: string, p: unknown) => Promise<unknown> } | undefined;
+      const evenementsMontee = new Map<string, (...a: unknown[]) => unknown>();
+      const commandesMontee = new Map<string, CommandHandler>();
       module.default({
-        on: () => {},
+        on: (nom: string, h: (...a: unknown[]) => unknown) => evenementsMontee.set(nom, h),
         registerTool: (t: unknown) => { outil = t as typeof outil; },
-        registerCommand: () => {},
+        registerCommand: (nom: string, c: { handler: CommandHandler }) => commandesMontee.set(nom, c.handler),
         ui: { setStatus: () => {}, setFooter: () => {} },
       });
+      await monterLeProfil(evenementsMontee, commandesMontee);
       return outil!;
     };
 
@@ -583,12 +657,15 @@ test("un worktree orphelin est signalé, jamais adopté", async () => {
     compteur += 1;
     const module = await import(`../extensions/subagent/index.ts?scenario=${compteur}`);
     let outil2: { execute: (id: string, p: unknown) => Promise<unknown> } | undefined;
+    const evenementsMontee = new Map<string, (...a: unknown[]) => unknown>();
+    const commandesMontee = new Map<string, CommandHandler>();
     module.default({
-      on: () => {},
+      on: (nom: string, h: (...a: unknown[]) => unknown) => evenementsMontee.set(nom, h),
       registerTool: (t: unknown) => { outil2 = t as typeof outil2; },
-      registerCommand: () => {},
+      registerCommand: (nom: string, c: { handler: CommandHandler }) => commandesMontee.set(nom, c.handler),
       ui: { setStatus: () => {}, setFooter: () => {} },
     });
+    await monterLeProfil(evenementsMontee, commandesMontee);
 
     const r = await outil2!.execute("1", tache("W09"));
     assert.match(texte(r), /worktree-orphelin/);
@@ -736,12 +813,15 @@ test("un worktree sale après intégration ferme le run", async () => {
     compteur += 1;
     const module = await import(`../extensions/subagent/index.ts?scenario=${compteur}`);
     let outil: { execute: (id: string, p: unknown) => Promise<unknown> } | undefined;
+    const evenementsMontee = new Map<string, (...a: unknown[]) => unknown>();
+    const commandesMontee = new Map<string, CommandHandler>();
     module.default({
-      on: () => {},
+      on: (nom: string, h: (...a: unknown[]) => unknown) => evenementsMontee.set(nom, h),
       registerTool: (t: unknown) => { outil = t as typeof outil; },
-      registerCommand: () => {},
+      registerCommand: (nom: string, c: { handler: CommandHandler }) => commandesMontee.set(nom, c.handler),
       ui: { setStatus: () => {}, setFooter: () => {} },
     });
+    await monterLeProfil(evenementsMontee, commandesMontee);
 
     const r = await outil!.execute("1", tache("W09"));
     assert.ok(enErreur(r), texte(r));
@@ -1358,7 +1438,9 @@ test("le prompt n'ordonne pas d'écrire là où le préflight refuse", async () 
    */
   const h = await monter({ ignoreInstrumentation: false, avecPlan: false });
   try {
-    const g = (h.outil.promptGuidelines ?? []).join("\n");
+    // Phase 2 : les guidelines du run courant sont posées à l'invite (`toolGuidelines.task`) ;
+    // celles de l'enregistrement restent lues aussi.
+    const g = [...(h.outil.promptGuidelines ?? []), ...(h.options.toolGuidelines.task ?? [])].join("\n");
     assert.doesNotMatch(g, /-plan\.json/, "aucune instruction d'écrire un plan");
     assert.match(g, /not ready for a run/);
     assert.match(g, /restart pi/);
@@ -1370,8 +1452,32 @@ test("le prompt n'ordonne pas d'écrire là où le préflight refuse", async () 
 test("le prompt demande un plan quand le dépôt est prêt", async () => {
   const h = await monter();
   try {
-    const g = (h.outil.promptGuidelines ?? []).join("\n");
+    // Phase 2 : le chemin du run courant est donné à l'invite, dans `toolGuidelines.task`.
+    const g = (h.options.toolGuidelines.task ?? []).join("\n");
     assert.match(g, new RegExp(`${RUNS}/${h.runId}-plan\\.json`));
+  } finally {
+    h.done();
+  }
+});
+
+test("les textes enregistrés de task gardent la forme générique ; l'invite montée porte le run courant (Q-P2-7)", async () => {
+  /*
+   * Témoin du texte générique (phase 2, § 12.6 bis). `task` est enregistré au chargement, quand aucun
+   * run n'est ouvert : sa guideline du plan et la description de `work_unit` portent la forme
+   * littérale `<runId>`. Après la montée, la guideline de l'invite porte l'identité courante, et la
+   * forme générique n'y paraît plus.
+   */
+  const h = await monter();
+  try {
+    const generique = `${RUNS}/<runId>-plan.json`;
+    const enregistre = (h.outil.promptGuidelines ?? []).join("\n");
+    assert.ok(enregistre.includes(generique), "la guideline enregistrée porte la forme générique");
+    const description = JSON.stringify((h.outil as { parameters?: unknown }).parameters ?? {});
+    assert.ok(description.includes(generique), "la description de work_unit porte la forme générique");
+    assert.notEqual(h.runId, "", "la montée a ouvert un run");
+    const invite = (h.options.toolGuidelines.task ?? []).join("\n");
+    assert.ok(invite.includes(`${RUNS}/${h.runId}-plan.json`), "l'invite porte le run courant");
+    assert.ok(!invite.includes("<runId>"), "l'invite ne porte plus la forme générique");
   } finally {
     h.done();
   }
@@ -2181,12 +2287,46 @@ test("un contexte sans provenance ferme la porte au redémarrage", async () => {
     const lanes = join(h.runDir, `${h.runId}-lanes.jsonl`);
     assert.match(readFileSync(manifeste, "utf-8"), /"integrations": 1/, "le témoin des intégrations doit être publié");
     rmSync(integrations);
-    h2 = await redemarrer(h);
+    // Le redémarrage en deux temps : la fin de session d'abord, puis le relevé, puis la session neuve
+    // dont la montée est refusée. Le relevé précède donc la montée (Q-P2-5 : absence d'effet).
+    await h.evenement("session_shutdown")?.();
+    const manifesteAvant = readFileSync(manifeste, "utf-8");
+    const lanesAvant = readFileSync(lanes, "utf-8");
+    const appelsAvant = APPELS.length;
+    process.chdir(REPO);
+    h2 = await monter({ reprendre: h.root });
+
+    // Reprise (Q-P2-5) : la montée est refusée avant tout effet, sur la raison de l'observateur.
+    await repriseRefusee(h2, [/registre des intégrations inexploitable/, /\(LOST\)/,
+      /registre absent, alors que le manifeste l'atteste/]);
+    assert.deepEqual(APPELS.slice(appelsAvant).filter((a) => a.agent === "worker" && a.task.includes("W09")), []);
+    assert.equal(existsSync(integrations), false, "le registre des intégrations n'est pas recréé");
+    assert.equal(readFileSync(manifeste, "utf-8"), manifesteAvant, "le manifeste et son témoin restent intacts");
+    assert.equal(readFileSync(lanes, "utf-8"), lanesAvant, "le registre des lanes reste intact");
+  } finally {
+    (h2 ?? h).done();
+  }
+});
+
+test("un contexte sans provenance ferme la porte dans la session (volet en session, Q-P2-5)", async () => {
+  // Même corruption après une montée admise, sans redémarrage : la porte du runtime parle.
+  const h = await monter();
+  try {
+    await conflit(h);
+    await h.outil.execute("2", revueDe("approved"));
+    PILOTE.resultat = undefined;
+
+    const integrations = join(h.runDir, `${h.runId}-integrations.jsonl`);
+    const manifeste = join(h.runDir, "active-run.json");
+    const lanes = join(h.runDir, `${h.runId}-lanes.jsonl`);
+    // Montée admise : `monter` l'exige (monterLeProfil).
+    assert.match(readFileSync(manifeste, "utf-8"), /"integrations": 1/, "le témoin des intégrations doit être publié");
+    rmSync(integrations);
     const manifesteAvant = readFileSync(manifeste, "utf-8");
     const lanesAvant = readFileSync(lanes, "utf-8");
     const appelsAvant = APPELS.length;
 
-    const r = await h2.outil.execute("1", tache("W09"));
+    const r = await h.outil.execute("1", tache("W09"));
     assert.ok(enErreur(r), texte(r));
     assert.match(texte(r), /tentatives d'intégration à trancher|journal-illisible/);
     assert.match(texte(r), /LOST/);
@@ -2197,7 +2337,7 @@ test("un contexte sans provenance ferme la porte au redémarrage", async () => {
     assert.equal(readFileSync(manifeste, "utf-8"), manifesteAvant, "le manifeste et son témoin restent intacts");
     assert.equal(readFileSync(lanes, "utf-8"), lanesAvant, "le registre des lanes reste intact");
   } finally {
-    (h2 ?? h).done();
+    h.done();
   }
 });
 
@@ -2329,13 +2469,35 @@ test("un registre de tentatives inexploitable ferme la porte au redémarrage", a
       abimer(join(h.runDir, `${h.runId}-integrations.jsonl`));
       h2 = await redemarrer(h);
 
+      // Reprise (Q-P2-5) : la montée est refusée ; une unité sans rapport l'est par le profil.
+      await repriseRefusee(h2, [/registre des intégrations inexploitable/, /inexploitable \(UNKNOWN\)/,
+        /version 2 au lieu de 1|ligne\(s\) \d+ illisible\(s\)/]);
+    } finally {
+      (h2 ?? h).done();
+    }
+  }
+});
+
+test("un registre de tentatives inexploitable ferme la porte dans la session (volet en session, Q-P2-5)", async () => {
+  for (const abimer of [
+    (p: string) => writeFileSync(p, `${JSON.stringify({ integration_ledger: 2 })}\n`),
+    (p: string) => writeFileSync(p, `${readFileSync(p, "utf-8")}{ pas du json\n`),
+  ]) {
+    const h = await monter();
+    try {
+      await conflit(h);
+      await h.outil.execute("2", revueDe("approved"));
+      PILOTE.resultat = undefined;
+      // Montée admise : `monter` l'exige (monterLeProfil).
+
+      abimer(join(h.runDir, `${h.runId}-integrations.jsonl`));
       // Une unité sans rapport est refusée : la porte est celle du run.
-      const r = await h2.outil.execute("1", tache("W09"));
+      const r = await h.outil.execute("1", tache("W09"));
       assert.ok(enErreur(r), texte(r));
       assert.match(texte(r), /journal-illisible/);
       assert.match(texte(r), /inexploitable/);
     } finally {
-      (h2 ?? h).done();
+      h.done();
     }
   }
 });
@@ -2558,13 +2720,30 @@ test("un lane ledger corrompu ferme le runtime et l'outil de la même façon", a
     );
     assert.equal(existsSync(join(h.root, ".git", "pi-integrations", id)), true);
 
-    // Et le runtime refuse aussi, pour la même raison.
+    // Et le runtime refuse aussi, pour la même raison : à la reprise, c'est la montée (Q-P2-5).
     process.chdir(REPO);
     h2 = await monter({ reprendre: h.root });
-    const d = await h2.outil.execute("1", tache("W09"));
-    assert.ok(enErreur(d), texte(d));
+    await repriseRefusee(h2, [/registre des lanes inexploitable/, /registre des lanes est inexploitable \(UNKNOWN\)/,
+      /illisible\(s\)/]);
   } finally {
     (h2 ?? h).done();
+  }
+});
+
+test("un lane ledger corrompu ferme le runtime dans la session (volet en session, Q-P2-5)", async () => {
+  const h = await monter();
+  try {
+    await tentativeOuverte(h);
+    // Montée admise : `monter` l'exige (monterLeProfil). La corruption suit, dans la même session.
+    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "{ pas du json\n");
+    const avant = APPELS.length;
+    const d = await h.outil.execute("1", tache("W09"));
+    assert.ok(enErreur(d), texte(d));
+    assert.match(texte(d), /\[run: registre illisible\]/);
+    assert.match(texte(d), /Aucune délégation n'a été lancée/);
+    assert.equal(APPELS.length, avant, "aucun lancement");
+  } finally {
+    h.done();
   }
 });
 
@@ -2977,13 +3156,36 @@ test("un registre de lanes amputé ferme le runtime et l'outil de la même faço
       "",
     );
 
-    // Et le runtime refuse aussi, pour la même raison.
+    // Et le runtime refuse aussi, pour la même raison : à la reprise, c'est la montée (Q-P2-5).
     process.chdir(REPO);
     h2 = await monter({ reprendre: h.root });
-    const d = await h2.outil.execute("1", tache("W09"));
-    assert.ok(enErreur(d), texte(d));
+    await repriseRefusee(h2, [/registre des lanes inexploitable/, /registre des lanes est inexploitable \(UNKNOWN\)/,
+      /illisible\(s\)/]);
   } finally {
     (h2 ?? h).done();
+  }
+});
+
+test("un registre de lanes amputé ferme le runtime dans la session (volet en session, Q-P2-5)", async () => {
+  const h = await monter();
+  try {
+    const laneDir = join(h.root, ".git", "pi-lanes", `${h.runId}-W03-g1`);
+    PILOTE.pendant = () => { writeFileSync(join(laneDir, "src", "a.py"), "a = 'lane'\n"); };
+    await h.outil.execute("1", tache("W03"));
+    PILOTE.pendant = undefined;
+    PILOTE.resultat = { verdict: "approved", changedFiles: [] } as never;
+    await h.outil.execute("2", { agent: "reviewer", work_unit: "W03", task: "juger" });
+    PILOTE.resultat = undefined;
+    // Montée admise : `monter` l'exige (monterLeProfil). La corruption suit, dans la même session.
+    appendFileSync(join(h.runDir, `${h.runId}-lanes.jsonl`), "{ pas du json\n");
+    const avant = APPELS.length;
+    const d = await h.outil.execute("3", tache("W09"));
+    assert.ok(enErreur(d), texte(d));
+    assert.match(texte(d), /\[run: registre illisible\]/);
+    assert.match(texte(d), /Aucune délégation n'a été lancée/);
+    assert.equal(APPELS.length, avant, "aucun lancement");
+  } finally {
+    h.done();
   }
 });
 

@@ -35,6 +35,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
+import { monteeExplicite, type Commande, type Rappel } from "./l0-b2-harness.ts";
 import { acquireRunOwnership, readManifest, releaseRunOwnership, type Lease } from "../subagent-only/run-manifest.ts";
 import secretGate from "../extensions/pi-secret-gate/index.ts";
 
@@ -111,12 +112,20 @@ async function charger(root: string) {
   const module = await import(`../extensions/subagent/index.ts?l0a=${generation}`);
   let outil: { execute: (id: string, params: unknown, ctx?: unknown) => Promise<unknown> } | undefined;
   const handlers = new Map<string, (...a: unknown[]) => unknown>();
+  const commandes = new Map<string, Commande>();
   module.default({
     on: (nom: string, h: (...a: unknown[]) => unknown) => handlers.set(nom, h),
     registerTool: (t: unknown) => { outil = t as typeof outil; },
-    registerCommand: () => {},
+    registerCommand: (nom: string, c: { handler: Commande }) => { commandes.set(nom, c.handler); },
     ui: { setStatus: () => {}, setFooter: () => {} },
   });
+  // Phase 2 : le profil simple est le défaut ; la preuve porte sur le profil sous-agents (H12).
+  const montee = await monteeExplicite({
+    evenement: (nom) => handlers.get(nom) as Rappel | undefined,
+    commande: (nom) => commandes.get(nom),
+    actifs: () => ["read", "bash", "edit", "write", "task"],
+  });
+  precondition(montee.ok, `la montée explicite doit réussir : ${montee.ok ? "" : montee.erreur}`);
   const manifeste = readManifest(join(root, RUNS));
   precondition(manifeste !== undefined, "le run n'a pas été publié au chargement");
   precondition(outil !== undefined, "l'outil task n'a pas été enregistré");

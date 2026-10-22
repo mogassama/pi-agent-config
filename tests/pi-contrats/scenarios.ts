@@ -7,6 +7,7 @@
  * « violé », « indéterminé », avec le compte examiné. Aucun ne lit le disque.
  */
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { ScenarioFournisseur } from "./fournisseur-scripte.ts";
 
 export type Etat = "satisfait" | "violé" | "indéterminé";
@@ -54,6 +55,12 @@ export type Scenario = ScenarioFournisseur & {
   outils: string;
   /** « dossier » : `--session-dir` temporaire à la place de `--no-session`. */
   session?: "aucune" | "dossier";
+  /**
+   * Phase 2 (R04, R07, R08-c) : seconde invocation de pi après la première, mêmes isolement et
+   * répertoire de sessions, avec `-c` et ses propres invites et tours. Exige `session: "dossier"`.
+   * Les observations des deux invocations sont conservées et distinguées (`reprise` des observations).
+   */
+  reprise?: { prompt: string; prompts?: string[]; tours: ScenarioFournisseur["tours"] };
   /** K1 : variables complémentaires déclarées, à valeur exacte. */
   envDeclare?: Record<string, string>;
   /** Fichiers posés sous PI_CODING_AGENT_DIR avant lancement, chemin relatif → contenu texte. */
@@ -593,6 +600,8 @@ export type ObservationsMesure = {
   sortiesFils?: any[];
   /** B5 : fixture du journal en lecture seule, établie avant lancement. */
   journalFixture?: { chemin: string; dossier: string; mode: string; inscriptible: boolean; presentAvant: boolean };
+  /** Phase 2 : observations de la seconde invocation (`-c`), quand le scénario déclare `reprise`. */
+  reprise?: ObservationsMesure;
 };
 
 export type EntreeCwd = { chemin: string; type: "fichier" | "dossier" | "lien" | "autre"; sha256?: string };
@@ -1930,14 +1939,17 @@ export function verifierSansCompaction(clause: string) {
 // C2.9 — subagent (K2)
 export const C2_9: Scenario = {
   nom: "c2-9-subagent",
-  prompt: "délègue",
+  // Phase 2 : le profil simple est celui du démarrage ; `task` n'est déclaré qu'après la montée.
+  prompt: "/subagents on",
+  prompts: ["délègue"],
   outils: "read,ls,grep,find,task",
   tours: [outil("t1", "task", { agent: "scout", task: "explorer le dépôt" }), { texte: "refus lu" }],
   usage: USAGE,
   contextWindow: 100000,
   extensionsDepot: [POINTS_C2["C2.9"]],
 };
-export const C2_9_B: Scenario = { ...C2_9, nom: "c2-9-b-sans-agents", retirerDuCandidat: ["subagent-only/agents"], outils: "read,ls,grep,find" };
+// Sans définitions d'agents, `task` n'est pas enregistré et le scénario ne monte pas : l'argv de la base est gardé.
+export const C2_9_B: Scenario = { ...C2_9, nom: "c2-9-b-sans-agents", prompt: "délègue", prompts: [], retirerDuCandidat: ["subagent-only/agents"], outils: "read,ls,grep,find" };
 /** B4 : contrôle de la contre-épreuve : point d'entrée évalué, task absent, message stderr de la fixture déclarée. */
 export function verifierC2_9B(o: ObservationsMesure): Verdict {
   const e = nouveauxEcarts();
@@ -1964,8 +1976,590 @@ function comportementC2_9(o: ObservationsMesure): Verdict {
   }
   return conclure("C2.9/comportement", e, r.length + o.fils.length);
 }
+/**
+ * Outils déclarés à une requête du fournisseur : ceux de `context.tools`, puis, dans l'ordre des
+ * messages system bruts, `toolsAdded` ajoutés et `toolsRemoved` retirés (pi 0.86.0 déclare les
+ * outils par ces métadonnées). Null si une forme n'est pas classable.
+ */
+export function outilsDeclares(entree: any): string[] | null {
+  if (entree === null || typeof entree !== "object" || !Array.isArray(entree.outils) || !Array.isArray(entree.systemes)) return null;
+  const n = new Set<string>(entree.outils);
+  for (const m of entree.systemes) {
+    for (const [cle, ajout] of [["toolsAdded", true], ["toolsRemoved", false]] as const) {
+      if (!(cle in m)) continue;
+      const l = m[cle];
+      if (!Array.isArray(l) || l.some((x: unknown) => typeof x !== "string")) return null;
+      for (const x of l) if (ajout) n.add(x); else n.delete(x);
+    }
+  }
+  return [...n].sort();
+}
+
+/** Phase 2 : après le préambule `/subagents on`, `task` est déclaré dans la requête qui porte t1. */
+export function monteeC2_9(o: ObservationsMesure): Verdict {
+  const e = nouveauxEcarts();
+  const a = o.fournisseur.filter((x) => x.appel === 0);
+  if (a.length !== 1) exiger(e, "C2.9/montee-capture", false, "indéterminé", `appel 0 du fournisseur : ${a.length} entrée(s)`);
+  else {
+    const outils = outilsDeclares(a[0]);
+    if (outils === null) exiger(e, "C2.9/montee-forme", false, "indéterminé", "appel 0 : déclaration d'outils non classable");
+    else exiger(e, "C2.9/montee", outils.includes("task"), "violé", `outils déclarés à la requête de t1 : ${outils.join(", ") || "aucun"}`, `task déclaré dans la requête qui porte t1 (outils : ${outils.join(", ")})`);
+  }
+  return conclure("C2.9/montee", e, a.length);
+}
 export function verifierC2_9(o: ObservationsMesure): Verdict[] {
-  return verdictsC2(o, "C2.9", [enregOutil(o, "C2.9", "task"), enregCommande(o, "C2.9", "subagent-report")], [comportementC2_9(o)]);
+  return verdictsC2(o, "C2.9", [enregOutil(o, "C2.9", "task"), enregCommande(o, "C2.9", "subagent-report")], [comportementC2_9(o), monteeC2_9(o)]);
+}
+
+// ── Phase 2 : pilote R (C2.9/R01 à C2.9/R09), plan § 12.5 et § 12.7 ─────────────────────────
+//
+// Chaque cas porte sur le prompt et les outils reçus par le fournisseur scripté, rendus depuis
+// les messages system bruts et leurs métadonnées (`sections`, `toolsAdded`, `toolsRemoved`).
+// L'ordre de chargement effectif des points d'entrée (`-e`) est consigné dans chaque verdict.
+
+/** La section `delegation` attendue : le texte de `subagent-only/DELEGATION.md` du dépôt, enveloppé. */
+export function sectionDelegation(): string {
+  return `<delegation>\n${readFileSync(new URL("../../subagent-only/DELEGATION.md", import.meta.url), "utf8")}\n</delegation>`;
+}
+/** La première guideline de `task`, présente à chaque invite en sous-agents où `task` est dû. */
+export const GUIDELINE_TASK = "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.";
+/** Le refus exact de `task` quand le préflight a échoué (texte de la base, à l'octet). */
+export const REFUS_PREFLIGHT_R05 =
+  "Refusé : ce dépôt n'est pas prêt pour un run.\n" +
+  ".pi-subagent-runs/ n'est pas ignoré par ce dépôt. Le runtime y écrit le manifeste, le plan gelé et le registre des lanes ; sans exclusion, la racine reste sale en permanence et aucune intégration ne peut partir — elles exigent une racine dont chaque état est dans un commit. Ajouter `.pi-subagent-runs/` au `.gitignore` du dépôt, ou à `.git/info/exclude` pour ne pas toucher au dépôt partagé.\n" +
+  "Aucun run n'a été ouvert et rien n'a été écrit.";
+/** Le refus de pi pour un outil inactif, avant `execute` (R06, R07). */
+export const OUTIL_INTROUVABLE = (nom: string) => `Tool ${nom} not found`;
+export const BRIEF_R08 = "# Brief de fixture\n\nMARQUEUR-BRIEF-R08 : orientation déclarée par le scénario.\n";
+export const BLOC_BRIEF_R08 = `\n\n## Project brief\n\n${BRIEF_R08}`;
+/** Un run non terminé préparé avant la première invocation (R07) : bloqué, sans autre pièce. */
+export const RUN_ID_R07 = "00000000000000a7";
+export const MANIFESTE_R07 = `${JSON.stringify({ version: 2, runId: RUN_ID_R07, status: "planning", nextSeq: 1, continuation_block: { at: "2026-10-17T00:00:00.000Z", code: "RUN_CONTINUATION_BLOCKED" } }, null, 2)}\n`;
+
+const compter = (texte: string, motif: string): number => (motif === "" ? 0 : texte.split(motif).length - 1);
+const ordreChargement = (o: ObservationsMesure): string =>
+  `ordre de chargement : ${(o.extensions ?? []).map((f) => f.replace(`${o.candidat ?? "\u0000"}/`, "").replace(/^.*\/tests\/pi-contrats\//, "tests/pi-contrats/")).join(" → ") || "inconnu"}`;
+/** Les requêtes reçues, dans l'ordre des appels. */
+const requetes = (o: ObservationsMesure): any[] => [...o.fournisseur].sort((a, b) => a.appel - b.appel);
+/** Le runId du run courant, relu dans le manifeste relevé après l'exécution, ou null. */
+function runCourant(o: ObservationsMesure): string | null {
+  const t = o.fichiers?.[".pi-subagent-runs/active-run.json"];
+  if (typeof t !== "string") return null;
+  try {
+    const m = JSON.parse(t);
+    return typeof m?.runId === "string" ? m.runId : null;
+  } catch {
+    return null;
+  }
+}
+export const guidelinePlan = (runId: string) => `write a decomposition to .pi-subagent-runs/${runId}-plan.json:`;
+
+/** Ce qu'une requête porte : prompt rendu, outils déclarés, prompt forcé, dernière valeur de la section. */
+type Requete = { appel: number; prompt: string; outils: string[]; force: boolean; contenus: string[]; derniere: any };
+function lireRequete(x: any, e: Ecarts, id: string): Requete | null {
+  if (!Array.isArray(x?.systemes) || x.systemes.length === 0) {
+    exiger(e, `${id}/capture`, false, "indéterminé", `appel ${x?.appel} : messages system bruts absents du journal`);
+    return null;
+  }
+  const prompt = rendrePrompt(x.systemes);
+  const outils = outilsDeclares(x);
+  if (prompt === null || outils === null) {
+    exiger(e, `${id}/forme`, false, "indéterminé", `appel ${x.appel} : forme de message system ou de déclaration d'outils non classable`);
+    return null;
+  }
+  const contenus = x.systemes.map((m: any) => texteContent(m.content) ?? "");
+  const force = x.systemPrompt !== null || contenus.some((c: string) => c.length > 0);
+  return { appel: x.appel, prompt, outils, force, contenus, derniere: x.systemes[x.systemes.length - 1] };
+}
+
+/** Le profil simple sur une requête : ni `task`, ni section ni texte de délégation, ni guideline. */
+function exigerSimple(e: Ecarts, id: string, r: Requete, delegation: string): void {
+  exiger(e, `${id}/task`, !r.outils.includes("task"), "violé", `appel ${r.appel} : task déclaré`, `appel ${r.appel} : task non déclaré`);
+  exiger(e, `${id}/delegation`, compter(r.prompt, delegation) === 0 && !r.prompt.includes("<delegation>"), "violé", `appel ${r.appel} : délégation présente dans le prompt`, `appel ${r.appel} : aucune délégation`);
+  exiger(e, `${id}/guidelines`, compter(r.prompt, GUIDELINE_TASK) === 0, "violé", `appel ${r.appel} : guideline de task présente`, `appel ${r.appel} : aucune guideline de task`);
+}
+/** Les sous-agents sur une requête : `task` déclaré, délégation complète une fois, guidelines du run une fois. */
+function exigerSousAgents(e: Ecarts, id: string, r: Requete, delegation: string, runId: string | null): void {
+  exiger(e, `${id}/task`, r.outils.includes("task"), "violé", `appel ${r.appel} : task non déclaré`, `appel ${r.appel} : task déclaré`);
+  exiger(e, `${id}/delegation`, compter(r.prompt, delegation) === 1, "violé", `appel ${r.appel} : délégation complète ${compter(r.prompt, delegation)} fois`, `appel ${r.appel} : délégation complète une fois`);
+  exiger(e, `${id}/guidelines`, compter(r.prompt, GUIDELINE_TASK) === 1, "violé", `appel ${r.appel} : guideline de task ${compter(r.prompt, GUIDELINE_TASK)} fois`, `appel ${r.appel} : guidelines de task une fois`);
+  if (runId === null) exiger(e, `${id}/run`, false, "indéterminé", "manifeste du run courant non relevé");
+  else exiger(e, `${id}/run-courant`, compter(r.prompt, guidelinePlan(runId)) === 1, "violé", `appel ${r.appel} : guideline du plan sans le run courant ${runId}`, `appel ${r.appel} : guideline du plan du run courant ${runId}`);
+}
+/** Aucun prompt forcé introduit : `systemPrompt` absent et contenus system vides à chaque requête. */
+function exigerSansForce(e: Ecarts, id: string, r: Requete): void {
+  exiger(e, `${id}/sans-force`, !r.force, "violé", `appel ${r.appel} : prompt forcé reçu`, `appel ${r.appel} : aucun prompt forcé`);
+}
+/** Les requêtes attendues, lues ; null si leur nombre ou leur forme ne permet pas de juger. */
+function lireRequetes(o: ObservationsMesure | undefined, e: Ecarts, id: string, n: number): Requete[] | null {
+  if (!o) {
+    exiger(e, `${id}/capture`, false, "indéterminé", "observations absentes");
+    return null;
+  }
+  const q = requetes(o);
+  if (q.length !== n) {
+    exiger(e, `${id}/capture`, false, "indéterminé", `${q.length} requête(s) reçue(s), ${n} attendue(s)`);
+    return null;
+  }
+  const rs = q.map((x) => lireRequete(x, e, id));
+  return rs.every((r) => r !== null) ? (rs as Requete[]) : null;
+}
+/** Aucun enfant autre que git, et le cwd inchangé (aucun artefact) ; `sauf` : chemins tolérés. */
+function exigerSansEffet(e: Ecarts, id: string, o: ObservationsMesure): void {
+  const enfants = o.fils.filter((f) => String(f.commande).split("/").pop() !== "git");
+  exiger(e, `${id}/sans-enfant`, enfants.length === 0, "violé", `lancements autres que git : ${enfants.map((f) => f.commande).join(", ")}`, "aucun enfant");
+  if (!o.inventaireCwd) exiger(e, `${id}/inventaire`, false, "indéterminé", "inventaires du cwd absents");
+  else {
+    const a = new Set(o.inventaireCwd.avant.map((x) => JSON.stringify(x)));
+    const ajouts = o.inventaireCwd.apres.filter((x) => !a.has(JSON.stringify(x)));
+    exiger(e, `${id}/sans-artefact`, ajouts.length === 0 && o.inventaireCwd.apres.length === o.inventaireCwd.avant.length, "violé", `artefacts : ${ajouts.map((x) => x.chemin).join(", ")}`, "cwd inchangé");
+  }
+}
+const resultatTexte = (o: ObservationsMesure, id: string): string | null => {
+  const r = resultatDe(o, id);
+  return r.length === 1 ? texteResultat(r[0]) : null;
+};
+
+const BASE_R = {
+  usage: USAGE,
+  contextWindow: 100000,
+  extensionsDepot: [POINTS_C2["C2.9"]],
+  fichiersCwd: { ".gitignore": ".pi-subagent-runs/\n" },
+  releverFichiers: [".pi-subagent-runs/active-run.json"],
+};
+
+// R01 — démarrage simple, une invite
+export const R01: Scenario = { ...BASE_R, nom: "p2-r01-simple", prompt: "bonjour", outils: "read,ls,grep,find,task", tours: [{ texte: "r1" }] };
+export function verifierR01(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  const q = lireRequetes(o, e, "R01", 1);
+  if (q) {
+    exigerSimple(e, "R01", q[0], d);
+    exiger(e, "R01/section", !requetes(o)[0].systemes.some((m: any) => m.sections && typeof m.sections === "object" && "delegation" in m.sections), "violé", "une section delegation est posée en simple", "aucune section delegation posée");
+  }
+  exiger(e, "R01/sans-run", !(o.inventaireCwd?.apres ?? []).some((x) => x.chemin.startsWith(".pi-subagent-runs")), "violé", "un espace des runs a été créé en simple", "aucun espace des runs créé");
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R01", e, q?.length ?? 0)];
+}
+
+// R02 — `/subagents on` avant la première invite, puis deux invites
+export const R02: Scenario = { ...BASE_R, nom: "p2-r02-montee", prompt: "/subagents on", prompts: ["un", "deux"], outils: "read,ls,grep,find,task", tours: [{ texte: "r1" }, { texte: "r2" }] };
+export function verifierR02(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  const q = lireRequetes(o, e, "R02", 2);
+  if (q) for (const r of q) {
+    exigerSousAgents(e, "R02", r, d, runCourant(o));
+    exigerSansForce(e, "R02", r);
+  }
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R02", e, q?.length ?? 0)];
+}
+
+// R03 — invite simple, montée, invite, descente, invite
+export const R03: Scenario = { ...BASE_R, nom: "p2-r03-on-off", prompt: "un", prompts: ["/subagents on", "deux", "/subagents off", "trois"], outils: "read,ls,grep,find,task", tours: [{ texte: "r1" }, { texte: "r2" }, { texte: "r3" }] };
+export function verifierR03(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  const q = lireRequetes(o, e, "R03", 3);
+  if (q) {
+    exigerSimple(e, "R03", q[0], d);
+    exigerSousAgents(e, "R03", q[1], d, runCourant(o));
+    const monte = q[1].derniere;
+    exiger(e, "R03/patch-montee", monte?.sections?.delegation === d && Array.isArray(monte?.toolsAdded) && monte.toolsAdded.includes("task"), "violé", "la montée n'est pas un patch de section avec toolsAdded: task", "montée : patch de section delegation et toolsAdded: task");
+    exigerSimple(e, "R03", q[2], d);
+    const descend = q[2].derniere;
+    exiger(e, "R03/patch-descente", descend?.sections !== undefined && descend.sections.delegation === null && Array.isArray(descend?.toolsRemoved) && descend.toolsRemoved.includes("task"), "violé", "la descente n'est pas une section null avec toolsRemoved: task", "descente : section delegation null et toolsRemoved: task (non-additivité déclarée)");
+    for (const r of q) exigerSansForce(e, "R03", r);
+  }
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R03", e, q?.length ?? 0)];
+}
+
+// R04 — reprise (`-c`) d'une transcription montée
+export const R04: Scenario = { ...BASE_R, nom: "p2-r04-reprise", prompt: "/subagents on", prompts: ["un"], outils: "read,ls,grep,find,task", session: "dossier", tours: [{ texte: "r1" }], reprise: { prompt: "deux", tours: [{ texte: "r2" }] } };
+export function verifierR04(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  const q = lireRequetes(o, e, "R04", 1);
+  if (q) exigerSousAgents(e, "R04/premiere", q[0], d, runCourant(o));
+  const q2 = lireRequetes(o.reprise, e, "R04/reprise", 1);
+  if (q2) {
+    exigerSimple(e, "R04/reprise", q2[0], d);
+    const msgs = requetes(o.reprise!)[0].messages.map((m: any) => `${m.role}:${m.texte}`);
+    exiger(e, "R04/histoire", msgs.includes("user:un") && msgs.includes("assistant:r1"), "violé", `histoire effacée : ${msgs.join(" | ")}`, "histoire de la première session conservée (user un, assistant r1)");
+  }
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R04", e, (q?.length ?? 0) + (q2?.length ?? 0))];
+}
+
+// R05 — C2.9 précédé de `/subagents on`, préflight faux : refus exact, sans enfant ni artefact
+export const R05: Scenario = { ...C2_9, nom: "p2-r05-preflight" };
+export function verifierR05(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const t = resultatTexte(o, "t1");
+  if (t === null) exiger(e, "R05/capture", false, "indéterminé", `${resultatDe(o, "t1").length} résultat(s) t1`);
+  else exiger(e, "R05/refus-exact", t === REFUS_PREFLIGHT_R05, "violé", `t1 : ${JSON.stringify(t.slice(0, 120))}`, "refus exact du préflight");
+  exigerSansEffet(e, "R05", o);
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R05", e, t === null ? 0 : 1)];
+}
+
+// R06 — `task` appelé en simple par le modèle scripté : pi refuse l'outil inactif avant `execute`
+export const R06: Scenario = { ...BASE_R, nom: "p2-r06-task-simple", prompt: "délègue", outils: "read,ls,grep,find,task", tours: [outil("t1", "task", { agent: "scout", task: "explorer le dépôt" }), { texte: "refus lu" }] };
+export function verifierR06(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  const q = lireRequetes(o, e, "R06", 2);
+  if (q) exigerSimple(e, "R06", q[0], d);
+  const t = resultatTexte(o, "t1");
+  if (t === null) exiger(e, "R06/capture", false, "indéterminé", `${resultatDe(o, "t1").length} résultat(s) t1`);
+  else exiger(e, "R06/introuvable", t === OUTIL_INTROUVABLE("task"), "violé", `t1 : ${JSON.stringify(t.slice(0, 120))}`, `pi refuse avant execute : « ${OUTIL_INTROUVABLE("task")} »`);
+  exigerSansEffet(e, "R06", o);
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R06", e, t === null ? 0 : 1)];
+}
+
+// R07 — run non terminé préparé avant la première invocation, puis reprise (`-c`) : lecture seule
+const ecrireLire = (w: string, l: string, fichier: string) => [
+  outil(w, "write", { path: fichier, content: `${fichier}\n` }),
+  outil(l, "read", { path: ".gitignore" }),
+  { texte: "vu" },
+];
+export const R07: Scenario = {
+  ...BASE_R,
+  nom: "p2-r07-lecture-seule",
+  prompt: "écris",
+  outils: "read,ls,grep,find,write,task",
+  session: "dossier",
+  fichiersCwd: { ".gitignore": ".pi-subagent-runs/\n", ".pi-subagent-runs/active-run.json": MANIFESTE_R07 },
+  releverFichiers: [".pi-subagent-runs/active-run.json", "x.txt", "y.txt"],
+  tours: ecrireLire("w1", "l1", "x.txt"),
+  reprise: { prompt: "encore", tours: ecrireLire("w2", "l2", "y.txt") },
+};
+function exigerLectureSeule(e: Ecarts, id: string, o: ObservationsMesure | undefined, w: string, l: string): void {
+  if (!o) return void exiger(e, `${id}/capture`, false, "indéterminé", "observations absentes");
+  const tw = resultatTexte(o, w);
+  const tl = resultatTexte(o, l);
+  if (tw === null || tl === null) return void exiger(e, `${id}/capture`, false, "indéterminé", `résultats ${w}/${l} absents ou multiples`);
+  exiger(e, `${id}/write-refuse`, tw === OUTIL_INTROUVABLE("write"), "violé", `${w} : ${JSON.stringify(tw.slice(0, 120))}`, `${w} refusé (« ${OUTIL_INTROUVABLE("write")} »)`);
+  exiger(e, `${id}/lecture-admise`, tl === ".pi-subagent-runs/\n", "violé", `${l} : ${JSON.stringify(tl.slice(0, 120))}`, `${l} : lecture native admise`);
+}
+export function verifierR07(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  exigerLectureSeule(e, "R07/premiere", o, "w1", "l1");
+  exigerLectureSeule(e, "R07/reprise", o.reprise, "w2", "l2");
+  const f = o.reprise?.fichiers ?? o.fichiers ?? {};
+  exiger(e, "R07/rien-ecrit", f["x.txt"] === null && f["y.txt"] === null, "violé", "un fichier refusé existe", "x.txt et y.txt absents");
+  exiger(e, "R07/run-intact", f[".pi-subagent-runs/active-run.json"] === MANIFESTE_R07, "violé", "le manifeste préparé a changé", "manifeste préparé inchangé");
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R07", e, 2)];
+}
+
+// R08 — composition avec pi-project-brief inchangé, dans les deux ordres explicites de chargement
+export type OrdreR08 = "brief-avant" | "subagent-avant";
+const extensionsR08 = (ordre: OrdreR08) => (ordre === "brief-avant" ? [POINTS_C2["C2.5"], POINTS_C2["C2.9"]] : [POINTS_C2["C2.9"], POINTS_C2["C2.5"]]);
+const baseR08 = (ordre: OrdreR08) => ({ ...BASE_R, extensionsDepot: extensionsR08(ordre), fichiersCwd: { ".gitignore": ".pi-subagent-runs/\n", ".pi/BRIEF.md": BRIEF_R08 } });
+export const R08A = (ordre: OrdreR08): Scenario => ({ ...baseR08(ordre), nom: `p2-r08-a-${ordre}`, prompt: "/subagents on", prompts: ["un", "deux"], outils: "read,ls,grep,find,task", tours: [{ texte: "r1" }, { texte: "r2" }] });
+export const R08B = (ordre: OrdreR08): Scenario => ({ ...baseR08(ordre), nom: `p2-r08-b-${ordre}`, prompt: "un", prompts: ["/subagents on", "deux"], outils: "read,ls,grep,find,task", tours: [{ texte: "r1" }, { texte: "r2" }] });
+export const R08C = (ordre: OrdreR08): Scenario => ({ ...baseR08(ordre), nom: `p2-r08-c-${ordre}`, prompt: "/subagents on", prompts: ["un", "/subagents off", "deux"], outils: "read,ls,grep,find,task", session: "dossier", tours: [{ texte: "r1" }, { texte: "r2" }], reprise: { prompt: "trois", tours: [{ texte: "r3" }] } });
+
+/**
+ * La requête qui porte le prompt forcé du brief (Q-P2-1, voie (a)). Sans délégation due : le brief
+ * intact, une fois, sans ajout. Avec délégation : quand le brief passe avant `subagent`, son prompt
+ * forcé est un préfixe gardé tel quel — il porte déjà, rendues par pi, les guidelines enregistrées de
+ * `task`, sous leur forme générique — et seul ce qui manque vient après lui, une fois : le bloc de
+ * délégation et la guideline du plan du run courant. Dans l'autre ordre, tout est avant le brief et
+ * rien n'est dupliqué.
+ */
+function exigerForceBrief(e: Ecarts, id: string, r: Requete, ordre: OrdreR08, delegationDue: boolean, d: string, runId: string | null): void {
+  const c = r.contenus.filter((x) => x.length > 0);
+  if (c.length !== 1) return void exiger(e, `${id}/force`, false, "violé", `appel ${r.appel} : ${c.length} contenu(s) system forcé(s)`);
+  const f = c[0];
+  exiger(e, `${id}/brief-unique`, compter(f, BLOC_BRIEF_R08) === 1, "violé", `appel ${r.appel} : brief ${compter(f, BLOC_BRIEF_R08)} fois`, `appel ${r.appel} : brief présent une fois`);
+  const fin = f.indexOf(BLOC_BRIEF_R08) + BLOC_BRIEF_R08.length;
+  const avant = f.slice(0, fin);
+  const apres = f.slice(fin);
+  if (!delegationDue) {
+    exiger(e, `${id}/sans-ajout`, apres === "" && compter(f, d) === 0 && compter(f, GUIDELINE_TASK) === 0, "violé", `appel ${r.appel} : contribution de la phase 2 au prompt forcé`, `appel ${r.appel} : prompt forcé du brief intact, sans délégation ni guideline`);
+    return;
+  }
+  if (runId === null) return void exiger(e, `${id}/run`, false, "indéterminé", "manifeste du run courant non relevé");
+  const plan = guidelinePlan(runId);
+  exiger(e, `${id}/unique`, compter(f, d) === 1 && compter(f, plan) === 1 && compter(f, GUIDELINE_TASK) === 1, "violé", `appel ${r.appel} : délégation ${compter(f, d)} fois, guideline du plan courant ${compter(f, plan)} fois, première guideline ${compter(f, GUIDELINE_TASK)} fois`, `appel ${r.appel} : délégation, guideline du plan du run courant et guidelines de task une fois chacune`);
+  if (ordre === "brief-avant") {
+    exiger(e, `${id}/prefixe`, compter(avant, d) === 0 && compter(avant, plan) === 0 && compter(apres, d) === 1 && compter(apres, plan) === 1 && apres.startsWith("\n\n"), "violé", `appel ${r.appel} : le complément n'est pas tout entier après le brief`, `appel ${r.appel} : préfixe du brief gardé, complément (délégation, guideline du plan courant) après lui ; guideline générique enregistrée dans le préfixe : ${avant.includes(".pi-subagent-runs/<runId>-plan.json") ? "présente" : "absente"}`);
+  } else {
+    exiger(e, `${id}/sans-duplication`, apres === "" && compter(avant, d) === 1 && compter(avant, plan) === 1, "violé", `appel ${r.appel} : contribution après le brief ou dupliquée`, `appel ${r.appel} : délégation et guidelines avant le brief, aucune duplication`);
+  }
+}
+/**
+ * Le préfixe à l'octet (R08-a, R08-b) — une corroboration, non la preuve de préservation (Q-P2-17,
+ * plan § 12.5). Oracle :
+ *
+ *   provenance   les messages system bruts de la requête SUIVANTE de la même invocation de pi
+ *                (même processus, extensions dans le même ordre, même cwd, mêmes configuration
+ *                et outils enregistrés), tels que le journal du fournisseur scripté les relève ;
+ *                cette requête n'est plus forcée (`exigerSansForce`)
+ *   comparé      les octets du premier contenu system non vide de la requête forcée, de 0 au bloc
+ *                du brief exclu, contre le rendu de ces messages (contenus, puis sections dans
+ *                leur ordre) ; égalité octet par octet, sans normalisation
+ *   extractions  brief avant `subagent`, en sous-agents : section `delegation` retirée et chemin
+ *                du plan courant rendu à sa forme enregistrée `<runId>` (§ 12.6 bis), parce que le
+ *                brief a lu le prompt avant que `subagent` ne les pose ; en simple (R08-b), le
+ *                premier message system seul, avant le patch de montée
+ *   limite       l'attendu dérive d'une autre sortie du candidat : une altération commune aux deux
+ *                requêtes, ou logée dans les parties extraites, n'y est pas visible. La preuve de
+ *                préservation est H26, son attendu connu et son mutant de préfixe altéré.
+ */
+function exigerPrefixeOctet(e: Ecarts, id: string, q0: Requete, q1: any, ordre: OrdreR08, simple: boolean, runId: string | null): void {
+  const f = q0.contenus.filter((x) => x.length > 0)[0] ?? "";
+  const fin = f.indexOf(BLOC_BRIEF_R08);
+  if (fin < 0) return void exiger(e, `${id}/prefixe-octet`, false, "violé", `appel ${q0.appel} : bloc du brief absent`);
+  if (runId === null && !simple) return void exiger(e, `${id}/prefixe-octet`, false, "indéterminé", "manifeste du run courant non relevé");
+  const m = JSON.parse(JSON.stringify(simple ? [q1.systemes[0]] : q1.systemes));
+  if (!simple && ordre === "brief-avant") {
+    for (const x of m) {
+      if (!x || typeof x.sections !== "object" || x.sections === null) continue;
+      delete x.sections.delegation;
+      if (typeof x.sections.rules === "string") x.sections.rules = x.sections.rules.split(`.pi-subagent-runs/${runId}-plan.json`).join(".pi-subagent-runs/<runId>-plan.json");
+    }
+  }
+  const rendu = rendrePrompt(m);
+  if (rendu === null) return void exiger(e, `${id}/prefixe-octet`, false, "indéterminé", `appel ${q1.appel} : rendu non classable`);
+  exiger(e, `${id}/prefixe-octet`, f.slice(0, fin) === rendu, "violé", `appel ${q0.appel} : le texte avant le brief (${fin} car.) n'est pas le rendu de pi (${rendu.length} car.)`, `appel ${q0.appel} : texte avant le brief identique à l'octet au rendu de pi de la requête suivante (${rendu.length} car.) — corroboration ; preuve de préservation : H26`);
+}
+export function verifierR08A(ordre: OrdreR08) {
+  return (o: ObservationsMesure): Verdict[] => {
+    const e = nouveauxEcarts();
+    const d = sectionDelegation();
+    const q = lireRequetes(o, e, "R08-a", 2);
+    if (q) {
+      exiger(e, "R08-a/task", q[0].outils.includes("task") && q[1].outils.includes("task"), "violé", "task non déclaré", "task déclaré aux deux requêtes");
+      exigerForceBrief(e, "R08-a", q[0], ordre, true, d, runCourant(o));
+      exigerPrefixeOctet(e, "R08-a", q[0], requetes(o)[1], ordre, false, runCourant(o));
+      exigerSousAgents(e, "R08-a", q[1], d, runCourant(o));
+      exigerSansForce(e, "R08-a", q[1]);
+    }
+    e.vu.push(ordreChargement(o));
+    return [conclure("C2.9/R08-a", e, q?.length ?? 0)];
+  };
+}
+export function verifierR08B(ordre: OrdreR08) {
+  return (o: ObservationsMesure): Verdict[] => {
+    const e = nouveauxEcarts();
+    const d = sectionDelegation();
+    const q = lireRequetes(o, e, "R08-b", 2);
+    if (q) {
+      exiger(e, "R08-b/simple", !q[0].outils.includes("task"), "violé", "task déclaré en simple", "première requête : task non déclaré");
+      exigerForceBrief(e, "R08-b", q[0], ordre, false, d, null);
+      exigerPrefixeOctet(e, "R08-b", q[0], requetes(o)[1], ordre, true, null);
+      exigerSousAgents(e, "R08-b", q[1], d, runCourant(o));
+      exigerSansForce(e, "R08-b", q[1]);
+    }
+    e.vu.push(ordreChargement(o));
+    return [conclure("C2.9/R08-b", e, q?.length ?? 0)];
+  };
+}
+export function verifierR08C(ordre: OrdreR08) {
+  return (o: ObservationsMesure): Verdict[] => {
+    const e = nouveauxEcarts();
+    const d = sectionDelegation();
+    const q = lireRequetes(o, e, "R08-c", 2);
+    if (q) {
+      exigerForceBrief(e, "R08-c", q[0], ordre, true, d, runCourant(o));
+      exigerSimple(e, "R08-c/descente", q[1], d);
+      exigerSansForce(e, "R08-c/descente", q[1]);
+    }
+    const q2 = lireRequetes(o.reprise, e, "R08-c/reprise", 1);
+    if (q2) {
+      exigerSimple(e, "R08-c/reprise", q2[0], d);
+      exigerForceBrief(e, "R08-c/reprise", q2[0], ordre, false, d, null);
+    }
+    e.vu.push(ordreChargement(o));
+    return [conclure("C2.9/R08-c", e, (q?.length ?? 0) + (q2?.length ?? 0))];
+  };
+}
+
+/*
+ * R08-d — P0-C (plan terminal), `task` retiré. Le plan terminal est un ÉTAT PRÉPARÉ sur disque avant
+ * la première invocation (`d7499ab8…` : ce n'est pas un parcours public réel) : manifeste actif dont le
+ * `planHash` est celui du plan posé, registre v2 où chaque unité du plan porte OPENED puis INTEGRATED.
+ * Sur pi réel hors ligne, aucun commit d'intégration ne peut exister : le dépôt ne confirme pas
+ * l'intégration, ce que la reconstruction relève comme conflit de reprise. La décision P0-C ne lit que
+ * le plan gelé et le registre (`lireEtatP0`) ; le témoin non terminal, sur le même conflit, montre que
+ * `task` n'est retiré que par P0-C. Seuls la montée et les appels observés sont publics.
+ */
+export const RUN_ID_R08D = "00000000000000d8";
+const planR08D = (unites: string[]) =>
+  `${JSON.stringify({ version: 1, work_units: unites.map((id) => ({ id, goal: "fixture", depends_on: [], expected_write_scope: [`${id}.txt`] })) })}\n`;
+const manifesteR08D = (runId: string, plan: string) =>
+  `${JSON.stringify({ version: 2, runId, status: "active", nextSeq: 2, planHash: createHash("sha256").update(plan).digest("hex").slice(0, 16) }, null, 2)}\n`;
+const registreR08D = (runId: string, integrees: string[]) =>
+  `${[{ ledger: 2 }, ...integrees.flatMap((u, i) => [
+    { event_seq: 2 * i + 1, work_unit: u, lane: `${runId}-${u}-g1`, at: "2026-10-17T00:00:00.000Z", event: "OPENED", base: "0".repeat(40), generation: 1 },
+    { event_seq: 2 * i + 2, work_unit: u, lane: `${runId}-${u}-g1`, at: "2026-10-17T00:00:01.000Z", event: "INTEGRATED", integration_commit: "1".repeat(40) },
+  ])].map((x) => JSON.stringify(x)).join("\n")}\n`;
+/** Les pièces d'un run actif préparé : plan des `unites`, registre où les `integrees` sont intégrées. */
+export function fixtureR08D(runId: string, unites: string[], integrees: string[]): Record<string, string> {
+  const plan = planR08D(unites);
+  return {
+    ".pi-subagent-runs/active-run.json": manifesteR08D(runId, plan),
+    [`.pi-subagent-runs/${runId}-plan.json`]: plan,
+    [`.pi-subagent-runs/${runId}-lanes.jsonl`]: registreR08D(runId, integrees),
+  };
+}
+const FIXTURE_R08D = fixtureR08D(RUN_ID_R08D, ["W01"], ["W01"]);
+/** Q-P2-16 : le témoin ne diffère du cas terminal que par le plan (non terminal) et son `planHash`. */
+const FIXTURE_R08D_TEMOIN = fixtureR08D(RUN_ID_R08D, ["W01", "W02"], ["W01"]);
+const MARQUEUR_R = ".pi-subagent-runs/.git";
+export const R08D = (ordre: OrdreR08): Scenario => ({
+  ...baseR08(ordre),
+  nom: `p2-r08-d-${ordre}`,
+  prompt: "/subagents on",
+  prompts: ["un"],
+  outils: "read,ls,grep,find,write,task",
+  fichiersCwd: { ...baseR08(ordre).fichiersCwd, ...FIXTURE_R08D },
+  releverFichiers: [...Object.keys(FIXTURE_R08D), "x.txt"],
+  tours: [
+    outil("t1", "task", { agent: "worker", task: "encore", work_unit: "W01" }),
+    outil("w1", "write", { path: "x.txt", content: "x\n" }),
+    outil("l1", "read", { path: ".gitignore" }),
+    { texte: "fin" },
+  ],
+});
+/**
+ * Témoin de R08-d (Q-P2-16) : même runId, même liste `--tools`, même conflit de reprise, ordre brief
+ * avant `subagent` ; à comparer à `C2.9/R08-d/brief-avant`. Un seul tour texte, déclaré : les appels
+ * refusés de R08-d n'ont pas d'objet sur un plan non terminal, où ils atteindraient les gardes du
+ * runtime ; il ne remplace pas ces appels.
+ */
+export const R08D_TEMOIN: Scenario = {
+  ...baseR08("brief-avant"),
+  nom: "p2-r08-d-temoin-non-terminal",
+  prompt: "/subagents on",
+  prompts: ["un"],
+  outils: "read,ls,grep,find,write,task",
+  fichiersCwd: { ...baseR08("brief-avant").fichiersCwd, ...FIXTURE_R08D_TEMOIN },
+  releverFichiers: Object.keys(FIXTURE_R08D_TEMOIN),
+  tours: [{ texte: "r1" }],
+};
+
+/**
+ * La montée a eu lieu sur le run préparé : marqueur posé par l'ouverture, run repris, pièces inchangées.
+ * Bilan exact (Q-P2-16) : inventaire du cwd avant et après, hors `.git` de tête ; seules entrées
+ * ajoutées, le marqueur et son sous-arbre ; aucune retirée ni modifiée (type, empreinte) ; aucun
+ * fichier de session. Le marqueur écrit n'est jamais retiré des observations.
+ */
+function exigerRepriseDuRunPrepare(e: Ecarts, id: string, o: ObservationsMesure, runId: string, fixture: Record<string, string>): void {
+  if (!o.inventaireCwd) return void exiger(e, `${id}/inventaire`, false, "indéterminé", "inventaires du cwd absents");
+  const avant = o.inventaireCwd.avant.some((x) => x.chemin === MARQUEUR_R);
+  const apres = o.inventaireCwd.apres.some((x) => x.chemin === MARQUEUR_R);
+  exiger(e, `${id}/montee`, !avant && apres, "violé", `marqueur ${MARQUEUR_R} avant ${avant}, après ${apres} : la montée n'a pas ouvert le run`, `montée effectuée : ${MARQUEUR_R} posé par l'ouverture du run`);
+  exiger(e, `${id}/run-repris`, runCourant(o) === runId, "violé", `run courant ${runCourant(o)} au lieu du run préparé ${runId}`, `run préparé ${runId} repris, aucun autre run ouvert`);
+  const changes = Object.keys(fixture).filter((k) => o.fichiers?.[k] !== fixture[k]);
+  exiger(e, `${id}/pieces-intactes`, changes.length === 0, "violé", `pièces préparées changées : ${changes.join(", ")}`, "manifeste, plan et registre préparés inchangés");
+  const parAvant = new Map(o.inventaireCwd.avant.map((x) => [x.chemin, x]));
+  const parApres = new Map(o.inventaireCwd.apres.map((x) => [x.chemin, x]));
+  const ajoutees = o.inventaireCwd.apres.filter((x) => !parAvant.has(x.chemin)).map((x) => x.chemin);
+  const autres = ajoutees.filter((c) => c !== MARQUEUR_R && !c.startsWith(`${MARQUEUR_R}/`));
+  const retirees = o.inventaireCwd.avant.filter((x) => !parApres.has(x.chemin)).map((x) => x.chemin);
+  const modifiees = o.inventaireCwd.avant
+    .filter((x) => parApres.has(x.chemin) && (parApres.get(x.chemin)!.type !== x.type || parApres.get(x.chemin)!.sha256 !== x.sha256))
+    .map((x) => x.chemin);
+  const sessions = (o.sessions ?? []).map((x) => x.fichier);
+  exiger(
+    e, `${id}/sans-artefact`,
+    autres.length === 0 && retirees.length === 0 && modifiees.length === 0 && sessions.length === 0,
+    "violé",
+    `bilan : ajoutées hors marqueur [${autres.join(", ")}], retirées [${retirees.join(", ")}], modifiées [${modifiees.join(", ")}], sessions [${sessions.join(", ")}]`,
+    `bilan exact : ${parAvant.size} → ${parApres.size} entrées ; ajoutées : ${ajoutees.join(", ")} (le marqueur et son sous-arbre, posés par l'ouverture du run à la montée) ; aucune retirée ni modifiée ; aucun fichier de session (--no-session)`,
+  );
+  const enfants = o.fils.filter((f) => String(f.commande).split("/").pop() !== "git");
+  exiger(e, `${id}/sans-enfant`, enfants.length === 0, "violé", `lancements autres que git : ${enfants.map((f) => f.commande).join(", ")}`, "aucun enfant");
+}
+
+/**
+ * Le prompt forcé du brief sous P0-C : brief une fois, délégation une fois (profil sous-agents établi),
+ * aucune guideline de `task`, ni générique ni du run courant. Brief avant `subagent` : préfixe gardé, la
+ * délégation seule après lui ; dans l'autre ordre, rien après le brief.
+ */
+function exigerForceBriefP0C(e: Ecarts, id: string, r: Requete, ordre: OrdreR08, d: string, runId: string): void {
+  const c = r.contenus.filter((x) => x.length > 0);
+  if (c.length !== 1) return void exiger(e, `${id}/force`, false, "violé", `appel ${r.appel} : ${c.length} contenu(s) system forcé(s)`);
+  const f = c[0];
+  exiger(e, `${id}/brief-unique`, compter(f, BLOC_BRIEF_R08) === 1, "violé", `appel ${r.appel} : brief ${compter(f, BLOC_BRIEF_R08)} fois`, `appel ${r.appel} : brief présent une fois`);
+  exiger(e, `${id}/delegation`, compter(f, d) === 1, "violé", `appel ${r.appel} : délégation ${compter(f, d)} fois`, `appel ${r.appel} : délégation une fois (profil sous-agents)`);
+  exiger(e, `${id}/sans-guideline`, compter(r.prompt, GUIDELINE_TASK) === 0 && !r.prompt.includes(".pi-subagent-runs/<runId>-plan.json") && compter(r.prompt, guidelinePlan(runId)) === 0, "violé", `appel ${r.appel} : guideline de task présente`, `appel ${r.appel} : aucune guideline de task, ni générique ni du run courant`);
+  const fin = f.indexOf(BLOC_BRIEF_R08) + BLOC_BRIEF_R08.length;
+  const avant = f.slice(0, fin);
+  const apres = f.slice(fin);
+  if (ordre === "brief-avant") {
+    exiger(e, `${id}/prefixe`, compter(avant, d) === 0 && apres.startsWith("\n\n") && compter(apres, d) === 1, "violé", `appel ${r.appel} : la délégation n'est pas tout entière après le brief`, `appel ${r.appel} : préfixe du brief gardé, délégation seule après lui`);
+  } else {
+    exiger(e, `${id}/sans-duplication`, apres === "" && compter(avant, d) === 1, "violé", `appel ${r.appel} : contribution après le brief ou dupliquée`, `appel ${r.appel} : délégation avant le brief, rien après`);
+  }
+}
+
+export function verifierR08D(ordre: OrdreR08) {
+  return (o: ObservationsMesure): Verdict[] => {
+    const e = nouveauxEcarts();
+    const d = sectionDelegation();
+    exigerRepriseDuRunPrepare(e, "R08-d", o, RUN_ID_R08D, FIXTURE_R08D);
+    const q = lireRequetes(o, e, "R08-d", 4);
+    if (q) {
+      for (const r of q) {
+        exigerForceBriefP0C(e, "R08-d", r, ordre, d, RUN_ID_R08D);
+        exiger(e, "R08-d/task-retire", !r.outils.includes("task"), "violé", `appel ${r.appel} : task déclaré`, `appel ${r.appel} : task non déclaré`);
+      }
+      const ajouts = requetes(o).flatMap((x) => x.systemes.flatMap((m: any) => (Array.isArray(m.toolsAdded) ? m.toolsAdded : [])));
+      exiger(e, "R08-d/non-reactive", !ajouts.includes("task"), "violé", "toolsAdded porte task", "task jamais réactivé (aucun toolsAdded: task)");
+    }
+    const tt = resultatTexte(o, "t1");
+    const tw = resultatTexte(o, "w1");
+    const tl = resultatTexte(o, "l1");
+    if (tt === null || tw === null || tl === null) exiger(e, "R08-d/capture", false, "indéterminé", "résultats t1, w1 ou l1 absents ou multiples");
+    else {
+      exiger(e, "R08-d/task-refuse", tt === OUTIL_INTROUVABLE("task"), "violé", `t1 : ${JSON.stringify(tt.slice(0, 120))}`, `t1 refusé (« ${OUTIL_INTROUVABLE("task")} »)`);
+      exiger(e, "R08-d/write-refuse", tw === OUTIL_INTROUVABLE("write"), "violé", `w1 : ${JSON.stringify(tw.slice(0, 120))}`, `w1 refusé (« ${OUTIL_INTROUVABLE("write")} »)`);
+      exiger(e, "R08-d/lecture-admise", tl === ".pi-subagent-runs/\n", "violé", `l1 : ${JSON.stringify(tl.slice(0, 120))}`, "l1 : lecture native admise");
+    }
+    exiger(e, "R08-d/x-absent", o.fichiers?.["x.txt"] === null, "violé", "x.txt existe", "x.txt absent : l'écriture refusée n'a rien produit (contrôle ciblé ; l'inventaire complet est au bilan)");
+    e.vu.push("portée : plan terminal préparé sur disque, intégration non confirmée par le dépôt");
+    e.vu.push(ordreChargement(o));
+    return [conclure("C2.9/R08-d", e, (q?.length ?? 0) + 3)];
+  };
+}
+/** Témoin de R08-d : même conflit de reprise, plan non terminal (W02 à faire) : `task` reste déclaré. */
+export function verifierR08DTemoin(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  exigerRepriseDuRunPrepare(e, "R08-d/temoin", o, RUN_ID_R08D, FIXTURE_R08D_TEMOIN);
+  const q = lireRequetes(o, e, "R08-d/temoin", 1);
+  if (q) {
+    exiger(e, "R08-d/temoin/task", q[0].outils.includes("task"), "violé", "task non déclaré sur un plan non terminal", "plan non terminal : task déclaré");
+    exiger(e, "R08-d/temoin/guideline", compter(q[0].prompt, guidelinePlan(RUN_ID_R08D)) === 1 && compter(q[0].prompt, d) === 1, "violé", "délégation ou guideline du plan courant absente", "délégation et guideline du plan du run préparé une fois");
+  }
+  e.vu.push("portée : run préparé sur disque, intégration de W01 non confirmée par le dépôt");
+  e.vu.push("témoin : ordre brief avant subagent, mêmes runId, outils et fixture que C2.9/R08-d/brief-avant hors plan et planHash ; un tour texte");
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R08-d/temoin", e, q?.length ?? 0)];
+}
+
+// R09 — sans brief ni prompt forcé préexistant, en sous-agents puis en simple
+export const R09: Scenario = { ...BASE_R, nom: "p2-r09-sans-force", prompt: "/subagents on", prompts: ["un", "/subagents off", "deux"], outils: "read,ls,grep,find,task", tours: [{ texte: "r1" }, { texte: "r2" }] };
+export function verifierR09(o: ObservationsMesure): Verdict[] {
+  const e = nouveauxEcarts();
+  const d = sectionDelegation();
+  const q = lireRequetes(o, e, "R09", 2);
+  if (q) {
+    exigerSousAgents(e, "R09", q[0], d, runCourant(o));
+    exigerSimple(e, "R09", q[1], d);
+    for (const r of q) exigerSansForce(e, "R09", r);
+  }
+  e.vu.push(ordreChargement(o));
+  return [conclure("C2.9/R09", e, q?.length ?? 0)];
 }
 
 // C2.10 — subagent-footer (K4)
@@ -2176,7 +2770,7 @@ export const EXECUTIONS_NOMINALES: Execution[] = [
   { id: "C2.6", nature: "nominal", scenario: C2_6, description: "pi-session-journal", verifier: verifierC2_6, attendus: c2("C2.6", ["C2.6/comportement"]) },
   { id: "C2.7", nature: "nominal", scenario: C2_7, description: "pi-check-config, K6", verifier: verifierC2_7Item, attendus: c2("C2.7", ["C2.7/comportement"]) },
   { id: "C2.8", nature: "nominal", scenario: C2_8, description: "compaction-guard, K9", verifier: verifierC2_8Item, attendus: c2("C2.8", ["C2.8/comportement"]) },
-  { id: "C2.9", nature: "nominal", scenario: C2_9, description: "subagent, preflight faux, K2", verifier: verifierC2_9, attendus: c2("C2.9", ["C2.9/comportement"]) },
+  { id: "C2.9", nature: "nominal", scenario: C2_9, description: "subagent, preflight faux, K2", verifier: verifierC2_9, attendus: c2("C2.9", ["C2.9/comportement", "C2.9/montee"]) },
   { id: "C2.10", nature: "nominal", scenario: C2_10, description: "subagent-footer, K4", verifier: verifierC2_10, attendus: c2("C2.10", []) },
   { id: "C2.11", nature: "nominal", scenario: C2_11, description: "role-guard, refus et acceptation, K1", verifier: verifierC2_11, attendus: c2("C2.11", ["C2.11/comportement"]) },
   { id: "C2.11-K5", nature: "nominal", scenario: C2_11_K5, description: "role-guard, deux éditions en deux tours, K5", verifier: (o) => verifierC2_11K5(o), attendus: sat(["C2.11/chargement-k5", "C2.11/enregistrements-k5", "C2.11/comportement-k5"]) },
@@ -2226,7 +2820,8 @@ export const CONTRE_EPREUVES_REELLES: Execution[] = [
   syntaxeC2("C2.6", C2_6, verifierC2_6),
   syntaxeC2("C2.7", C2_7, verifierC2_7Item),
   syntaxeC2("C2.8", C2_8, verifierC2_8Item),
-  syntaxeC2("C2.9", C2_9, verifierC2_9),
+  // § 12.7 : seul C2.9 change d'argv ; sa contre-épreuve de syntaxe garde celui de la base, sans le préambule de montée.
+  syntaxeC2("C2.9", { ...C2_9, prompt: "délègue", prompts: undefined }, verifierC2_9),
   syntaxeC2("C2.10", C2_10, verifierC2_10),
   syntaxeC2("C2.11", C2_11, verifierC2_11),
   syntaxeC2("C2.12", C2_12, verifierC2_12),
@@ -2241,6 +2836,30 @@ export const CONTRE_EPREUVES_REELLES: Execution[] = [
   { id: "C6.8/b", nature: "contre-épreuve", nominal: "C6.8", scenario: C6_8_B, description: "sans --no-skills ni --no-context-files", verifier: (o) => [verifierC6_8(o)], attendus: { "C6.8": "violé" }, vise: "C6.8" },
   { id: "C8.1/b", nature: "contre-épreuve", nominal: "socle", scenario: SOCLE_SANS_SESSION, description: "--no-session", verifier: (o) => [verifierC8_1(o)], attendus: { "C8.1": "violé" }, vise: "C8.1", cibles: ["C8.1/fichier"] },
   { id: "C8.2/b", nature: "contre-épreuve", nominal: "C8.2", scenario: C8_2_B, description: "même historique sans ctx.compact", verifier: (o) => [verifierC8_2(o), verifierSansCompaction("C8.2")(o)], attendus: { "C8.2": "indéterminé", "C8.2/b": "satisfait" }, vise: "C8.2" },
+];
+
+/**
+ * Phase 2 (plan § 12.5, § 12.7) : le pilote R, distinct de la campagne nominale et des contre-épreuves
+ * réelles, qui restent inchangées en entrées. Clauses C2.9/R01 à C2.9/R09 ; R08 dans les deux ordres
+ * explicites de chargement.
+ */
+const r = (id: string, scenario: Scenario, description: string, verifier: (o: ObservationsMesure) => Verdict[], clause: string): Execution => ({ id, nature: "nominal", scenario, description, verifier, attendus: sat([clause]) });
+export const EXECUTIONS_PHASE2: Execution[] = [
+  r("C2.9/R01", R01, "démarrage simple : ni task, ni délégation, ni guidelines", verifierR01, "C2.9/R01"),
+  r("C2.9/R02", R02, "montée avant la première invite : délégation et guidelines du run courant à chaque requête", verifierR02, "C2.9/R02"),
+  r("C2.9/R03", R03, "simple, montée, descente : patch de section et toolsAdded, puis section null et toolsRemoved", verifierR03, "C2.9/R03"),
+  r("C2.9/R04", R04, "reprise (-c) d'une transcription montée : simple réaffirmé, histoire conservée", verifierR04, "C2.9/R04"),
+  r("C2.9/R05", R05, "montée puis task, préflight faux : refus exact, sans enfant ni artefact", verifierR05, "C2.9/R05"),
+  r("C2.9/R06", R06, "task appelé en simple : pi refuse l'outil inactif avant execute", verifierR06, "C2.9/R06"),
+  r("C2.9/R07", R07, "run non terminé préparé, puis reprise : lecture seule à chaque session", verifierR07, "C2.9/R07"),
+  ...(["brief-avant", "subagent-avant"] as const).flatMap((ordre) => [
+    r(`C2.9/R08-a/${ordre}`, R08A(ordre), `brief et subagent (${ordre}) : montée avant la première invite, deux invites`, verifierR08A(ordre), "C2.9/R08-a"),
+    r(`C2.9/R08-b/${ordre}`, R08B(ordre), `brief et subagent (${ordre}) : invite simple, puis montée et invite`, verifierR08B(ordre), "C2.9/R08-b"),
+    r(`C2.9/R08-c/${ordre}`, R08C(ordre), `brief et subagent (${ordre}) : descente, invite, puis reprise (-c)`, verifierR08C(ordre), "C2.9/R08-c"),
+    r(`C2.9/R08-d/${ordre}`, R08D(ordre), `brief et subagent (${ordre}) : plan terminal préparé (P0-C), montée et invite`, verifierR08D(ordre), "C2.9/R08-d"),
+  ]),
+  r("C2.9/R08-d/temoin", R08D_TEMOIN, "témoin de R08-d : même conflit de reprise, plan non terminal, task déclaré", verifierR08DTemoin, "C2.9/R08-d/temoin"),
+  r("C2.9/R09", R09, "sans brief ni prompt forcé : aucun prompt forcé ; en simple, aucun ajout", verifierR09, "C2.9/R09"),
 ];
 
 // ── Contre-épreuves (a) des vérificateurs, sur les observations nominales conservées ──

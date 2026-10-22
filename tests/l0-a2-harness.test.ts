@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { APPELS, PILOTE, reinitialiser } from "./stubs/dispatch.ts";
+import { monteeExplicite, type Commande, type Rappel } from "./l0-b2-harness.ts";
 import { planHash, readLaneEvents, readManifest } from "../subagent-only/run-manifest.ts";
 import { observeLanes } from "../subagent-only/lane-observe.ts";
 import { loadAgents } from "../subagent-only/agents.ts";
@@ -97,12 +98,20 @@ async function charger(root: string) {
   const module = await import(`../extensions/subagent/index.ts?l0a2=${generation}`);
   let outil: { execute: (id: string, params: unknown, ctx?: unknown) => Promise<unknown> } | undefined;
   const handlers = new Map<string, (...a: unknown[]) => unknown>();
+  const commandes = new Map<string, Commande>();
   module.default({
     on: (nom: string, h: (...a: unknown[]) => unknown) => { handlers.set(nom, h); },
     registerTool: (t: unknown) => { outil = t as typeof outil; },
-    registerCommand: () => {},
+    registerCommand: (nom: string, c: { handler: Commande }) => { commandes.set(nom, c.handler); },
     ui: { setStatus: () => {}, setFooter: () => {} },
   });
+  // Phase 2 : le profil simple est le défaut ; la preuve porte sur le profil sous-agents (H12).
+  const montee = await monteeExplicite({
+    evenement: (nom) => handlers.get(nom) as Rappel | undefined,
+    commande: (nom) => commandes.get(nom),
+    actifs: () => ["read", "bash", "edit", "write", "task"],
+  });
+  precondition(montee.ok, `la montée explicite doit réussir : ${montee.ok ? "" : montee.erreur}`);
   const manifeste = readManifest(join(root, RUNS));
   precondition(manifeste !== undefined && outil !== undefined, "le run et l'outil doivent exister au chargement");
   return {

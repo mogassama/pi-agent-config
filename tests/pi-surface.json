@@ -77,6 +77,7 @@
       "contrats": [
         "C5.1"
       ],
+      "raison": "dans extensions/subagent/index.ts : avertissement au session_start et notification d'échec de composition, prouvés par H05 et H27 ; ni UI réelle ni TUI couvertes par le fournisseur hors ligne.",
       "testOnly": false,
       "fichiers": [
         "extensions/bash-guard/index.ts",
@@ -84,6 +85,7 @@
         "extensions/pi-bq-cost-sentinel/index.ts",
         "extensions/pi-project-brief/index.ts",
         "extensions/pi-session-journal/index.ts",
+        "extensions/subagent/index.ts",
         "tests/pi-contrats/sonde.ts"
       ]
     },
@@ -94,9 +96,11 @@
       "contrats": [
         "C5.5"
       ],
+      "raison": "dans extensions/subagent/index.ts : précondition de repos de T3 et de T5, prouvée par H08 et H11 seulement ; usage non qualifié par C5.5 ni par R.",
       "testOnly": false,
       "fichiers": [
-        "extensions/compaction-guard/index.ts"
+        "extensions/compaction-guard/index.ts",
+        "extensions/subagent/index.ts"
       ]
     },
     {
@@ -132,9 +136,11 @@
       "contrats": [
         "C5.5"
       ],
+      "raison": "dans extensions/subagent/index.ts : identité de session de la base B, prouvée par H23 seulement ; usage non qualifié par C5.5 ni par R.",
       "testOnly": false,
       "fichiers": [
         "extensions/pi-session-journal/index.ts",
+        "extensions/subagent/index.ts",
         "tests/pi-contrats/sonde.ts"
       ]
     },
@@ -158,8 +164,10 @@
       "contrats": [
         "C6.5"
       ],
-      "testOnly": true,
+      "raison": "dans extensions/subagent/index.ts : identité de session de la base B, prouvée par H23 seulement ; usage non qualifié par C6.5 ni par R.",
+      "testOnly": false,
       "fichiers": [
+        "extensions/subagent/index.ts",
         "tests/pi-contrats/sonde.ts"
       ]
     },
@@ -428,12 +436,14 @@
       "contrats": [
         "C4.3",
         "C2.5",
-        "C2.6"
+        "C2.6",
+        "C2.9"
       ],
       "testOnly": false,
       "fichiers": [
         "extensions/pi-project-brief/index.ts",
         "extensions/pi-session-journal/index.ts",
+        "extensions/subagent/index.ts",
         "tests/pi-contrats/extensions-epreuve.ts"
       ]
     },
@@ -494,6 +504,16 @@
         "extensions/subagent/index.ts": "exclu de la qualification C2.9 (K2) : enregistrement et effet non qualifiés sous le stimulus retenu",
         "extensions/subagent-footer/index.ts": "effet UI de session_start exclu de C2.10 (K4) : installation du footer et rendu TUI non qualifiés"
       }
+    },
+    {
+      "type": "evenement",
+      "nom": "session_tree",
+      "statut": "hors-couche",
+      "raison": "extensions/subagent/index.ts réimpose la liste d'outils du profil sur l'état relu ; prouvé par H22 seulement, sans qualification R.",
+      "testOnly": false,
+      "fichiers": [
+        "extensions/subagent/index.ts"
+      ]
     },
     {
       "type": "evenement",
@@ -1173,8 +1193,11 @@
     {
       "type": "methode",
       "nom": "setActiveTools",
-      "statut": "hors-couche",
-      "raison": "écrit par P0-B (extensions/subagent) en état terminal ; aucun scénario retenu ne l'exerce ; présence relevée à l'inventaire, comportement non qualifié",
+      "statut": "sous-contrat",
+      "contrats": [
+        "C2.9"
+      ],
+      "raison": "chemins qualifiés par R (C2.9) : montée et descente de task, T1 sur -c, lecture seule en simple, P0-C terminal (R02, R03, R04, R07, R08-d) ; chemins prouvés par H seulement, non qualifiés par R : session_tree, /reload, fin de run par l'opérateur, retrait en cours d'exécution (H22, H23, H17, H28). La présence de C2.9 ne vaut pas couverture de ces derniers.",
       "testOnly": false,
       "fichiers": [
         "extensions/subagent/index.ts"
@@ -2169,7 +2192,7 @@
   "limites": [
     {
       "id": "Q9-champs",
-      "texte": "Le reconnaisseur ne découvre pas les champs généraux des événements, les champs des descripteurs de registerTool/registerCommand, les arguments d'execute, les imports de typebox ni les comparaisons sur role, toolName et stopReason (Q9)."
+      "texte": "Le reconnaisseur ne découvre pas les champs généraux des événements, les champs des descripteurs de registerTool/registerCommand, les arguments d'execute, les imports de typebox ni les comparaisons sur role, toolName et stopReason (Q9). Les champs sections et toolGuidelines des options de before_agent_start ne sont pas découverts statiquement ; leurs effets restent exigés par H et par les prompts et patches reçus par le fournisseur de R."
     },
     {
       "id": "Q5-jiti",

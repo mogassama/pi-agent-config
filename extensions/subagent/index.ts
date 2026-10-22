@@ -84,7 +84,7 @@ import {
   type Heartbeat,
   type Lease,
 } from "../../subagent-only/run-manifest.js";
-import { instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
+import { etatMarqueur, instrumentationIgnored } from "../../subagent-only/repo-preflight.js";
 import { validerDesignUpdates, type DesignUpdate } from "../../subagent-only/design-update.js";
 import { validerConsommateurs, type KeptUnite, type RefusPlan } from "../../subagent-only/consommateurs.js";
 import { ecrireKeptDurable, KEPT_SCHEMA, keptExiste, lireKeptDurable } from "../../subagent-only/kept-durable.js";
@@ -180,6 +180,27 @@ import {
   comparerEmpreintes, DOSSIER_PREUVES_P0B, EmpreinteImpossible, prendreEmpreinte, seulementLePlan,
   type Ecart, type Empreinte,
 } from "../../subagent-only/empreinte.js";
+import {
+  avertissement,
+  classer,
+  compositionPresente,
+  completerPromptForce,
+  decisionAppelSimple,
+  deciderCommande,
+  etatRendu,
+  ID_RUN,
+  lectureSeuleRequise,
+  NOM_PREUVES_P0B,
+  outilsDuProfil,
+  REFUS_DELEGATION_NON_COMPOSEE,
+  REFUS_PROFIL_SIMPLE,
+  type Classement,
+  type Inspection,
+  type LectureDuRun,
+  type PreuvesP0B,
+  type Profil,
+  type Releve,
+} from "../../subagent-only/profil.js";
 
 const AGENT_DIR = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const SELF_DIR = join(AGENT_DIR, "subagent-only");
@@ -193,46 +214,110 @@ const SELF_DIR = join(AGENT_DIR, "subagent-only");
 const SESSION_ID = `s-${randomBytes(4).toString("hex")}`;
 
 /**
- * Le run durable de cette session, découvert et non créé au hasard.
+ * Le run durable de la session, ouvert à la montée et non au chargement (phase 2).
  *
  * `RUN_ID` valait `randomBytes(3)` avec le commentaire « it dies with the
  * session ». C'était vrai, et faux dès que les worktrees ont survécu : le plan
  * gelé s'appelle `<runId>-plan.json`, les lanes `<runId>-<workUnitId>`, et une
  * session redémarrée ne retrouvait ni l'un ni les autres.
  *
- * Connaître l'identité ne donne aucun droit. Le chargement découvre le run et
- * l'affiche ; la propriété se prend à la première mutation, pas ici.
+ * Le profil simple est le défaut : aucun run n'est ouvert, aucune identité n'est
+ * posée, l'extension n'écrit rien. `/subagents on` ouvre ou reprend le run, et
+ * seule l'identité que rend `openRun` fait autorité ; `/subagents off` et chaque
+ * `session_start` la vident. Connaître l'identité ne donne aucun droit : la
+ * propriété se prend à la première mutation, pas ici.
  */
 const RUNS_DIR = ".pi-subagent-runs";
 const RUN_DIR = join(process.cwd(), RUNS_DIR);
 
 /*
- * Le préflight du dépôt, avant la toute première écriture.
+ * Le préflight du dépôt, au chargement, en lecture seule (T0).
  *
- * Il devait aller « à l'activation du premier run mutateur, avant la première
- * écriture dans .pi-subagent-runs/ ». Ces deux moments ne sont pas le même :
- * `openRun` crée le répertoire et le manifeste **au chargement du module**, bien
- * avant qu'une délégation soit demandée. Le placer plus tard voudrait donc dire
- * découvrir la mauvaise configuration après l'avoir causée.
- *
- * Vérifier tôt, refuser tard. Si le dépôt n'ignore pas son instrumentation, le
- * run n'est pas ouvert du tout — rien n'est écrit, rien n'est sali — et la
- * raison est gardée pour la première délégation, qui la rendra. Une session qui
- * ne délègue jamais ne voit rien et n'a rien à voir : le chargement d'une
- * extension n'a pas à échouer pour une propriété qui ne concerne que les runs.
+ * Il ne coûte que des lectures, et son résultat est fixé pour ce chargement : les
+ * relectures de l'état durable ne le réévaluent pas. Ce qui écrit — l'ouverture du
+ * run — est passé à la montée. Si le dépôt n'ignore pas son instrumentation, la
+ * montée n'ouvre pas de run du tout — rien n'est écrit, rien n'est sali — et la
+ * raison est gardée pour la première délégation, qui la rendra.
  */
 const PREFLIGHT = instrumentationIgnored(process.cwd(), RUNS_DIR);
-const RUN = PREFLIGHT.ok ? openRun(RUN_DIR, baseCommit()) : undefined;
-const RUN_ID = RUN?.manifest.runId ?? "";
+let RUN: ReturnType<typeof openRun> | undefined;
+let RUN_ID = "";
 
-/*
- * L'état durable est reconstruit au chargement, pas à l'ouverture d'une session.
+/** Le profil de la session. Simple à chaque `session_start` ; jamais persisté. */
+let PROFIL: Profil = "simple";
+
+/** Le classement du dernier relevé de la découverte : la règle de lecture seule en dépend en simple. */
+let CLASSEMENT: Classement = { classe: "absent", unitesOuvertes: [] };
+
+/** `subagent-only/DELEGATION.md`, lu à la montée. Sa section n'existe qu'en sous-agents. */
+let DELEGATION_TEXTE: string | undefined;
+
+/** La base d'outils B de la session, relevée au `session_start` avant toute restriction (§ 4.5). */
+let BASE_OUTILS: string[] | undefined;
+
+/**
+ * L'état de composition de l'exécution courante (Q-P2-4).
  *
- * Une session reprise doit repartir de ce que le run a réellement fait, et elle
- * doit le savoir avant toute décision d'admission — pas au premier événement de
- * cycle de vie. Purement en lecture : la propriété ne se prend qu'à la première
- * mutation, et `reconcile` ne répare rien.
+ * Négatif par défaut, invalidé au début de chaque `before_agent_start`, aux changements de
+ * profil, de session, d'identité de run et à la navigation dans l'arbre. Il ne devient positif
+ * qu'après une composition complète et vérifiée. Rien ne le rétablit depuis la transcription
+ * ni depuis `globalThis`.
  */
+let EXECUTION = 0;
+let COMPOSITION: { execution: number; etablie: boolean; raison: string } = {
+  execution: 0,
+  etablie: false,
+  raison: "aucune exécution composée",
+};
+
+/** Les exécutions de `task` en cours : une transition de profil n'a lieu qu'au repos. */
+let TASKS_EN_COURS = 0;
+
+/**
+ * Une montée (T3, H21) ou une descente (T5, H21b) interrompue après le début de ses effets : la
+ * session reste en profil simple et en lecture seule, sans retour automatique, jusqu'au prochain
+ * `session_start`. Le nom date de la montée ; il couvre les deux transitions.
+ */
+let ARRET_MONTEE: string | undefined;
+
+/**
+ * RA-P2-6 (`b5cf332a…` § 6) : la génération de l'identité de run de la session. Elle change à
+ * chaque fois que l'identité est vidée (T1, T5, montée en échec). Une exécution de `task` la
+ * capture à son entrée ; si elle a changé pendant l'attente de la file, l'exécution ne fait rien,
+ * même quand une session ultérieure a repris le même run.
+ */
+let GENERATION_IDENTITE = 0;
+
+/**
+ * RAR2-9 (`e9a5c3a5…` § 4.1) : l'identité de run d'une exécution de `task`, capturée à son entrée.
+ *
+ * Au retour d'un enfant, elle est contrôlée après le bail capturé et avant toute action. Le bail
+ * seul ne suffit pas : un T8 qui n'a pas relâché le bail laisse son propriétaire sur le disque ; la
+ * session suivante du même processus le reconnaît, et une instance rechargée du module ne reçoit
+ * jamais le T1 de l'ancienne. Seule la génération, changée dès T8, dit qu'une session a fini depuis.
+ */
+interface IdentiteDAppel {
+  generation: number;
+  runId: string;
+}
+
+/** L'identité de l'entrée est-elle encore celle de la session ? Mémoire seule : rien n'est lu ni construit. */
+function identiteIntacte(identite: IdentiteDAppel): boolean {
+  return GENERATION_IDENTITE === identite.generation && RUN_ID === identite.runId;
+}
+
+/** Le retour d'un enfant sous une identité qui n'est plus celle de la session : il n'agit pas (RAR2-9). */
+function refusIdentiteChangee(identite: IdentiteDAppel, quoi: string, reste: string) {
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `[run: identité changée] ${quoi} sous le run ${identite.runId || "(aucun)"} ; ` +
+        `la session de cette entrée a pris fin depuis. ${reste}`,
+    }],
+    isError: true,
+  };
+}
 
 /** Le bail courant : il autorise, là où `RUN_ID` se contente d'identifier. */
 let LEASE: Lease | undefined;
@@ -317,13 +402,33 @@ function ensureOwnership(): { lease: Lease } | { refus: string } {
 
 let RUN_UI: { setStatus?: (k: string, v: string) => void } | undefined;
 
-/** Le footer lit l'état du manifeste ; il n'en tient aucune copie décisionnelle. */
+/**
+ * Le footer lit l'état du manifeste ; il n'en tient aucune copie décisionnelle.
+ *
+ * En profil simple, la session n'a pas d'identité : le statut porte le run relu par la
+ * découverte, s'il en a un, avec l'accès que son bail donne — une lecture, rien n'est pris.
+ * Sans run identifié, le statut est vide et le footer n'affiche rien.
+ */
 function publishRun(): void {
-  const snapshot: RunSnapshot = {
-    runId: RUN_ID,
-    access: inspectRun(RUN_DIR, RUN_ID, SESSION_ID).kind,
-  };
-  RUN_UI?.setStatus?.(RUN_STATUS_KEY, JSON.stringify(snapshot));
+  if (PROFIL === "sous-agents") {
+    // RA-P2-12 : sous-agents sans run (préflight refusé) : aucun bail inspecté sur une identité vide.
+    const snapshot: RunSnapshot = {
+      runId: RUN_ID,
+      access: RUN_ID === "" ? "free" : inspectRun(RUN_DIR, RUN_ID, SESSION_ID).kind,
+    };
+    RUN_UI?.setStatus?.(RUN_STATUS_KEY, JSON.stringify(snapshot));
+    return;
+  }
+  const runId = CLASSEMENT.runId ?? "";
+  let access: RunSnapshot["access"] = "free";
+  if (runId) {
+    try {
+      access = inspectRun(RUN_DIR, runId, SESSION_ID).kind;
+    } catch {
+      access = "recovery-required";
+    }
+  }
+  RUN_UI?.setStatus?.(RUN_STATUS_KEY, JSON.stringify({ runId, access } satisfies RunSnapshot));
 }
 
 /**
@@ -400,6 +505,29 @@ interface Delegation {
   changedFiles: string[];
 }
 const HISTORY: Delegation[] = [];
+
+/**
+ * Q-P2-9 (`e1901916…` § 4.1) : le run sous lequel `HISTORY` et `SCOUT_CALLS` ont été accumulés.
+ *
+ * Posé par la première accumulation, dans l'un ou dans l'autre, depuis l'identité de run courante ;
+ * jamais vide, jamais déduit d'un ancien `RUN_ID` ni d'une proposition de découverte. Les trois sont
+ * remis à neuf à tout T1 ; au T3, après l'identité rendue par `openRun` et avant toute lecture
+ * décisionnelle, ils sont vidés si ce propriétaire diffère du run ouvert ; T5 les conserve. Cela vaut
+ * pour la vie de l'instance du module, sans rien de durable : les registres restent les autorités.
+ */
+let IDENTITE_HISTOIRE: string | undefined;
+
+/** À chaque accumulation dans `HISTORY` ou `SCOUT_CALLS`. */
+function noterProprietaireHistoire(): void {
+  if (IDENTITE_HISTOIRE === undefined && RUN_ID !== "") IDENTITE_HISTOIRE = RUN_ID;
+}
+
+/** L'historique de session et son propriétaire, remis à neuf. */
+function viderHistoire(): void {
+  HISTORY.length = 0;
+  SCOUT_CALLS = 0;
+  IDENTITE_HISTOIRE = undefined;
+}
 
 /**
  * La vue d'une lane sur l'historique.
@@ -1402,6 +1530,8 @@ function designCanonique(): string {
 
 /** La garde s'applique dès qu'un plan gelé est présent. Lecture pure : rien n'est mémorisé. */
 function gardeDesignActive(): boolean {
+  // RA-P2-12 : sans identité de run, aucun chemin de plan n'est construit.
+  if (RUN_ID === "") return false;
   try {
     return parsePlan(readFileSync(join(process.cwd(), RUNS_DIR, `${RUN_ID}-plan.json`), "utf-8")).status === "usable";
   } catch {
@@ -1610,6 +1740,8 @@ interface ObservationDesign {
   etat: string;
   instantane: InstantaneDesign;
   registre: number;
+  /** Q-P2-9 : la clé du run courant à l'observation ; seule l'est jugée sous ce run. */
+  run: string;
 }
 const OBSERVATIONS_DESIGN = new Map<string, ObservationDesign>();
 /** Les observations dont l'attribution attend la résolution d'une transition d'intégration. */
@@ -1623,7 +1755,7 @@ function observerDesign(): ObservationDesign {
   } catch {
     // Voir ci-dessus.
   }
-  return { etat: etatDesign(), instantane: instantaneDesign(process.cwd()), registre };
+  return { etat: etatDesign(), instantane: instantaneDesign(process.cwd()), registre, run: cleDeRun(RUN_ID) };
 }
 
 /**
@@ -1688,14 +1820,30 @@ function attribuerApresAppel(o: ObservationDesign): void {
  * ou tentée — ce qui reste hors du merge encore inachevé se juge désormais.
  */
 function reevaluerAttributions(apresReprise: boolean): void {
-  for (const o of ATTRIBUTIONS_EN_ATTENTE.splice(0)) {
+  // Q-P2-9 : seules les entrées du run courant sont rejugées ; les autres restent telles quelles.
+  const courant = RUN_ID === "" ? undefined : cleDeRun(RUN_ID);
+  const autres = ATTRIBUTIONS_EN_ATTENTE.filter((o) => o.run !== courant);
+  const siennes = ATTRIBUTIONS_EN_ATTENTE.filter((o) => o.run === courant);
+  ATTRIBUTIONS_EN_ATTENTE.splice(0, ATTRIBUTIONS_EN_ATTENTE.length, ...autres);
+  for (const o of siennes) {
     const v = jugerObservation(o, apresReprise);
     if (v === "non-explique") bloquerContinuation();
     else if (v === "en-attente") ATTRIBUTIONS_EN_ATTENTE.push(o);
   }
 }
-/** Le blocage constaté par cette session, même si son écriture durable a échoué. */
-let BLOCAGE_SESSION: { at: string; code: typeof RUN_CONTINUATION_BLOCKED } | undefined;
+/**
+ * Q-P2-9 (`e1901916…` § 4.2) : les blocages constatés par cette instance du module, même quand leur
+ * écriture durable a échoué. Une entrée par run bloqué, sous la clé de son espace des runs et de son
+ * identité, capturée à la constatation. Plusieurs coexistent ; T1, T3 et T5 n'en suppriment aucune.
+ * La garde ne refuse `task` que sur l'entrée du run courant, et le bloc durable de son manifeste
+ * garde la priorité sans effacer l'entrée locale. Rien n'en est durable.
+ */
+const BLOCAGES_NON_ECRITS = new Map<string, { at: string; code: typeof RUN_CONTINUATION_BLOCKED }>();
+
+/** La clé d'un run dans les états locaux de l'instance : son espace des runs, puis son identité. */
+function cleDeRun(runId: string): string {
+  return `${resolve(RUN_DIR)}\0${runId}`;
+}
 
 /**
  * Poser le blocage durable (C6.6). C'est une mutation du run : la propriété se prend ici si
@@ -1704,12 +1852,18 @@ let BLOCAGE_SESSION: { at: string; code: typeof RUN_CONTINUATION_BLOCKED } | und
  */
 function bloquerContinuation(): void {
   const at = new Date().toISOString();
-  BLOCAGE_SESSION ??= { at, code: RUN_CONTINUATION_BLOCKED };
+  const runId = RUN_ID;
+  if (runId === "") {
+    console.error("subagent: continuation_block non enregistré : aucune identité de run courante");
+    return;
+  }
+  const cle = cleDeRun(runId);
+  if (!BLOCAGES_NON_ECRITS.has(cle)) BLOCAGES_NON_ECRITS.set(cle, { at, code: RUN_CONTINUATION_BLOCKED });
   try {
     const bail = ensureOwnership();
     if ("refus" in bail) throw new Error(bail.refus);
     const m = poserBlocageContinuation(RUN_DIR, at, bail.lease);
-    if (m.continuation_block) BLOCAGE_SESSION = m.continuation_block;
+    if (m.continuation_block) BLOCAGES_NON_ECRITS.set(cle, m.continuation_block);
   } catch (err) {
     console.error(`subagent: continuation_block non écrit : ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -1717,7 +1871,7 @@ function bloquerContinuation(): void {
 
 /** Le refus public de `task` sous blocage (C6.6), ou `undefined`. Rien n'est muté pour le lire. */
 function refusDeGarde() {
-  let bloc = BLOCAGE_SESSION;
+  let bloc = RUN_ID === "" ? undefined : BLOCAGES_NON_ECRITS.get(cleDeRun(RUN_ID));
   try {
     bloc = readManifest(RUN_DIR)?.continuation_block ?? bloc;
   } catch {
@@ -2902,7 +3056,7 @@ function refusViolationNonEnregistree(err: ViolationNotRecordedError) {
   };
 }
 
-function reconstruire(): void {
+function reconstruire(runId: string = RUN_ID): void {
   /*
    * La fenêtre de mesure : avant la première lecture, après la seconde
    * réconciliation.
@@ -2923,15 +3077,15 @@ function reconstruire(): void {
    */
   const debut = performance.now();
   const sondesAvant = readGitInvocationCount();
-  reconstruireSousMesure();
+  reconstruireSousMesure(runId);
   LAST_SCAN = {
     recovery_scan_ms: performance.now() - debut,
     git_probe_count: readGitInvocationCount() - sondesAvant,
   };
 }
 
-function reconstruireSousMesure(): void {
-  const laneRead = readLaneEvents(RUN_DIR, RUN_ID);
+function reconstruireSousMesure(runId: string): void {
+  const laneRead = readLaneEvents(RUN_DIR, runId);
   /*
    * L'observation est partagée avec `bin/subagent-recover` : un opérateur et un
    * runtime qui regardent le même disque doivent en conclure le même état. Ils
@@ -2942,7 +3096,7 @@ function reconstruireSousMesure(): void {
    * mélange pas deux lectures d'un fichier que quelqu'un peut écrire entre les
    * deux.
    */
-  const vu = observeLanes({ root: process.cwd(), runId: RUN_ID, laneRead });
+  const vu = observeLanes({ root: process.cwd(), runId, laneRead });
   OBSERVATION_LANES = vu;
 
   RECOVERY_MALFORMED = laneRead.malformedLines;
@@ -2976,7 +3130,7 @@ function reconstruireSousMesure(): void {
   // Le ménage se dit sans fermer le run : le signaler évite qu'il s'accumule
   // sans que personne ne sache qu'il est là.
   for (const w of bilan.warnings) lignes.push(`à ranger : ${w.detail}`);
-  reconstruireTentatives(lignes, laneRead);
+  reconstruireTentatives(lignes, laneRead, runId);
   RECOVERY_NOTE = lignes.filter(Boolean).join("\n");
 }
 
@@ -2994,11 +3148,11 @@ function reconstruireSousMesure(): void {
  * est passé, jamais relu — deux lectures peuvent tomber de part et d'autre d'une
  * écriture.
  */
-function reconstruireTentatives(lignes: string[], laneRead: LaneRead): void {
+function reconstruireTentatives(lignes: string[], laneRead: LaneRead, runId: string): void {
   const vu = observeIntegrations({
     root: process.cwd(),
     runDir: RUN_DIR,
-    runId: RUN_ID,
+    runId,
     laneRead,
   });
 
@@ -4005,7 +4159,14 @@ function logRefusal(runId: string, agentName: string, reason: string): void {
   }
 }
 
-reconstruire();
+/*
+ * Aucune reconstruction au chargement (T0, phase 2).
+ *
+ * L'état durable était reconstruit ici, sur un run ouvert au chargement. Le run
+ * s'ouvre désormais à la montée, et `reconstruire()` tourne alors sur l'identité
+ * que rend `openRun` (T3). En profil simple, la découverte relit l'état durable au
+ * `session_start` et avant chaque décision, sans remplir les caches de la session.
+ */
 
 /**
  * Le relevé, depuis la session.
@@ -4019,11 +4180,46 @@ reconstruire();
  *
  * Il ne mute rien et ne prend pas le bail : observer n'exige pas la propriété,
  * ici comme pour `bin/subagent-recover cleanup` sans `--apply`.
+ *
+ * La reconstruction porte sur l'identité **lue** dans le manifeste (T14), pas sur
+ * celle de la session. En profil simple, les caches qu'elle calcule ne deviennent
+ * pas l'état de la session : ils sont vidés après le relevé, et la montée
+ * reconstruira de nouveau.
  */
 function releveDuRun(): { ok: true; texte: string } | { ok: false; raison: string } {
-  reconstruire();
+  if (PROFIL !== "sous-agents") return releveEnSimple();
+  // RA-P2-12 : sous-agents sans run : aucune reconstruction sur une identité vide.
+  if (RUN_ID !== "") reconstruire();
   const manifeste = readManifest(RUN_DIR);
   if (!manifeste) return { ok: false, raison: `aucun run dans ${RUNS_DIR}/` };
+  if (manifeste.runId === RUN_ID) return rendreReleve(manifeste);
+  try {
+    reconstruire(manifeste.runId);
+    return rendreReleve(manifeste);
+  } finally {
+    if (RUN_ID !== "") reconstruire();
+  }
+}
+
+function releveEnSimple(): { ok: true; texte: string } | { ok: false; raison: string } {
+  let manifeste: ReturnType<typeof readManifest>;
+  try {
+    manifeste = readManifest(RUN_DIR);
+  } catch (err) {
+    return { ok: false, raison: err instanceof Error ? err.message : String(err) };
+  }
+  if (!manifeste) return { ok: false, raison: `aucun run dans ${RUNS_DIR}/` };
+  try {
+    reconstruire(manifeste.runId);
+    return rendreReleve(manifeste);
+  } finally {
+    viderCachesDeRun();
+  }
+}
+
+function rendreReleve(
+  manifeste: NonNullable<ReturnType<typeof readManifest>>,
+): { ok: true; texte: string } | { ok: false; raison: string } {
   if (!LAST_LANES) {
     return {
       ok: false,
@@ -4045,6 +4241,523 @@ function releveDuRun(): { ok: true; texte: string } | { ok: false; raison: strin
   };
 }
 
+// ============================================================================ profils (phase 2)
+
+/** Le manifeste du run courant (`run-manifest.ts`, `MANIFEST`), que `lstat` inspecte avant toute lecture. */
+const NOM_MANIFESTE = "active-run.json";
+
+const messageDe = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * L'issue d'un `lstat`, sans `existsSync` : une absence se prouve (`ENOENT`), le reste est un échec.
+ */
+function inspecter(chemin: string, forme: "repertoire" | "fichier"): Inspection {
+  try {
+    const st = lstatSync(chemin);
+    if (forme === "repertoire" ? st.isDirectory() : st.isFile()) return { etat: "present" };
+    return {
+      etat: "echec",
+      raison: `${chemin} n'est pas ${forme === "repertoire" ? "un répertoire réel" : "un fichier ordinaire"}`,
+    };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { etat: "absent" };
+    return { etat: "echec", raison: code ? `${code} sur ${chemin}` : messageDe(err) };
+  }
+}
+
+/**
+ * Le run identifié par le manifeste, relu par les observateurs communs (§ 4.2).
+ *
+ * Ce sont les lectures de `reconstruire()` — `readLaneEvents`, `observeLanes`,
+ * `observeIntegrations` — dans son ordre et avec ses sondes git, plus la lecture du
+ * manifeste et celle du plan attaché de P0-C. Rien n'est écrit, aucun cache de la
+ * session n'est rempli, aucune identité n'est posée : c'est un relevé de décision.
+ */
+function lireLeRun(): LectureDuRun {
+  let manifeste: ReturnType<typeof readManifest>;
+  try {
+    manifeste = readManifest(RUN_DIR);
+  } catch (err) {
+    return { ok: false, raison: messageDe(err) };
+  }
+  if (!manifeste) return { ok: false, raison: `${NOM_MANIFESTE} a disparu pendant la découverte` };
+  const runId = manifeste.runId;
+  const laneRead = readLaneEvents(RUN_DIR, runId) as LaneRead;
+  const vu = observeLanes({ root: process.cwd(), runId, laneRead });
+  let lanes: Extract<LectureDuRun, { ok: true }>["lanes"];
+  let integrations: Extract<LectureDuRun, { ok: true }>["integrations"];
+  if (!vu.usable) {
+    lanes = { ok: false, raison: vu.reason };
+    // Comme `reconstruire()` : pas d'observation des intégrations sur un registre des lanes partiel.
+    integrations = { ok: false, raison: "non observé : le registre des lanes est inexploitable" };
+  } else if (laneRead.malformedLines.length > 0) {
+    // RA-P2-16 : ici `reconstruire()` observe encore les intégrations ; la découverte non. La classe
+    // est *illisible* dans les deux cas ; seul le nombre de sondes git diffère de la base.
+    lanes = { ok: false, raison: `registre des lanes malformé ligne(s) ${laneRead.malformedLines.join(", ")}` };
+    integrations = { ok: false, raison: "non observé : le registre des lanes est malformé" };
+  } else {
+    const bilan = vu.snapshot.reconciliation;
+    const obs = vu.snapshot.observations;
+    const observees = new Set([...bilan.states.keys(), ...obs.openWorktrees, ...(obs.runBranches ?? [])]);
+    lanes = { ok: true, unitesOuvertes: [...bilan.openUnits], lanesObservees: observees.size };
+    const integ = observeIntegrations({ root: process.cwd(), runDir: RUN_DIR, runId, laneRead });
+    integrations = integ.usable ? { ok: true } : { ok: false, raison: integ.reason };
+  }
+  const p = lirePlanAttache(RUN_DIR);
+  const plan: Extract<LectureDuRun, { ok: true }>["plan"] =
+    p.etat === "rompu" ? { etat: "rompu", raison: p.raison } : { etat: p.etat };
+  return {
+    ok: true,
+    runId,
+    statut: manifeste.status,
+    nextSeq: manifeste.nextSeq,
+    continuation: manifeste.continuation_block !== undefined,
+    lanes,
+    integrations,
+    plan,
+  };
+}
+
+/** La découverte fermée (§ 4.2) : `lstat` de l'espace puis du manifeste ; marqueur et liste si l'espace existe. */
+function releverDecouverte(): Releve {
+  const espace = inspecter(RUN_DIR, "repertoire");
+  if (espace.etat !== "present") return { espace };
+  const releve: Releve = { espace };
+  try {
+    const m = etatMarqueur(RUN_DIR);
+    releve.marqueur = m.etat === "invalide" ? { etat: "invalide", raison: m.raison } : { etat: m.etat };
+  } catch (err) {
+    releve.marqueur = { etat: "invalide", raison: messageDe(err) };
+  }
+  try {
+    releve.entrees = { ok: true, noms: readdirSync(RUN_DIR) };
+  } catch (err) {
+    releve.entrees = { ok: false, raison: messageDe(err) };
+  }
+  releve.manifeste = inspecter(join(RUN_DIR, NOM_MANIFESTE), "fichier");
+  if (releve.manifeste.etat === "present") releve.run = lireLeRun();
+  // Q-P2-14 : sans manifeste, les faits d'`ite-p0b/` — jugés par `profil.ts`, sans lecture de contenu.
+  if (releve.manifeste.etat === "absent" && releve.entrees.ok && releve.entrees.noms.includes(NOM_PREUVES_P0B)) {
+    releve.preuvesP0B = releverPreuvesP0B(releve.entrees.noms);
+  }
+  return releve;
+}
+
+/**
+ * Q-P2-14 : `lstat` du dossier `ite-p0b/`, sa liste, le `lstat` de chaque entrée, puis celui de
+ * chaque archive `<id>-run.json` nommée par une entrée et listée dans l'espace. Rien d'autre.
+ */
+function releverPreuvesP0B(noms: readonly string[]): PreuvesP0B {
+  const dossier = join(RUN_DIR, NOM_PREUVES_P0B);
+  const d = inspecter(dossier, "repertoire");
+  if (d.etat === "absent") return { etat: "echec", raison: "disparu pendant le relevé" };
+  if (d.etat === "echec") return { etat: "echec", raison: d.raison };
+  let liste: string[];
+  try {
+    liste = readdirSync(dossier).sort();
+  } catch (err) {
+    return { etat: "echec", raison: `ne se liste pas : ${messageDe(err)}` };
+  }
+  const entrees = liste.map((nom) => ({ nom, inspection: inspecter(join(dossier, nom), "fichier") }));
+  const archives: Record<string, Inspection> = {};
+  for (const { nom } of entrees) {
+    const id = nom.slice(0, 16);
+    if (nom.charAt(16) !== "-" || !ID_RUN.test(id) || id in archives) continue;
+    if (noms.includes(`${id}-run.json`)) archives[id] = inspecter(join(RUN_DIR, `${id}-run.json`), "fichier");
+  }
+  return { etat: "present", entrees, archives };
+}
+
+/**
+ * Relire l'état durable et le retenir comme dernier relevé. Après une montée interrompue, la
+ * classe reste *illisible* : un relevé favorable ne lève pas l'arrêt.
+ */
+function relire(): Classement {
+  const c = decouvrir();
+  CLASSEMENT = ARRET_MONTEE === undefined ? c : { ...c, classe: "illisible", raison: ARRET_MONTEE };
+  return CLASSEMENT;
+}
+
+/** Le classement de l'état durable relu. Une exception donne *illisible*, jamais *absent*. */
+function decouvrir(): Classement {
+  let releve: Releve;
+  try {
+    releve = releverDecouverte();
+  } catch (err) {
+    releve = { espace: { etat: "present" }, exception: messageDe(err) };
+  }
+  return raffiner(classer(releve));
+}
+
+/**
+ * Q-P2-9 (`e1901916…` § 4.2) : sur un run identifié de classe pure *vide*, un blocage constaté par
+ * cette instance et propre à ce run fait classer *non terminé* : la descente est refusée et la
+ * session simple reste en lecture seule. Ni *illisible* ni *terminé* ne sont touchés, et aucune
+ * identité n'est inventée. `profil.ts` ne change pas pour lui.
+ */
+function raffiner(c: Classement): Classement {
+  if (c.classe !== "vide" || c.runId === undefined || c.runId === "") return c;
+  return BLOCAGES_NON_ECRITS.has(cleDeRun(c.runId)) ? { ...c, classe: "non-termine" } : c;
+}
+
+/** Les caches que `reconstruire()` et la première délégation remplissent pour un run. */
+function viderCachesDeRun(): void {
+  OPEN_UNITS.clear();
+  INTEGRATED.clear();
+  ATTEMPTS.clear();
+  RECOVERY_CONFLICTS = new Map();
+  INTEGRATION_CONFLICTS = [];
+  RECOVERY_NOTE = "";
+  RECOVERY_MALFORMED = [];
+  RECOVERY_LEDGER_VERSION = LANE_LEDGER_VERSION;
+  LAST_LANES = undefined;
+  LAST_INTEGRATIONS = undefined;
+  OBSERVATION_LANES = undefined;
+  LAST_SCAN = { recovery_scan_ms: 0, git_probe_count: 0 };
+  RISKS = [];
+  PLAN = undefined;
+  PLAN_TEXT = undefined;
+  NOTE_GEL = null;
+}
+
+/** Les observations d'appels en vol : celles de P0-B et de C6.4, indexées par appel. */
+function viderObservationsEnVol(): void {
+  EN_VOL.clear();
+  PRIMITIVES_AUTHENTIQUES.clear();
+  OBSERVATIONS_P0B.clear();
+  OBSERVATIONS_DESIGN.clear();
+}
+
+/** La session n'a plus de run : identité vidée, gardes de run inertes, caches et observations vidés. */
+function viderIdentiteDeRun(): void {
+  GENERATION_IDENTITE += 1;
+  RUN = undefined;
+  RUN_ID = "";
+  viderCachesDeRun();
+  viderObservationsEnVol();
+}
+
+/** Une composition qui ne vaut plus : son exécution est passée, ou son contexte a changé. */
+function invaliderComposition(raison: string): void {
+  COMPOSITION = { execution: EXECUTION, etablie: false, raison };
+}
+
+/** Le plan du run courant est-il terminal ? (P0-C, relu.) */
+function planTerminalCourant(): boolean {
+  if (RUN === undefined) return false;
+  const e = lireEtatP0();
+  return e.lisible && e.terminal?.etat === "terminal";
+}
+
+function nomsEnregistres(): string[] | undefined {
+  try {
+    const tous = PI_API?.getAllTools?.();
+    return tous ? tous.map((t) => t.name) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * La liste du profil, imposée (§ 4.5) : B sans `task` en simple, réduite à la lecture native
+ * vérifiée si la lecture seule s'applique ; B avec `task` en sous-agents, ou la lecture vérifiée
+ * de P0-C sur un plan terminal. API d'outils absente ou en erreur : aucun changement — la règle
+ * d'appel et `execute` gardent l'autorité.
+ */
+function imposerOutilsDuProfil(): void {
+  if (PROFIL === "sous-agents" && planTerminalCourant()) {
+    activerEtatTerminal();
+    return;
+  }
+  const base = BASE_OUTILS;
+  const enregistres = nomsEnregistres();
+  if (base === undefined || enregistres === undefined) return;
+  const cible = outilsDuProfil({
+    profil: PROFIL,
+    base,
+    enregistres,
+    lectureSeule: PROFIL === "simple" && lectureSeuleRequise(CLASSEMENT),
+    p0cTerminal: false,
+    lectureVerifiee: outilLectureVerifie,
+  });
+  try {
+    PI_API?.setActiveTools?.(cible);
+  } catch {
+    // Voir ci-dessus.
+  }
+}
+
+/** `subagent-only/DELEGATION.md`, ou `undefined` s'il est absent, illisible ou vide. */
+function lireDelegation(): string | undefined {
+  try {
+    const texte = readFileSync(join(SELF_DIR, "DELEGATION.md"), "utf-8");
+    return texte.trim() === "" ? undefined : texte;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Au repos : pi au repos, aucun appel d'outil en vol connu, aucune exécution de `task` en cours. */
+function auRepos(ctx: { isIdle?: () => boolean }): boolean {
+  let idle = false;
+  try {
+    idle = ctx.isIdle?.() === true;
+  } catch {
+    idle = false;
+  }
+  return idle && EN_VOL.size === 0 && TASKS_EN_COURS === 0;
+}
+
+/**
+ * La base B, gardée hors du module pour `/reload` seulement (H23, `f5ffe6d9…` § 1).
+ *
+ * `/reload` réévalue le module et donne au `session_start` la liste courante, restriction du
+ * profil comprise. L'emplacement global ne garde que la base des choix d'outils de **cette**
+ * session, sous une clé propre à l'extension, au répertoire de travail et à la session ; il
+ * n'est relu qu'au `session_start` de raison `reload` et ne porte ni état de run, ni bail, ni
+ * autorité de composition. Une autre session ou un autre répertoire ne le réemploient pas.
+ */
+const CLE_BASE_OUTILS = Symbol.for("pi-agent-config/subagent/base-outils");
+
+interface BaseGardee {
+  cwd: string;
+  session: string;
+  base: string[];
+}
+
+function identiteDeSession(ctx: { sessionManager?: { getSessionId?: () => string } }): string | undefined {
+  try {
+    const id = ctx.sessionManager?.getSessionId?.();
+    return typeof id === "string" && id !== "" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function baseDeLaSession(reason: string, ctx: { sessionManager?: { getSessionId?: () => string } }): string[] | undefined {
+  let donnee: string[] | undefined;
+  try {
+    donnee = PI_API?.getActiveTools?.();
+  } catch {
+    donnee = undefined;
+  }
+  const session = identiteDeSession(ctx);
+  const global = globalThis as unknown as Record<symbol, BaseGardee | undefined>;
+  if (session === undefined) return donnee ? [...donnee] : undefined;
+  const gardee = global[CLE_BASE_OUTILS];
+  if (reason === "reload" && gardee && gardee.cwd === process.cwd() && gardee.session === session) {
+    return [...gardee.base];
+  }
+  if (donnee) global[CLE_BASE_OUTILS] = { cwd: process.cwd(), session, base: [...donnee] };
+  return donnee ? [...donnee] : undefined;
+}
+
+/**
+ * La montée (T3), décidée : préflight, `openRun`, `reconstruire()`, P0-C, outils, statut.
+ *
+ * Tout ce qui pouvait refuser l'a fait avant, sans effet. Une erreur à partir d'ici a pu écrire :
+ * elle est rapportée telle, et la session se referme en profil simple et en lecture seule.
+ */
+function monter(delegation: string): { ok: true; texte: string } | { ok: false; texte: string } {
+  invaliderComposition("changement de profil");
+  DELEGATION_TEXTE = delegation;
+  if (!PREFLIGHT.ok) {
+    PROFIL = "sous-agents";
+    imposerOutilsDuProfil();
+    publishRun();
+    return { ok: true, texte: `Profil : sous-agents, sans run : ce dépôt n'est pas prêt pour un run.\n${PREFLIGHT.reason}` };
+  }
+  try {
+    const ouvert = openRun(RUN_DIR, baseCommit());
+    RUN = ouvert;
+    RUN_ID = ouvert.manifest.runId;
+    // Q-P2-9 : l'historique d'un autre run ne survit pas à l'ouverture de celui-ci.
+    if (IDENTITE_HISTOIRE !== RUN_ID) viderHistoire();
+    viderCachesDeRun();
+    reconstruire();
+  } catch (err) {
+    viderIdentiteDeRun();
+    PROFIL = "simple";
+    DELEGATION_TEXTE = undefined;
+    ARRET_MONTEE = `la montée a échoué après le début de ses effets : ${messageDe(err)}`;
+    CLASSEMENT = { classe: "illisible", raison: ARRET_MONTEE, unitesOuvertes: [] };
+    imposerOutilsDuProfil();
+    publishRun();
+    return {
+      ok: false,
+      texte:
+        `Montée interrompue après le début de ses effets : ${messageDe(err)}\n` +
+        `L'espace des runs (${RUNS_DIR}/) et son manifeste ont pu être écrits ; l'état partiel est conservé. ` +
+        "Profil simple, lecture seule. Relevé : `/subagent-report`.",
+    };
+  }
+  PROFIL = "sous-agents";
+  imposerOutilsDuProfil();
+  publishRun();
+  return { ok: true, texte: `Profil : sous-agents, run ${RUN_ID}.` };
+}
+
+/**
+ * RAR2-10 (`e9a5c3a5…` § 4.2) : l'état du bail relevé après une erreur de libération, sans le réparer.
+ *
+ * L'exception seule ne dit pas s'il reste : `releaseRunOwnership` le supprime sous la garde de run, et
+ * la sortie de garde, ou une suppression partielle, peut lever après coup. Présent : ce bail possède
+ * encore le run. Absent : son chemin n'existe plus. Indéterminé : tout le reste, raison donnée.
+ * Lecture seule : rien n'est créé, retiré ni rafraîchi.
+ */
+type EtatDuBail = { etat: "présent" } | { etat: "absent" } | { etat: "indéterminé"; raison: string };
+function releverBail(lease: Lease): EtatDuBail {
+  const chemin = join(RUN_DIR, `${lease.runId}.lease`);
+  let st;
+  try {
+    st = lstatSync(chemin);
+  } catch (err) {
+    if ((err as { code?: string })?.code === "ENOENT") return { etat: "absent" };
+    return { etat: "indéterminé", raison: `illisible : ${messageDe(err)}` };
+  }
+  if (!st.isDirectory()) return { etat: "indéterminé", raison: "ce n'est pas un répertoire (lien ou fichier)" };
+  if (ownsRun(RUN_DIR, lease)) return { etat: "présent" };
+  // Ni ce bail ni rien de lisible : on dit lequel, sans rien en conclure (lecture seule).
+  let autre = false;
+  try {
+    const doc = JSON.parse(readFileSync(join(chemin, "owner.json"), "utf-8")) as Partial<Lease>;
+    // Le critère de `readOwner` (run-manifest.ts) : version 1, session et bail non vides.
+    autre = doc?.version === 1 && typeof doc.sessionId === "string" && doc.sessionId !== "" &&
+      typeof doc.leaseId === "string" && doc.leaseId !== "";
+  } catch {
+    autre = false;
+  }
+  return {
+    etat: "indéterminé",
+    raison: autre ? "le répertoire reste, sous un autre propriétaire" : "le répertoire reste, sans propriétaire lisible",
+  };
+}
+
+/** Ce que la descente interrompue dit du bail : l'état relevé, jamais une présence supposée. */
+function texteDuBail(runId: string, etat: EtatDuBail): string {
+  const chemin = `${RUNS_DIR}/${runId}.lease`;
+  switch (etat.etat) {
+    case "présent":
+      return `Reste posé : le bail de ${runId} (${chemin}), relevé présent après l'erreur ; il n'a pas été relâché et deviendra périmé. `;
+    case "absent":
+      return `Bail relevé absent après l'erreur : ${chemin} n'existe plus ; aucun bail de ${runId} ne reste à ce chemin. `;
+    default:
+      return `État du bail de ${runId} (${chemin}) indéterminé après l'erreur : ${etat.raison} ; il n'est ni forcé ni relâché. `;
+  }
+}
+
+/**
+ * La descente (T5), décidée : bail relâché, contrôleur neuf, identité vidée, B sans `task`.
+ *
+ * RA-P2-5 (`b5cf332a…` § 6) : si la libération du bail lève après le début des effets, la descente
+ * se termine quand même vers le profil simple, en lecture seule, et dit ce qui est fait et ce qui
+ * reste : le bail n'est ni forcé ni relâché autrement. RAR2-10 : son état est relevé, et annoncé tel
+ * qu'observé.
+ */
+function descendre(): { ok: boolean; texte: string } {
+  invaliderComposition("changement de profil");
+  LEASE_ABORT.abort(new Error("/subagents off"));
+  HEARTBEAT?.stop();
+  HEARTBEAT = undefined;
+  const runId = RUN_ID;
+  let echec: string | undefined;
+  // RAR2-10 : seul un bail tenu peut lever à la libération ; c'est lui qu'on relève après une erreur.
+  const tenu = LEASE;
+  try {
+    if (LEASE) releaseRunOwnership(RUN_DIR, LEASE);
+  } catch (err) {
+    echec = messageDe(err);
+    ARRET_MONTEE = `la descente a échoué après le début de ses effets : ${echec}`;
+    CLASSEMENT = { classe: "illisible", raison: ARRET_MONTEE, unitesOuvertes: [] };
+  }
+  LEASE = undefined;
+  LEASE_ABORT = new AbortController();
+  viderIdentiteDeRun();
+  PROFIL = "simple";
+  DELEGATION_TEXTE = undefined;
+  imposerOutilsDuProfil();
+  publishRun();
+  if (echec !== undefined) {
+    return {
+      ok: false,
+      texte:
+        `Descente interrompue après le début de ses effets : ${echec}\n` +
+        "Déjà fait : le signal d'abandon est émis et le battement arrêté ; l'identité de run de la session est vidée. " +
+        texteDuBail(runId, releverBail(tenu!)) +
+        "Profil simple, lecture seule. Relevé : `/subagent-report`.",
+    };
+  }
+  return { ok: true, texte: "Profil : simple. Le run n'est pas effacé." };
+}
+
+/**
+ * Le chemin du plan d'un run, ou sa forme générique sans run (phase 2).
+ *
+ * Les textes enregistrés avec `task` le sont une fois, à l'appel de la fabrique, quand aucun
+ * run n'est encore ouvert : ils ne portent pas de chemin de run. Le chemin du run courant est
+ * donné à chaque invite, dans `toolGuidelines.task` (T9).
+ */
+function planDuRun(runId: string): string {
+  return `${RUNS_DIR}/${runId || "<runId>"}-plan.json`;
+}
+
+/** Les guidelines de `task` : sans chemin de run à l'enregistrement, sur l'identité du run courant à l'invite. */
+function guidelinesDeTask(runId: string): string[] {
+  return [
+  "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
+  "Searching across files for a bounded location is scout work: when the question is *where* rather than *what* and a bounded lookup can answer it, delegate it instead of grepping.",
+  "Consistency within the change is reviewer work, not preflight scout work. Whether the change reached an unknown caller or pattern is scouted only when the reviewer returns that specific where-question in `open_risks`; do not scout it speculatively before the worker. And a question you can already answer is not scout work either — scouting a tree you have just read yourself returns what you gave it.",
+  "When a reviewer result reports one or more `open-risks`, their text is printed under the head line, identified. Route an entry to scout only when a bounded lookup would settle it — a term, a file, a caller of a named symbol, a definition — and route it before any further mutation of the same change. An inventory, a completeness check, or a proof of absence that no exact bounded search can settle is not scoutable: leave that risk open rather than send someone to a ceiling. An absence with an exact target — a named symbol, a module path, a precise string — is scoutable, because one search concludes it. Preserve the reviewer's concern; do not broaden it and do not invent new ones. If its search target is too broad, narrow it only when the narrower lookup still settles the same review question; otherwise leave it open. If several routable risks from that review share a scope, batch them in one call. The scout's locations go into a follow-up review of the same open change, not to a worker: it is the review that was left open, and only a confirmed defect sends a worker. Carry the ids in `for_risks` on both calls — the follow-up review is handed the risk texts from them, and it can only close what it was handed.",
+  "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
+  ...(PREFLIGHT.ok
+    ? [
+        `Before the first delegation of a session that will produce code, write a decomposition to ${planDuRun(runId)}: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}],"test_command":"..."}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime computes every tracked Python file that statically imports a module a unit will write; each one outside that unit's expected_write_scope becomes a kept consumer — left untouched, the interface it uses preserved, no write right. You do not list them and you do not search for them: the result that freezes the plan names them. If a unit must change one, put it in expected_write_scope. Add the top-level test_command only if what you have already read gives the project's full-suite test command, environment variables included; omit it otherwise — it is never a reason to read or search. The runtime checks it statically, never runs it, and hands it to the first worker until a worker has run a test command successfully.`,
+      ]
+    : [
+        /*
+         * Le préflight a échoué, et la guideline normale dirait d'écrire
+         * un plan sous le répertoire qui est précisément le problème —
+         * sans run, puisque la montée n'en ouvre aucun. Le runtime n'écrit
+         * rien ; l'orchestrateur, lui, suit ses instructions, et celle-là
+         * créerait un plan sous `.pi-subagent-runs/` avant même le premier
+         * `task`. Refuser dans `execute` arrive après.
+         *
+         * « Redémarrer » n'est pas une politesse : `PREFLIGHT` est établi au
+         * chargement du module, et la montée ne le réévalue pas ; corriger
+         * l'exclusion en cours de session ne réveille pas ce runtime. Le
+         * libellé reste celui de la base, à l'octet.
+         */
+        `This repository is not ready for a run: ${RUNS_DIR}/ is not ignored by git, or files under it are tracked. Do not write anything under ${RUNS_DIR}/ — no plan, no scratch file. Delegation is refused until this is fixed. Add ${RUNS_DIR}/ to the repository's .gitignore, or to .git/info/exclude, then restart pi: this run's state was decided at load time and does not re-evaluate mid-session.`,
+      ]),
+  "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
+  "During a run you cannot modify any file of the project yourself — not the repository, not a lane, not git state: the runtime refuses `write` and `edit` there and blocks the run if `bash` changes it. Every change, however small, is delegated. The only file you write is the plan, before the first delegation.",
+  "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
+  ];
+}
+
+/** Ce que ce handler lit et pose dans les options du prompt de pi 0.86.0. */
+interface OptionsDuPrompt {
+  customPrompt?: string;
+  forceSystemPrompt?: string;
+  selectedTools: string[];
+  toolGuidelines: Record<string, string[]>;
+  sections: Record<string, string | undefined>;
+}
+
+/** La délégation est-elle composée pour l'exécution courante ? */
+function compositionEtablie(): boolean {
+  return COMPOSITION.etablie && COMPOSITION.execution === EXECUTION;
+}
+
+function etatDeComposition(): string {
+  return compositionEtablie() ? "composée pour l'exécution courante" : `non composée (${COMPOSITION.raison})`;
+}
+
+function refusDeComposition(): string {
+  return `${REFUS_DELEGATION_NON_COMPOSEE}\nCause : ${COMPOSITION.raison}.`;
+}
+
 export default function (pi: ExtensionAPI) {
   const agents = loadAgents(join(SELF_DIR, "agents"));
   PI_API = pi as unknown as typeof PI_API;
@@ -4057,20 +4770,150 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  /*
+   * Le profil (T2 à T7). Chaque forme relit l'état durable juste avant de décider : une
+   * décision porte toujours sur l'état qu'elle vient de relire, jamais sur un état de module.
+   * Un refus n'a aucun effet et n'écrit rien, pas même le journal des refus.
+   */
+  pi.registerCommand("subagents", {
+    description: "Profil : `/subagents` (état), `/subagents on` (sous-agents), `/subagents off` (simple)",
+    handler: async (
+      args: unknown,
+      ctx: { isIdle?: () => boolean; ui?: { notify?: (t: string, k?: "info" | "warning" | "error") => void } },
+    ) => {
+      const dire = (texte: string, genre: "info" | "warning" | "error") => ctx.ui?.notify?.(texte, genre);
+      const argument = typeof args === "string" ? args : "";
+      const c = relire();
+      const delegation = argument.trim() === "on" && PROFIL === "simple" ? lireDelegation() : undefined;
+      const decision = deciderCommande(
+        argument,
+        { profil: PROFIL, repos: auRepos(ctx), delegationLisible: delegation !== undefined },
+        c,
+        PROFIL === "sous-agents" ? etatDeComposition() : undefined,
+      );
+      switch (decision.action) {
+        case "rendre":
+          if (PROFIL === "simple") imposerOutilsDuProfil();
+          publishRun();
+          dire(decision.texte, "info");
+          return;
+        case "monter": {
+          const r = monter(delegation as string);
+          dire(r.texte, r.ok ? "info" : "error");
+          return;
+        }
+        case "descendre": {
+          const r = descendre();
+          dire(r.texte, r.ok ? "info" : "error");
+          return;
+        }
+        case "refus":
+        case "usage":
+          dire(decision.texte, "error");
+          return;
+      }
+    },
+  });
+
   // The UI context is only handed out with an event or a call. Capture it at
   // session_start so the dispatch loop can publish progress without one.
   let ui: { setStatus?: (k: string, v: string) => void } | undefined;
-  pi.on("session_start", async (_event, ctx) => {
+  /*
+   * T1 : chaque session part du profil simple, sans identité de run.
+   *
+   * Le module survit au changement de session dans un même processus (`new`, `resume`,
+   * `fork`) : tout l'état de session est donc remis à neuf ici, avant toute décision —
+   * identité, bail, battement, contrôleur d'abandon, observations en vol, caches de run.
+   * Puis la base B, la découverte, la liste du profil, l'avertissement et le statut.
+   */
+  pi.on("session_start", async (event, ctx) => {
     ui = ctx.ui;
     RUN_UI = ctx.ui;
-    // L'état du run est visible dès le chargement : une session qui découvre un
+    LEASE_ABORT.abort(new Error("session_start"));
+    HEARTBEAT?.stop();
+    HEARTBEAT = undefined;
+    LEASE = undefined;
+    LEASE_ABORT = new AbortController();
+    viderIdentiteDeRun();
+    PROFIL = "simple";
+    DELEGATION_TEXTE = undefined;
+    ARRET_MONTEE = undefined;
+    // Q-P2-9 : l'historique de session et son propriétaire repartent de zéro à tout T1. Les
+    // blocages non écrits et les attributions en attente restent attachés à leurs runs.
+    viderHistoire();
+    invaliderComposition("nouvelle session");
+    BASE_OUTILS = baseDeLaSession(
+      (event as { reason?: unknown }).reason === "reload" ? "reload" : "autre",
+      ctx as unknown as { sessionManager?: { getSessionId?: () => string } },
+    );
+    relire();
+    imposerOutilsDuProfil();
+    // L'état du run est visible dès le démarrage : une session qui découvre un
     // dépôt occupé doit le savoir sans avoir à provoquer un refus.
+    const texte = avertissement(CLASSEMENT);
+    if (texte !== undefined && (ctx as { hasUI?: boolean }).hasUI) (ctx as { ui: { notify: (t: string, k?: string) => void } }).ui.notify(texte, "warning");
     publishRun();
-    // P0-C : un plan terminal l'est encore après un redémarrage — relu sur le registre.
-    if (RUN !== undefined) {
-      const e = lireEtatP0();
-      if (e.lisible && e.terminal?.etat === "terminal") activerEtatTerminal();
+  });
+
+  /*
+   * T13 : `/tree` restaure les outils depuis la transcription de la branche visée, puis émet
+   * `session_tree` sans `session_start`. Le profil réimpose sa liste sur l'état relu.
+   */
+  pi.on("session_tree", async () => {
+    invaliderComposition("navigation dans l'arbre");
+    relire();
+    imposerOutilsDuProfil();
+    publishRun();
+  });
+
+  /*
+   * T9 : la délégation, posée à chaque invite en sous-agents, et l'état de composition de
+   * l'exécution qui commence (Q-P2-1 voie (a), Q-P2-4).
+   *
+   * Le chemin structuré d'abord : la section `delegation` et les guidelines de `task` du run
+   * courant, dans les options. Si un handler antérieur a déjà forcé le prompt, le texte forcé
+   * est gardé à l'octet et on n'y ajoute, à la fin et une seule fois, que ce qui manque.
+   * L'extension ne crée jamais de prompt forcé et ne retourne jamais `systemPrompt`.
+   * L'état ne devient positif qu'une fois le prompt rendu relu et trouvé complet ; une
+   * exception le laisse négatif, et `task` est alors refusé pour cette exécution.
+   */
+  pi.on("before_agent_start", async (event, ctx) => {
+    EXECUTION += 1;
+    invaliderComposition("composition non établie pour cette exécution");
+    if (PROFIL !== "sous-agents") return undefined;
+    try {
+      const delegation = DELEGATION_TEXTE;
+      if (delegation === undefined) throw new Error("DELEGATION.md n'a pas été lu à la montée");
+      const options = (event as unknown as { systemPromptOptions: OptionsDuPrompt }).systemPromptOptions;
+      const forceAvant = typeof options.forceSystemPrompt === "string" ? options.forceSystemPrompt : undefined;
+      options.sections.delegation = delegation;
+      const guidelines = guidelinesDeTask(RUN_ID);
+      options.toolGuidelines.task = [...guidelines];
+      const taskDu = options.selectedTools.includes(NOM_PRIMITIVE) && !planTerminalCourant();
+      /*
+       * Q-P2-22 (`b5cf332a…` § 3) : pi 0.86.0 ne construit les règles, donc les guidelines d'outils,
+       * que hors de la branche `if (customPrompt)` (`system-prompt.js`). Sous un prompt personnalisé
+       * non vide, aucune guideline n'est due ; la délégation reste exigée à l'octet. Même prédicat que
+       * pi : une chaîne vide n'emprunte pas la branche, et rien n'est rogné.
+       */
+      const reglesRendues = !options.customPrompt;
+      const dues = taskDu && reglesRendues ? guidelines : [];
+      if (forceAvant !== undefined) {
+        const complete = completerPromptForce(forceAvant, delegation, dues);
+        if (complete.ajoute) options.forceSystemPrompt = complete.prompt;
+      }
+      const rendu = (event as unknown as { systemPrompt: string }).systemPrompt;
+      if (!compositionPresente(rendu, delegation, dues)) {
+        throw new Error("le prompt rendu ne porte pas toutes les contributions dues");
+      }
+      COMPOSITION = { execution: EXECUTION, etablie: true, raison: "" };
+    } catch (err) {
+      invaliderComposition(`composition en échec : ${messageDe(err)}`);
+      if ((ctx as { hasUI?: boolean }).hasUI) {
+        (ctx as { ui: { notify: (t: string, k?: string) => void } }).ui.notify(`${REFUS_DELEGATION_NON_COMPOSEE}\nCause : ${COMPOSITION.raison}`, "error");
+      }
     }
+    return undefined;
   });
 
   /**
@@ -4104,6 +4947,9 @@ export default function (pi: ExtensionAPI) {
    * propres.
    */
   pi.on("session_shutdown", async () => {
+    // RAR2-9 : la session finit ici ; une exécution entrée avant n'agira plus à son retour, même si
+    // la libération du bail échoue et même sous une instance rechargée qui ne verra pas de T1.
+    GENERATION_IDENTITE += 1;
     // Abandonner d'abord, libérer ensuite. Pi appelle normalement ce hook dans
     // un état au repos, mais l'invariant ne doit pas dépendre de cette
     // hypothèse : on ne relâche jamais volontairement la capacité en laissant
@@ -4117,6 +4963,21 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event) => {
+    /*
+     * T10, le portier du profil : en simple, aucune garde de run, aucune empreinte, aucun bail,
+     * aucune sonde git ; seule la règle de lecture seule, sur le dernier relevé.
+     */
+    if (PROFIL !== "sous-agents") {
+      const d = decisionAppelSimple(CLASSEMENT, (event as { toolName?: unknown }).toolName, outilLectureVerifie);
+      return d.bloquer ? { block: true, reason: d.raison } : undefined;
+    }
+    /*
+     * Q-P2-4 : `task` n'est exécuté que si la délégation de l'exécution courante est composée.
+     * Avant tout enregistrement en vol de P0-B, et sans écriture sous les runs.
+     */
+    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE && !compositionEtablie()) {
+      return { block: true, reason: refusDeComposition() };
+    }
     /*
      * P0-C, couche qui fait autorité : un plan terminal ne laisse passer que la lecture native
      * vérifiée — même si la liste des outils actifs avait été rétablie, même pour un appel frère
@@ -4200,6 +5061,7 @@ export default function (pi: ExtensionAPI) {
     if (last?.agent === "orchestrator") {
       if (!last.changedFiles.includes(path)) last.changedFiles.push(path);
     } else {
+      noterProprietaireHistoire();
       HISTORY.push({ agent: "orchestrator", batch: randomBytes(4).toString("hex"), produced: true, readOnly: false, changedFiles: [path] });
     }
     return undefined;
@@ -4211,6 +5073,8 @@ export default function (pi: ExtensionAPI) {
    * par un appel que l'avant-appel n'a pas su lire pose le blocage durable (C6.6).
    */
   pi.on("tool_result", async (event) => {
+    // Le portier du profil : en simple, aucune observation n'a été prise, rien n'est jugé.
+    if (PROFIL !== "sous-agents") return undefined;
     const id = (event as { toolCallId?: unknown }).toolCallId;
     if (typeof id !== "string") return undefined;
     const obs = OBSERVATIONS_DESIGN.get(id);
@@ -4234,6 +5098,7 @@ export default function (pi: ExtensionAPI) {
    * toujours un `tool_execution_end`. Ce qui reste observé y est jugé et libéré.
    */
   pi.on("tool_execution_end", async (event) => {
+    if (PROFIL !== "sous-agents") return undefined;
     apresAppelP0B((event as { toolCallId?: unknown }).toolCallId);
     return undefined;
   });
@@ -4311,7 +5176,7 @@ export default function (pi: ExtensionAPI) {
     work_unit: Type.Optional(
       Type.String({
         description:
-          `The id of the work unit this delegation belongs to, from ${RUNS_DIR}/${RUN_ID}-plan.json — ` +
+          `The id of the work unit this delegation belongs to, from ${planDuRun("")} — ` +
           "`W03`. Name it on every delegation that belongs to one — worker, " +
           "reviewer, scout alike — and a rework carries the same id as the " +
           "attempt it repeats; the runtime derives the working directory and the " +
@@ -4369,43 +5234,37 @@ export default function (pi: ExtensionAPI) {
       description:
         "Run one scoped task in a fresh pi process with its own model, tools and " +
         "conventions. Returns a one-line summary; the full result is written to disk.",
-      promptGuidelines: [
-        "Before delegating, list the files the work depends on and name them in the task text. A schema written without the data file named will be invented.",
-        "Searching across files for a bounded location is scout work: when the question is *where* rather than *what* and a bounded lookup can answer it, delegate it instead of grepping.",
-        "Consistency within the change is reviewer work, not preflight scout work. Whether the change reached an unknown caller or pattern is scouted only when the reviewer returns that specific where-question in `open_risks`; do not scout it speculatively before the worker. And a question you can already answer is not scout work either — scouting a tree you have just read yourself returns what you gave it.",
-        "When a reviewer result reports one or more `open-risks`, their text is printed under the head line, identified. Route an entry to scout only when a bounded lookup would settle it — a term, a file, a caller of a named symbol, a definition — and route it before any further mutation of the same change. An inventory, a completeness check, or a proof of absence that no exact bounded search can settle is not scoutable: leave that risk open rather than send someone to a ceiling. An absence with an exact target — a named symbol, a module path, a precise string — is scoutable, because one search concludes it. Preserve the reviewer's concern; do not broaden it and do not invent new ones. If its search target is too broad, narrow it only when the narrower lookup still settles the same review question; otherwise leave it open. If several routable risks from that review share a scope, batch them in one call. The scout's locations go into a follow-up review of the same open change, not to a worker: it is the review that was left open, and only a confirmed defect sends a worker. Carry the ids in `for_risks` on both calls — the follow-up review is handed the risk texts from them, and it can only close what it was handed.",
-        "A scout locates facts answerable by an exact bounded search; it does not prove semantic completeness or repository-wide consistency. Do not turn an audit into several scout calls merely to fit the scout contract: an inventory split into three lookups is still an inventory, and three partial answers do not establish the concern they came from.",
-        ...(PREFLIGHT.ok
-          ? [
-              `Before the first delegation of a session that will produce code, write a decomposition to ${RUNS_DIR}/${RUN_ID}-plan.json: {"version":1,"work_units":[{"id":"W01","goal":"...","depends_on":[],"expected_write_scope":["path",...]}],"test_command":"..."}. Decompose into the smallest set of coherent, independently reviewable execution units justified by the task and the context you already have. Correct dependency structure matters more than parallelism — do not decompose to maximise it. Declare a dependency conservatively when you are unsure. Writing this plan is not a reason to read or search anything you would not otherwise read, and it is never a reason to scout: a lookup made to decide whether one unit depends on another is the failure this plan is being measured for. Then leave it alone. It is a prediction, and rewriting it after seeing the execution measures nothing. Before it is frozen, the runtime computes every tracked Python file that statically imports a module a unit will write; each one outside that unit's expected_write_scope becomes a kept consumer — left untouched, the interface it uses preserved, no write right. You do not list them and you do not search for them: the result that freezes the plan names them. If a unit must change one, put it in expected_write_scope. Add the top-level test_command only if what you have already read gives the project's full-suite test command, environment variables included; omit it otherwise — it is never a reason to read or search. The runtime checks it statically, never runs it, and hands it to the first worker until a worker has run a test command successfully.`,
-            ]
-          : [
-              /*
-               * Le préflight a échoué, et la guideline normale dirait d'écrire
-               * un plan sous le répertoire qui est précisément le problème —
-               * avec un `runId` vide, puisque aucun run n'a été ouvert. Le
-               * runtime n'écrit rien ; l'orchestrateur, lui, suit ses
-               * instructions, et celle-là créerait `.pi-subagent-runs/-plan.json`
-               * avant même le premier `task`. Refuser dans `execute` arrive
-               * après.
-               *
-               * « Redémarrer » n'est pas une politesse : `PREFLIGHT` et `RUN`
-               * sont établis au chargement, donc corriger l'exclusion en cours
-               * de session ne réveille pas ce runtime.
-               */
-              `This repository is not ready for a run: ${RUNS_DIR}/ is not ignored by git, or files under it are tracked. Do not write anything under ${RUNS_DIR}/ — no plan, no scratch file. Delegation is refused until this is fixed. Add ${RUNS_DIR}/ to the repository's .gitignore, or to .git/info/exclude, then restart pi: this run's state was decided at load time and does not re-evaluate mid-session.`,
-            ]),
-        "Delegate when the task needs a different model, a context this session should not carry, or parallel read-only work.",
-        "During a run you cannot modify any file of the project yourself — not the repository, not a lane, not git state: the runtime refuses `write` and `edit` there and blocks the run if `bash` changes it. Every change, however small, is delegated. The only file you write is the plan, before the first delegation.",
-        "The child sees only the task text. Anything implicit here is absent there — a project AGENTS.md, a SECURITY.md, a CONTRIBUTING.md, an ADR, a comment in a config file. Not a list to check off: any constraint the repository states about the paths this task touches, quoted, because the child cannot read any of them.",
-      ],
+      promptGuidelines: guidelinesDeTask(""),
       parameters,
 
       async execute(_id, params: Static<typeof parameters>, options: { signal?: AbortSignal } = {}) {
         /*
+         * T12, la garde de profil, première instruction : hors du profil sous-agents, rien n'est
+         * ouvert, réservé, mis en file, séquencé, lancé, loué ni écrit — pas même le journal des
+         * refus. Elle vaut pour un appel qui arrive ici après une réactivation étrangère de
+         * `task`, ou par un chemin direct.
+         */
+        if (PROFIL !== "sous-agents") {
+          return {
+            content: [{ type: "text" as const, text: REFUS_PROFIL_SIMPLE }],
+            details: { profil: { outcome: "blocked" as const, code: "PROFIL_SIMPLE" } },
+            isError: true,
+          };
+        }
+        // Q-P2-4, immédiatement après : la délégation de l'exécution courante doit être composée.
+        if (!compositionEtablie()) {
+          return {
+            content: [{ type: "text" as const, text: refusDeComposition() }],
+            details: { profil: { outcome: "blocked" as const, code: "DELEGATION_NON_COMPOSEE" } },
+            isError: true,
+          };
+        }
+        /*
          * C6.6 : un run bloqué refuse toute délégation, quel que soit le rôle, avant la
          * file, la reconstruction, la séquence et tout registre.
          */
+        // RA-P2-6 : l'identité de run de cette exécution, capturée à son entrée.
+        const identiteDeLAppel: IdentiteDAppel = { generation: GENERATION_IDENTITE, runId: RUN_ID };
         // P0-B : cette exécution EST la primitive du runtime, par construction.
         if (OBSERVATIONS_P0B.has(_id)) PRIMITIVES_AUTHENTIQUES.add(_id);
         reevaluerAttributions(false);
@@ -4425,15 +5284,43 @@ export default function (pi: ExtensionAPI) {
          * instantané que l'autre est en train de rendre faux. Deux unités distinctes ne
          * s'attendent jamais.
          */
-        const liberer = await entrerFileUnites(unitesDeLAppel(params));
+        // Une exécution en file ou en cours : la session n'est pas au repos.
+        TASKS_EN_COURS += 1;
+        let liberer: () => void;
+        try {
+          liberer = await entrerFileUnites(unitesDeLAppel(params));
+        } catch (err) {
+          TASKS_EN_COURS -= 1;
+          throw err;
+        }
         // Cette délégation, propriétaire de la transition qu'elle ouvrirait en ligne.
         const proprietaire = Symbol(`délégation ${_id}`);
         try {
-          return signalerSiTerminal(await delegation(_id, params, options));
+          /*
+           * RA-P2-6 : après l'attente, l'identité doit être celle de l'entrée. Un T1 survenu pendant
+           * l'attente l'a vidée, même si une session ultérieure a repris le même run : rien n'est
+           * alors réservé, séquencé, loué ni lancé, et aucun chemin n'est construit.
+           */
+          if (GENERATION_IDENTITE !== identiteDeLAppel.generation || RUN_ID !== identiteDeLAppel.runId) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `[run: identité changée] cette délégation attendait son tour sous le run ` +
+                  `${identiteDeLAppel.runId || "(aucun)"} ; la session a changé depuis. Rien n'a été réservé, ` +
+                  "séquencé, loué ni lancé.",
+              }],
+              isError: true,
+            };
+          }
+          const resultat = await delegation(_id, params, options);
+          // RAR2-9 : sous une autre identité, ni la liste d'outils ni le texte ne sont touchés.
+          return identiteIntacte(identiteDeLAppel) ? signalerSiTerminal(resultat) : resultat;
         } finally {
           // Une transition ouverte par cette délégation ne lui survit pas, même sur exception.
           fermerTransition(proprietaire);
           liberer();
+          TASKS_EN_COURS -= 1;
         }
 
         async function delegation(
@@ -5371,6 +6258,10 @@ export default function (pi: ExtensionAPI) {
                  * un numéro perdu si l'ouverture échoue ne coûte rien, un
                  * worktree créé après la perte de propriété coûte cher.
                  */
+                // RAR2-9 : une lane restée en file au moment d'un T8 ou d'un T1 ne part pas, avant toute séquence.
+                if (!identiteIntacte(identiteDeLAppel)) {
+                  throw new Error(`${workUnit.id} n'est pas partie : la session a changé`);
+                }
                 const seq = allocateSeq(RUN_DIR, lease).seq;
                 const ouverture = lanesDuLot.get(workUnit.id);
                 if (!ouverture) throw new Error(`${workUnit.id} n'a pas de lane allouée pour ce lot`);
@@ -5404,7 +6295,10 @@ export default function (pi: ExtensionAPI) {
                  * sur la capacité capturée avant le spawn.
                  */
                 if (!stillOwns(lease)) return result;
+                // RAR2-9 : la capacité capturée ne suffit pas ; l'identité de l'entrée aussi.
+                if (!identiteIntacte(identiteDeLAppel)) return result;
 
+                noterProprietaireHistoire();
                 HISTORY.push({
                   laneId: lane.laneId,
                   agent: params.agent,
@@ -5467,11 +6361,16 @@ export default function (pi: ExtensionAPI) {
               content: [{
                 type: "text" as const,
                 text:
-                  `[run: propriété perdue] le lot est revenu, mais ${RUN_ID} ne nous appartient ` +
+                  `[run: propriété perdue] le lot est revenu, mais ${lease.runId} ne nous appartient ` +
                   `plus. Les worktrees et ce qu'ils contiennent restent ; rien n'a été journalisé.`,
               }],
               isError: true,
             };
+          }
+          // RAR2-9 : la capacité capturée ne suffit pas ; l'identité de l'entrée aussi.
+          if (!identiteIntacte(identiteDeLAppel)) {
+            return refusIdentiteChangee(identiteDeLAppel, "le lot est revenu",
+              "Les worktrees et ce qu'ils contiennent restent ; le journal des délégations de ce lot n'est pas écrit.");
           }
           rows.sort((a, b) => a.seq - b.seq);
           logDelegations(RUN_ID, rows);
@@ -5650,18 +6549,25 @@ export default function (pi: ExtensionAPI) {
             content: [{
               type: "text" as const,
               text:
-                `[run: propriété perdue] la délégation est revenue, mais ${RUN_ID} ne nous ` +
+                `[run: propriété perdue] la délégation est revenue, mais ${lease.runId} ne nous ` +
                 `appartient plus. Ce que l'enfant a écrit reste sur le disque ; rien n'a été ` +
                 `journalisé, intégré ni fermé.\n` +
-                describeAccess(inspectRun(RUN_DIR, RUN_ID, SESSION_ID), RUN_ID),
+                describeAccess(inspectRun(RUN_DIR, lease.runId, SESSION_ID), lease.runId),
             }],
             isError: true,
           };
         }
 
+        // RAR2-9 : la capacité capturée ne suffit pas ; l'identité de l'entrée aussi.
+        if (!identiteIntacte(identiteDeLAppel)) {
+          return refusIdentiteChangee(identiteDeLAppel, "la délégation est revenue",
+            "Ce que l'enfant a écrit reste sur le disque ; rien n'a été journalisé, intégré ni fermé.");
+        }
+
         // One HISTORY entry per child, which is what ran. The guard counts the
         // calls behind them — see `streakOf`, and the `batch` field they share.
         const batch = randomBytes(4).toString("hex");
+        if (results.length > 0) noterProprietaireHistoire();
         for (const r of results) {
           HISTORY.push({
             laneId: lane?.laneId,
@@ -6367,7 +7273,10 @@ export default function (pi: ExtensionAPI) {
         // One call, not one per child: the counter is named for calls and its only
         // use is "has a scout ever run", so a fan-out of four is one. The same
         // child-versus-call ambiguity the streak guard just lost.
-        if (params.agent === "scout") SCOUT_CALLS += 1;
+        if (params.agent === "scout") {
+          noterProprietaireHistoire();
+          SCOUT_CALLS += 1;
+        }
 
         // A fan-out returns one block per scout, in the order the questions were
         // asked. Nothing is merged: four answers to four questions are four

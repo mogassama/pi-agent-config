@@ -5,22 +5,27 @@
  * mutant (tests/l0-mutants.json, M-K). Rien de pi, du disque ni de git n'est chargé ici : le
  * relevé est construit à la main, comme la découverte de l'extension le produit.
  *
- *   classes        K01–K20, K17b, K27–K29 : la priorité illisible, absent, terminé, vide, non terminé
+ *   classes        K01–K20, K17b, K27–K29 : la priorité illisible, absent, terminé, vide, non terminé ;
+ *                  K35 : preuves `ite-p0b/` de runs archivés sans manifeste (Q-P2-14)
  *   commandes      K21 : T2–T7, préconditions et argument inconnu
  *   textes         K22, K23 : refus et avertissement nomment le run et l'outil opérateur
  *   lecture seule  K24 : la provenance native décide, jamais le nom seul
  *   outils         K25 : la base, les restrictions, la levée ; jamais tous les outils
  *   chemins        K26 : aucun chemin de registre sur un runId vide
  *   composition    K30–K32 : voie (a), ajout à la fin, une seule fois, composition partielle
+ *   séparateur     K33 : refus de montée sur illisible, un seul point après la raison ; K34 : avertissement, idem
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 
 import {
   avertissement, blocDeDelegation, classer, completerPromptForce, compositionPresente, decisionAppelSimple, designation,
-  deciderCommande, outilsDuProfil, piecesNonIdentifiables, refusLectureSeule, REFUS_PROFIL_SIMPLE,
-  USAGE_SUBAGENTS, type LectureDuRun, type Releve,
+  deciderCommande, ID_RUN, jugerPreuvesP0B, NOM_PREUVES_P0B, outilsDuProfil, piecesNonIdentifiables,
+  refusLectureSeule, REFUS_PROFIL_SIMPLE, USAGE_SUBAGENTS, VERBES_RECOVER, type Inspection, type LectureDuRun,
+  type PreuvesP0B, type Releve,
 } from "../subagent-only/profil.ts";
+// K35 : le nom du dossier est celui de P0-B. Seule la constante est lue ; rien n'est exécuté.
+import { DOSSIER_PREUVES_P0B } from "../subagent-only/empreinte.ts";
 
 type Preuve = (t: TestContext) => Promise<void> | void;
 function couverture(id: string, titre: string, fn: Preuve): void {
@@ -207,6 +212,75 @@ couverture("P2-K29", "manifeste absent, seulement marqueur valide, archives et p
   propriete(classe(releve({ manifeste: { etat: "absent" }, run: undefined }, noms)) === "absent", "absent attendu");
 });
 
+couverture("P2-K35", "manifeste absent, ite-p0b : seules les preuves fichiers de runs archivés sont admises", () => {
+  const A = "aaaaaaaaaaaaaaaa";
+  const B = "bbbbbbbbbbbbbbbb";
+  const ok: Inspection = { etat: "present" };
+  const preuve = (id: string, n = 1) => `${id}-2026-10-18T12-00-0${n}-000Z-a1b2c3.json`;
+  const present = (entrees: Array<[string, Inspection]>, archives: Record<string, Inspection>): PreuvesP0B =>
+    ({ etat: "present", entrees: entrees.map(([nom, inspection]) => ({ nom, inspection })), archives });
+  const base = [".git", `${A}-run.json`, `${A}-lanes.jsonl`, `${B}-run.json`];
+  const cas = (noms: string[], p: PreuvesP0B | undefined) =>
+    classer(releve({ manifeste: { etat: "absent" }, run: undefined, preuvesP0B: p }, noms));
+
+  propriete(NOM_PREUVES_P0B === DOSSIER_PREUVES_P0B, `nom du dossier : ${NOM_PREUVES_P0B} ≠ ${DOSSIER_PREUVES_P0B}`);
+  propriete(ID_RUN.test(A) && !ID_RUN.test("aaaaaaaaaaaaaaa") && !ID_RUN.test("AAAAAAAAAAAAAAAA"), "grammaire de l'identité");
+
+  // Admis : absent de la liste, vide, preuves de plusieurs runs archivés.
+  const admis: Array<[string, string[], PreuvesP0B | undefined]> = [
+    ["absent de la liste", base, undefined],
+    ["répertoire vide", [...base, NOM_PREUVES_P0B], present([], {})],
+    ["plusieurs runs archivés", [...base, NOM_PREUVES_P0B],
+      present([[preuve(A), ok], [preuve(A, 2), ok], [preuve(B), ok]], { [A]: ok, [B]: ok })],
+  ];
+  for (const [nom, noms, p] of admis) {
+    const c = cas(noms, p);
+    propriete(c.classe === "absent", `${nom} : ${c.classe} (${c.raison ?? ""})`);
+  }
+
+  // Refusés : illisible, raison nommée.
+  const C = "cccccccccccccccc";
+  const approchant = "aaaaaaaaaaaaaaab";
+  const refuses: Array<[string, string[], PreuvesP0B | undefined, string]> = [
+    ["preuve sans archive", [...base, NOM_PREUVES_P0B], present([[preuve(C), ok]], {}), "aucune archive"],
+    ["préfixe approchant", [...base, NOM_PREUVES_P0B], present([[preuve(approchant), ok]], {}), "aucune archive"],
+    ["nom hors grammaire", [...base, NOM_PREUVES_P0B], present([["notes.txt", ok]], {}), "nom inconnu"],
+    ["majuscules", [...base, NOM_PREUVES_P0B], present([[preuve("AAAAAAAAAAAAAAAA"), ok]], {}), "nom inconnu"],
+    ["quinze chiffres", [...base, NOM_PREUVES_P0B], present([["aaaaaaaaaaaaaaa-x.json", ok]], {}), "nom inconnu"],
+    ["suffixe vide", [...base, NOM_PREUVES_P0B], present([[`${A}-`, ok]], { [A]: ok }), "nom inconnu"],
+    ["entrée en lien", [...base, NOM_PREUVES_P0B],
+      present([[preuve(A), { etat: "echec", raison: "x n'est pas un fichier ordinaire" }]], { [A]: ok }), "fichier ordinaire"],
+    ["sous-répertoire", [...base, NOM_PREUVES_P0B],
+      present([[A, { etat: "echec", raison: `${A} n'est pas un fichier ordinaire` }]], {}), "fichier ordinaire"],
+    ["ite-p0b non répertoire", [...base, NOM_PREUVES_P0B],
+      { etat: "echec", raison: "ite-p0b n'est pas un répertoire réel" }, "répertoire réel"],
+    ["erreur d'inspection", [...base, NOM_PREUVES_P0B], { etat: "echec", raison: "EACCES sur ite-p0b" }, "EACCES"],
+    ["erreur de liste", [...base, NOM_PREUVES_P0B], { etat: "echec", raison: "ne se liste pas : EIO" }, "EIO"],
+    ["erreur d'une entrée", [...base, NOM_PREUVES_P0B], present([[preuve(A), { etat: "echec", raison: "EACCES sur p" }]], { [A]: ok }), "EACCES"],
+    ["entrée disparue", [...base, NOM_PREUVES_P0B], present([[preuve(A), { etat: "absent" }]], { [A]: ok }), "disparu"],
+    ["archive en lien", [...base, NOM_PREUVES_P0B],
+      present([[preuve(A), ok]], { [A]: { etat: "echec", raison: `${A}-run.json n'est pas un fichier ordinaire` } }), "archive"],
+    ["archive non inspectée", [...base, NOM_PREUVES_P0B], present([[preuve(A), ok]], {}), "non inspectée"],
+    ["faits non collectés", [...base, NOM_PREUVES_P0B], undefined, "pas été inspecté"],
+  ];
+  for (const [nom, noms, p, motif] of refuses) {
+    const c = cas(noms, p);
+    propriete(c.classe === "illisible" && (c.raison ?? "").includes(NOM_PREUVES_P0B) && (c.raison ?? "").includes(motif),
+      `${nom} : ${c.classe} (${c.raison ?? ""})`);
+  }
+  // Q-P2-24 : un faux préfixe d'archive (`ite-run.json`) ne blanchit pas `ite-p0b` : il n'est pas une
+  // archive, et l'inspection de Q-P2-14 reste due.
+  const faux = cas([".git", "ite-run.json", NOM_PREUVES_P0B], undefined);
+  propriete(faux.classe === "illisible" && (faux.raison ?? "").includes("ite-run.json") && (faux.raison ?? "").includes("pas été inspecté"),
+    `faux préfixe d'archive : ${faux.classe} (${faux.raison ?? ""})`);
+  // Une preuve admise n'admet pas les autres pièces : une entrée inconnue de l'espace reste refusée.
+  const autre = cas([...base, NOM_PREUVES_P0B, "inconnu.txt"], present([[preuve(A), ok]], { [A]: ok }));
+  propriete(autre.classe === "illisible" && !(autre.raison ?? "").includes(`${NOM_PREUVES_P0B},`) &&
+    (autre.raison ?? "").includes("inconnu.txt"), `autre pièce : ${autre.raison ?? ""}`);
+  // Le jugement est pur et ne dépend que des faits passés.
+  propriete(jugerPreuvesP0B(base, present([], {})) === undefined, "vide : admis");
+});
+
 // ---------------------------------------------------------------------------- commandes
 
 couverture("P2-K21", "T2–T7 : décisions et refus sur préconditions, argument inconnu", () => {
@@ -239,6 +313,36 @@ couverture("P2-K22", "refus de descente : runId, statut, unités et bin/subagent
   const t = d.action === "refus" ? d.texte : "";
   for (const attendu of [RUN, "active", "W01, W03", "bin/subagent-recover report", "run completed|abandoned --reason", "cleanup", "adopt|integrated|abandoned|discard"]) {
     propriete(t.includes(attendu), `le refus doit contenir « ${attendu} » : ${t}`);
+  }
+});
+
+couverture("P2-K33", "refus de montée sur illisible : raison de l'observateur à l'octet, un seul séparateur, ponctuée ou non", () => {
+  const s = { profil: "simple" as const, repos: true, delegationLisible: true };
+  for (const raison of ["le registre des tentatives est inexploitable (LOST) : registre absent.", "ligne(s) 3 illisible(s)"]) {
+    const c = classer(releve({ run: lu({ statut: "active", lanes: { ok: false, raison } }) }));
+    propriete(c.classe === "illisible", `classe ${c.classe}`);
+    const d = deciderCommande("on", s, c);
+    propriete(d.action === "refus", `action ${d.action}`);
+    const t = d.action === "refus" ? d.texte : "";
+    const attendu = `registre des lanes inexploitable : ${raison}${raison.endsWith(".") ? "" : "."} Rien n'a été ouvert ni écrit. `;
+    propriete(t.startsWith(`Montée refusée : run ${RUN} (active) — état durable illisible : `), `début du refus : ${t}`);
+    propriete(t.includes(attendu), `la raison figure à l'octet, suivie d'un seul point : ${t}`);
+    propriete(!t.includes(".. Rien"), `aucun point doublé : ${t}`);
+  }
+});
+
+couverture("P2-K34", "avertissement sur illisible : raison de l'observateur à l'octet, un seul point, ponctuée ou non", () => {
+  for (const raison of ["le registre des tentatives est inexploitable (LOST) : registre absent.", "ligne(s) 3 illisible(s)"]) {
+    const c = classer(releve({ run: lu({ statut: "active", lanes: { ok: false, raison } }) }));
+    propriete(c.classe === "illisible", `classe ${c.classe}`);
+    const a = avertissement(c) ?? "";
+    const attendu =
+      `Run durable illisible : run ${RUN} (active) — état durable illisible : registre des lanes inexploitable : ` +
+      `${raison}${raison.endsWith(".") ? "" : "."}\n` +
+      "Profil simple en lecture seule : seule la lecture native vérifiée passe, rien n'est écrit.\n" +
+      "Suites : `/subagents on` pour reprendre le run en profil sous-agents, `/subagent-report` pour le relevé, " +
+      `ou l'outil opérateur : ${VERBES_RECOVER}.`;
+    propriete(a === attendu, `texte exact de l'avertissement, un seul point après la raison : ${JSON.stringify(a)}`);
   }
 });
 

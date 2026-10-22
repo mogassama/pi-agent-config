@@ -328,7 +328,15 @@ test("PROPRIÉTÉ : la fin d'une tentative est unique, et ne reprend que si un r
 
 // ------------------------------------------------------------------ C — la règle design_update d'AGENTS.md
 
-const AGENTS = readFileSync(join(import.meta.dirname, "..", "AGENTS.md"), "utf-8");
+/*
+ * Phase 2 : la règle vit dans le texte composé du profil sous-agents — le socle `AGENTS.md`,
+ * puis la section `delegation` (`subagent-only/DELEGATION.md`). Les exigences se lisent sur ce
+ * texte ; aucune n'est retirée.
+ */
+const AGENTS = [
+  readFileSync(join(import.meta.dirname, "..", "AGENTS.md"), "utf-8"),
+  readFileSync(join(import.meta.dirname, "..", "subagent-only", "DELEGATION.md"), "utf-8"),
+].join("\n");
 
 test("C — PROPRIÉTÉ : AGENTS.md rend design_update obligatoire, avec les cinq propriétés adjugées", () => {
   assert.doesNotMatch(AGENTS, /may declare a `design_update`/, "le « may » facultatif doit avoir disparu");

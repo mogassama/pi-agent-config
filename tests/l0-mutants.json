@@ -503,8 +503,8 @@
   {
     "test": "L0 PRES F-generation-serialisee — deux délégations sur la même unité s'allouent l'une après l'autre",
     "file": "extensions/subagent/index.ts",
-    "find": "        const liberer = await entrerFileUnites(unitesDeLAppel(params));",
-    "replace": "        const liberer = (): void => {}; void entrerFileUnites; void unitesDeLAppel; // mutant F-generation-serialisee : aucune file"
+    "find": "          liberer = await entrerFileUnites(unitesDeLAppel(params));",
+    "replace": "          liberer = (): void => {}; void entrerFileUnites; void unitesDeLAppel; // mutant F-generation-serialisee : aucune file"
   },
   {
     "test": "L0 PRES F-generation-isolation — deux générations successives ne partagent ni worktree ni branche",
@@ -968,8 +968,8 @@
   {
     "test": "L0 REG ITE-C-outils — un plan terminal réduit l'orchestrateur à la lecture native vérifiée, et tool_call fait autorité",
     "file": "extensions/subagent/index.ts",
-    "find": "    PI_API?.setActiveTools?.(cible);",
-    "replace": "    void cible; // mutant ITE-C-outils (a) : les outils actifs ne sont plus réduits"
+    "find": "    if (actifs && actifs.length === cible.length && actifs.every((n) => cible.includes(n))) return;\n    PI_API?.setActiveTools?.(cible);",
+    "replace": "    if (actifs && actifs.length === cible.length && actifs.every((n) => cible.includes(n))) return;\n    void cible; // mutant ITE-C-outils (a) : les outils actifs ne sont plus réduits"
   },
   {
     "test": "L0 REG ITE-C-outils — un plan terminal réduit l'orchestrateur à la lecture native vérifiée, et tool_call fait autorité",
@@ -992,8 +992,8 @@
   {
     "test": "L0 REG ITE-C-redemarrage — après redémarrage, l'état terminal se retrouve sur le registre et retire les outils",
     "file": "extensions/subagent/index.ts",
-    "find": "      if (e.lisible && e.terminal?.etat === \"terminal\") activerEtatTerminal();",
-    "replace": "      void e; // mutant ITE-C-redemarrage : session_start ne relit plus l'état terminal"
+    "find": "  if (PROFIL === \"sous-agents\" && planTerminalCourant()) {\n    activerEtatTerminal();\n    return;\n  }",
+    "replace": "  // mutant ITE-C-redemarrage : la montée ne relit plus l'état terminal"
   },
   {
     "test": "L0 REG ITE-C-plan-rompu — un plan attaché qui diverge, manque ou devient illisible refuse toute délégation",
@@ -2894,5 +2894,652 @@
     "file": "subagent-only/profil.ts",
     "find": "const ARCHIVE = /^([0-9a-f]{16})-run\\.json$/;",
     "replace": "const ARCHIVE = /^(.+)-run\\.json$/; // mutant M-K : grammaire d'archive relâchée (Q-P2-24)"
+  },
+  {
+    "test": "L0 COUV P2-H01 — chargement et session_start en simple n'écrivent rien, dépôt vierge puis run vide",
+    "file": "extensions/subagent/index.ts",
+    "find": "let RUN: ReturnType<typeof openRun> | undefined;",
+    "replace": "let RUN: ReturnType<typeof openRun> | undefined = PREFLIGHT.ok ? openRun(RUN_DIR, baseCommit()) : undefined; // mutant M-H : openRun au chargement"
+  },
+  {
+    "test": "L0 COUV P2-H02 — task enregistré mais absent des outils actifs ; /subagents et /subagent-report disponibles",
+    "file": "extensions/subagent/index.ts",
+    "find": "    relire();\n    imposerOutilsDuProfil();\n    // L'état du run est visible dès le démarrage",
+    "replace": "    relire();\n    // mutant M-H : la liste du profil n'est pas imposée au session_start\n    // L'état du run est visible dès le démarrage"
+  },
+  {
+    "test": "L0 COUV P2-H03 — en simple, before_agent_start ne pose aucune section et ne retourne aucun systemPrompt",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (PROFIL !== \"sous-agents\") return undefined;\n    try {\n      const delegation = DELEGATION_TEXTE;",
+    "replace": "    if (PROFIL !== \"sous-agents\") { (event as unknown as { systemPromptOptions: OptionsDuPrompt }).systemPromptOptions.sections.delegation = lireDelegation(); return undefined; } // mutant M-H\n    try {\n      const delegation = DELEGATION_TEXTE;"
+  },
+  {
+    "test": "L0 COUV P2-H07 — section delegation et guidelines du run courant présentes à deux invites consécutives",
+    "file": "extensions/subagent/index.ts",
+    "find": "      COMPOSITION = { execution: EXECUTION, etablie: true, raison: \"\" };\n    } catch (err) {",
+    "replace": "      COMPOSITION = { execution: EXECUTION, etablie: true, raison: \"\" };\n      return { systemPrompt: (event as unknown as { systemPrompt: string }).systemPrompt }; // mutant M-H\n    } catch (err) {"
+  },
+  {
+    "test": "L0 COUV P2-H07 — section delegation et guidelines du run courant présentes à deux invites consécutives",
+    "file": "extensions/subagent/index.ts",
+    "find": "      options.sections.delegation = delegation;",
+    "replace": "      if (EXECUTION <= 1) options.sections.delegation = delegation; // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H07 — section delegation et guidelines du run courant présentes à deux invites consécutives",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const guidelines = guidelinesDeTask(RUN_ID);",
+    "replace": "      const guidelines = guidelinesDeTask(\"\"); // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H04 — sondes git comptées et identifiées : préflight au chargement, observateurs aux relectures, rien de plus",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const espace = inspecter(RUN_DIR, \"repertoire\");\n  if (espace.etat !== \"present\") return { espace };",
+    "replace": "  baseCommit(); // mutant M-H : sonde git propre à la découverte\n  const espace = inspecter(RUN_DIR, \"repertoire\");\n  if (espace.etat !== \"present\") return { espace };"
+  },
+  {
+    "test": "L0 COUV P2-H04 — sondes git comptées et identifiées : préflight au chargement, observateurs aux relectures, rien de plus",
+    "file": "extensions/subagent/index.ts",
+    "find": "    const texte = avertissement(CLASSEMENT);",
+    "replace": "    const texte = avertissement(CLASSEMENT); baseCommit(); // mutant M-H : sonde git de l'avertissement"
+  },
+  {
+    "test": "L0 COUV P2-H04 — sondes git comptées et identifiées : préflight au chargement, observateurs aux relectures, rien de plus",
+    "file": "extensions/subagent/index.ts",
+    "find": "    const integ = observeIntegrations({ root: process.cwd(), runDir: RUN_DIR, runId, laneRead });",
+    "replace": "    const integ = { usable: true as const }; // mutant M-H : intégrations non observées"
+  },
+  {
+    "test": "L0 COUV P2-H04 — sondes git comptées et identifiées : préflight au chargement, observateurs aux relectures, rien de plus",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const vu = observeLanes({ root: process.cwd(), runId, laneRead });\n  let lanes:",
+    "replace": "  const vu = { usable: false as const, reason: \"non observé\", state: \"UNKNOWN\" } as unknown as ReturnType<typeof observeLanes>; // mutant M-H\n  let lanes:"
+  },
+  {
+    "test": "L0 COUV P2-H05 — avertissement pour chaque run non terminé ou illisible ; rien pour absent, vide, terminé",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (texte !== undefined && (ctx as { hasUI?: boolean }).hasUI) (ctx as { ui: { notify: (t: string, k?: string) => void } }).ui.notify(texte, \"warning\");",
+    "replace": "    if (texte !== undefined && CLASSEMENT.classe !== \"illisible\" && (ctx as { hasUI?: boolean }).hasUI) (ctx as { ui: { notify: (t: string, k?: string) => void } }).ui.notify(texte, \"warning\"); // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H05 — avertissement pour chaque run non terminé ou illisible ; rien pour absent, vide, terminé",
+    "file": "extensions/subagent/index.ts",
+    "find": "    const integ = observeIntegrations({ root: process.cwd(), runDir: RUN_DIR, runId, laneRead });",
+    "replace": "    const integ = manifeste.status === \"completed\" || manifeste.status === \"abandoned\" ? { usable: true as const } : observeIntegrations({ root: process.cwd(), runDir: RUN_DIR, runId, laneRead }); // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H25 — montée refusée avant openRun, sans effet, sur intégrations inexploitables et marqueur invalide ; admise sur archives seules",
+    "file": "extensions/subagent/index.ts",
+    "find": "    const integ = observeIntegrations({ root: process.cwd(), runDir: RUN_DIR, runId, laneRead });",
+    "replace": "    const integ = manifeste.status === \"completed\" || manifeste.status === \"abandoned\" ? { usable: true as const } : observeIntegrations({ root: process.cwd(), runDir: RUN_DIR, runId, laneRead }); // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H25 — montée refusée avant openRun, sans effet, sur intégrations inexploitables et marqueur invalide ; admise sur archives seules",
+    "file": "extensions/subagent/index.ts",
+    "find": "    integrations = integ.usable ? { ok: true } : { ok: false, raison: integ.reason };",
+    "replace": "    integrations = { ok: true }; void integ; // mutant M-H : intégrations non jugées avant openRun"
+  },
+  {
+    "test": "L0 COUV P2-H08 — montée idempotente ; refusée sur illisible, DELEGATION.md illisible et hors repos, sans aucun effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "    releve.marqueur = m.etat === \"invalide\" ? { etat: \"invalide\", raison: m.raison } : { etat: m.etat };",
+    "replace": "    releve.marqueur = { etat: m.etat === \"invalide\" ? \"absent\" : m.etat }; // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H25 — montée refusée avant openRun, sans effet, sur intégrations inexploitables et marqueur invalide ; admise sur archives seules",
+    "file": "extensions/subagent/index.ts",
+    "find": "    releve.marqueur = m.etat === \"invalide\" ? { etat: \"invalide\", raison: m.raison } : { etat: m.etat };",
+    "replace": "    releve.marqueur = { etat: m.etat === \"invalide\" ? \"absent\" : m.etat }; // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H08 — montée idempotente ; refusée sur illisible, DELEGATION.md illisible et hors repos, sans aucun effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const argument = typeof args === \"string\" ? args : \"\";\n      const c = relire();",
+    "replace": "      const argument = typeof args === \"string\" ? args : \"\";\n      if (argument.trim() === \"on\") mkdirSync(RUN_DIR, { recursive: true }); // mutant M-H\n      const c = relire();"
+  },
+  {
+    "test": "L0 COUV P2-H06 — montée : observation, baseCommit, openRun, reconstruction, P0-C, puis task ; l'identité est celle d'openRun",
+    "file": "extensions/subagent/index.ts",
+    "find": "  try {\n    const ouvert = openRun(RUN_DIR, baseCommit());",
+    "replace": "  try {\n    PROFIL = \"sous-agents\"; imposerOutilsDuProfil(); // mutant M-H : task activé avant openRun et la reconstruction\n    const ouvert = openRun(RUN_DIR, baseCommit());"
+  },
+  {
+    "test": "L0 COUV P2-H06 — montée : observation, baseCommit, openRun, reconstruction, P0-C, puis task ; l'identité est celle d'openRun",
+    "file": "extensions/subagent/index.ts",
+    "find": "    RUN_ID = ouvert.manifest.runId;",
+    "replace": "    RUN_ID = CLASSEMENT.runId ?? ouvert.manifest.runId; // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H08 — montée idempotente ; refusée sur illisible, DELEGATION.md illisible et hors repos, sans aucun effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        { profil: PROFIL, repos: auRepos(ctx), delegationLisible: delegation !== undefined },",
+    "replace": "        { profil: PROFIL, repos: true, delegationLisible: true }, // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H08 — montée idempotente ; refusée sur illisible, DELEGATION.md illisible et hors repos, sans aucun effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        case \"refus\":\n        case \"usage\":\n          dire(decision.texte, \"error\");",
+    "replace": "        case \"refus\":\n          logRefusal(CLASSEMENT.runId ?? \"\", \"subagents\", decision.texte); // mutant M-H\n        // falls through\n        case \"usage\":\n          dire(decision.texte, \"error\");"
+  },
+  {
+    "test": "L0 COUV P2-H11 — descente refusée sur run non terminé, illisible et hors repos : aucun effet, aucun journal de refus",
+    "file": "extensions/subagent/index.ts",
+    "find": "        case \"refus\":\n        case \"usage\":\n          dire(decision.texte, \"error\");",
+    "replace": "        case \"refus\":\n          logRefusal(CLASSEMENT.runId ?? \"\", \"subagents\", decision.texte); // mutant M-H\n        // falls through\n        case \"usage\":\n          dire(decision.texte, \"error\");"
+  },
+  {
+    "test": "L0 COUV P2-H11 — descente refusée sur run non terminé, illisible et hors repos : aucun effet, aucun journal de refus",
+    "file": "extensions/subagent/index.ts",
+    "find": "      switch (decision.action) {",
+    "replace": "      if (argument.trim() === \"off\" && PROFIL === \"sous-agents\") { dire(descendre(), \"info\"); return; } // mutant M-H\n      switch (decision.action) {"
+  },
+  {
+    "test": "L0 COUV P2-H09 — montée sur un plan terminal : lecture native seule, task jamais activé",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (PROFIL === \"sous-agents\" && planTerminalCourant()) {\n    activerEtatTerminal();\n    return;\n  }",
+    "replace": "  // mutant M-H : P0-C ignoré à l'imposition de la liste"
+  },
+  {
+    "test": "L0 COUV P2-H10 — descente admise : task inactif, section absente, gardes de run inertes, registres intacts, run conservé",
+    "file": "extensions/subagent/index.ts",
+    "find": "  viderIdentiteDeRun();\n  PROFIL = \"simple\";\n  DELEGATION_TEXTE = undefined;\n  imposerOutilsDuProfil();\n  publishRun();\n  if (echec !== undefined) {",
+    "replace": "  viderIdentiteDeRun();\n  DELEGATION_TEXTE = undefined; // mutant M-H : le profil reste sous-agents\n  imposerOutilsDuProfil();\n  publishRun();\n  if (echec !== undefined) {"
+  },
+  {
+    "test": "L0 COUV P2-H13 — lecture seule en simple : write, edit, bash, read non natif, outil inconnu refusés ; lecture native admise",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const d = decisionAppelSimple(CLASSEMENT, (event as { toolName?: unknown }).toolName, outilLectureVerifie);",
+    "replace": "      const d = decisionAppelSimple(CLASSEMENT, (event as { toolName?: unknown }).toolName, (n) => n !== \"\"); // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H14 — session_start new, resume et fork : profil simple réaffirmé, état relu",
+    "file": "extensions/subagent/index.ts",
+    "find": "    viderIdentiteDeRun();\n    PROFIL = \"simple\";\n    DELEGATION_TEXTE = undefined;\n    ARRET_MONTEE = undefined;",
+    "replace": "    viderIdentiteDeRun();\n    DELEGATION_TEXTE = undefined; // mutant M-H : profil hérité\n    ARRET_MONTEE = undefined;"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  LEASE = undefined;\n  LEASE_ABORT = new AbortController();\n  viderIdentiteDeRun();\n  PROFIL = \"simple\";",
+    "replace": "  LEASE = undefined;\n  viderIdentiteDeRun(); // mutant M-H : contrôleur réutilisé après descente\n  PROFIL = \"simple\";"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "    LEASE = undefined;\n    LEASE_ABORT = new AbortController();\n    viderIdentiteDeRun();\n    PROFIL = \"simple\";",
+    "replace": "    LEASE = undefined;\n    viderIdentiteDeRun(); // mutant M-H : contrôleur de la session précédente\n    PROFIL = \"simple\";"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "    // blocages non écrits et les attributions en attente restent attachés à leurs runs.\n    viderHistoire();",
+    "replace": "    // blocages non écrits et les attributions en attente restent attachés à leurs runs.\n    // mutant M-Q9 : historique non vidé à T1"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (IDENTITE_HISTOIRE !== RUN_ID) viderHistoire();",
+    "replace": "    // mutant M-Q9 : historique non vidé au T3 quand son propriétaire diffère"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (IDENTITE_HISTOIRE !== RUN_ID) viderHistoire();",
+    "replace": "    viderHistoire(); // mutant M-Q9 : historique vidé au T3 sur le même run"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  viderIdentiteDeRun();\n  PROFIL = \"simple\";\n  DELEGATION_TEXTE = undefined;\n  imposerOutilsDuProfil();",
+    "replace": "  viderIdentiteDeRun();\n  viderHistoire(); // mutant M-Q9 : historique vidé au T5\n  PROFIL = \"simple\";\n  DELEGATION_TEXTE = undefined;\n  imposerOutilsDuProfil();"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (IDENTITE_HISTOIRE === undefined && RUN_ID !== \"\") IDENTITE_HISTOIRE = RUN_ID;",
+    "replace": "  if (IDENTITE_HISTOIRE === undefined && RUN_ID !== \"\") IDENTITE_HISTOIRE = CLASSEMENT.runId ?? RUN_ID; // mutant M-Q9 : propriétaire tiré de la découverte (RA-P2-8)"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "    viderHistoire();\n    invaliderComposition(\"nouvelle session\");",
+    "replace": "    viderHistoire();\n    BLOCAGES_NON_ECRITS.clear(); // mutant M-Q9 : blocage local supprimé à T1\n    invaliderComposition(\"nouvelle session\");"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (IDENTITE_HISTOIRE !== RUN_ID) viderHistoire();",
+    "replace": "    if (IDENTITE_HISTOIRE !== RUN_ID) viderHistoire();\n    BLOCAGES_NON_ECRITS.clear(); // mutant M-Q9 : blocage local supprimé au T3"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return raffiner(classer(releve));",
+    "replace": "  return classer(releve); // mutant M-Q9 : raffinement vide → non terminé retiré"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return raffiner(classer(releve));",
+    "replace": "  return classer(releve); // mutant M-Q9 : raffinement vide → non terminé retiré"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (!stillOwns(lease)) {\n          return {\n            content: [{\n              type: \"text\" as const,\n              text:\n                `[run: propriété perdue] la délégation est revenue",
+    "replace": "        if (false) { // mutant M-Q9 : un rappel de l'ancienne session repeuple l'historique\n          return {\n            content: [{\n              type: \"text\" as const,\n              text:\n                `[run: propriété perdue] la délégation est revenue"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const autres = ATTRIBUTIONS_EN_ATTENTE.filter((o) => o.run !== courant);\n  const siennes = ATTRIBUTIONS_EN_ATTENTE.filter((o) => o.run === courant);",
+    "replace": "  const autres: ObservationDesign[] = []; // mutant M-Q9 : toutes les entrées rejugées, sans filtre de run\n  const siennes = [...ATTRIBUTIONS_EN_ATTENTE];"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const autres = ATTRIBUTIONS_EN_ATTENTE.filter((o) => o.run !== courant);\n  const siennes = ATTRIBUTIONS_EN_ATTENTE.filter((o) => o.run === courant);",
+    "replace": "  const autres: ObservationDesign[] = []; // mutant M-Q9 : toutes les entrées rejugées, sans filtre de run\n  const siennes = [...ATTRIBUTIONS_EN_ATTENTE];"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return { etat: etatDesign(), instantane: instantaneDesign(process.cwd()), registre, run: cleDeRun(RUN_ID) };",
+    "replace": "  return { etat: etatDesign(), instantane: instantaneDesign(process.cwd()), registre, run: \"\" }; // mutant M-Q9 : observation sans étiquette de run"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "  for (const o of siennes) {\n    const v = jugerObservation(o, apresReprise);",
+    "replace": "  ATTRIBUTIONS_EN_ATTENTE.push(...siennes); // mutant M-Q9 : réévaluation inerte\n  for (const o of [] as ObservationDesign[]) {\n    const v = jugerObservation(o, apresReprise);"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "    viderHistoire();\n    invaliderComposition(\"nouvelle session\");",
+    "replace": "    viderHistoire();\n    ATTRIBUTIONS_EN_ATTENTE.length = 0; // mutant M-Q9 : attributions vidées à T1\n    invaliderComposition(\"nouvelle session\");"
+  },
+  {
+    "test": "L0 COUV P2-H17 — fin de run par l'outil opérateur : B rendue sans task, à la relecture et à la session suivante ; jamais tous les outils",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (PROFIL === \"simple\") imposerOutilsDuProfil();",
+    "replace": "          // mutant M-H : la restriction ne suit pas la classe relue"
+  },
+  {
+    "test": "L0 COUV P2-H17 — fin de run par l'outil opérateur : B rendue sans task, à la relecture et à la session suivante ; jamais tous les outils",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const base = BASE_OUTILS;\n  const enregistres = nomsEnregistres();",
+    "replace": "  const enregistres = nomsEnregistres();\n  const base = enregistres; // mutant M-H : tous les outils enregistrés"
+  },
+  {
+    "test": "L0 COUV P2-H23 — /reload : la base gardée de cette session est rendue sans task ; jamais la liste restreinte ni tous les outils",
+    "file": "extensions/subagent/index.ts",
+    "find": "  const base = BASE_OUTILS;\n  const enregistres = nomsEnregistres();",
+    "replace": "  const enregistres = nomsEnregistres();\n  const base = enregistres; // mutant M-H : tous les outils enregistrés"
+  },
+  {
+    "test": "L0 COUV P2-H18 — task.execute en simple après une réactivation étrangère : refus avant tout effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (PROFIL !== \"sous-agents\") {\n          return {\n            content: [{ type: \"text\" as const, text: REFUS_PROFIL_SIMPLE }],",
+    "replace": "        if (PROFIL !== \"sous-agents\" && false) { // mutant M-H\n          return {\n            content: [{ type: \"text\" as const, text: REFUS_PROFIL_SIMPLE }],"
+  },
+  {
+    "test": "L0 COUV P2-H19 — task.execute appelé directement, hors tool_call : même refus, sans effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (PROFIL !== \"sous-agents\") {\n          return {\n            content: [{ type: \"text\" as const, text: REFUS_PROFIL_SIMPLE }],",
+    "replace": "        if (PROFIL !== \"sous-agents\" && false) { // mutant M-H\n          return {\n            content: [{ type: \"text\" as const, text: REFUS_PROFIL_SIMPLE }],"
+  },
+  {
+    "test": "L0 COUV P2-H20 — le run courant change entre deux commandes et deux sessions : la décision porte sur l'état relu",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const c = relire();\n      const delegation = argument.trim() === \"on\"",
+    "replace": "      const c = CLASSEMENT; // mutant M-H : état de module périmé\n      const delegation = argument.trim() === \"on\""
+  },
+  {
+    "test": "L0 COUV P2-H21 — montée interrompue après le début de ses effets : rapportée telle, simple, lecture seule, sans retour automatique",
+    "file": "extensions/subagent/index.ts",
+    "find": "  CLASSEMENT = ARRET_MONTEE === undefined ? c : { ...c, classe: \"illisible\", raison: ARRET_MONTEE };",
+    "replace": "  CLASSEMENT = c; // mutant M-H : l'arrêt est levé par un relevé favorable"
+  },
+  {
+    "test": "L0 COUV P2-H22 — session_tree : la liste du profil est réimposée sur l'état relu, en simple et en sous-agents",
+    "file": "extensions/subagent/index.ts",
+    "find": "    invaliderComposition(\"navigation dans l'arbre\");\n    relire();\n    imposerOutilsDuProfil();",
+    "replace": "    invaliderComposition(\"navigation dans l'arbre\");\n    relire(); // mutant M-H : liste non réimposée"
+  },
+  {
+    "test": "L0 COUV P2-H23 — /reload : la base gardée de cette session est rendue sans task ; jamais la liste restreinte ni tous les outils",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (reason === \"reload\" && gardee && gardee.cwd === process.cwd() && gardee.session === session) {",
+    "replace": "  if (false) { // mutant M-H : emplacement global ignoré"
+  },
+  {
+    "test": "L0 COUV P2-H23 — /reload : la base gardée de cette session est rendue sans task ; jamais la liste restreinte ni tous les outils",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (reason === \"reload\" && gardee && gardee.cwd === process.cwd() && gardee.session === session) {",
+    "replace": "  if (reason === \"reload\" && gardee) { // mutant M-H : réemploi entre sessions et répertoires"
+  },
+  {
+    "test": "L0 COUV P2-H24 — /subagent-report en simple : relevé sur l'identité lue, sans mutation, sans bail, sans écriture",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (!manifeste) return { ok: false, raison: `aucun run dans ${RUNS_DIR}/` };\n  try {\n    reconstruire(manifeste.runId);",
+    "replace": "  if (!manifeste) return { ok: false, raison: `aucun run dans ${RUNS_DIR}/` };\n  RUN_ID = manifeste.runId; ensureOwnership(); // mutant M-H : le relevé prend le bail\n  try {\n    reconstruire(manifeste.runId);"
+  },
+  {
+    "test": "L0 COUV P2-H24 — /subagent-report en simple : relevé sur l'identité lue, sans mutation, sans bail, sans écriture",
+    "file": "extensions/subagent/index.ts",
+    "find": "  try {\n    reconstruire(manifeste.runId);\n    return rendreReleve(manifeste);\n  } finally {\n    viderCachesDeRun();\n  }",
+    "replace": "  try {\n    reconstruire(); // mutant M-H : identité de session\n    return rendreReleve(manifeste);\n  } finally {\n    viderCachesDeRun();\n  }"
+  },
+  {
+    "test": "L0 COUV P2-H26 — voie (a) : préfixe gardé à l'octet, délégation et guidelines ajoutées une fois, à la fin ; rien créé, rien en simple",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const forceAvant = typeof options.forceSystemPrompt === \"string\" ? options.forceSystemPrompt : undefined;",
+    "replace": "      const forceAvant = typeof options.forceSystemPrompt === \"string\" ? options.forceSystemPrompt : \"\"; // mutant M-H"
+  },
+  {
+    "test": "L0 COUV P2-H26 — voie (a) : préfixe gardé à l'octet, délégation et guidelines ajoutées une fois, à la fin ; rien créé, rien en simple",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (complete.ajoute) options.forceSystemPrompt = complete.prompt;",
+    "replace": "        void complete; // mutant M-H : prompt forcé non complété"
+  },
+  {
+    "test": "L0 COUV P2-H26 — voie (a) : préfixe gardé à l'octet, délégation et guidelines ajoutées une fois, à la fin ; rien créé, rien en simple",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if (PROFIL !== \"sous-agents\") return undefined;\n    try {\n      const delegation = DELEGATION_TEXTE;",
+    "replace": "    if (PROFIL !== \"sous-agents\") { const o = (event as unknown as { systemPromptOptions: OptionsDuPrompt }).systemPromptOptions; if (typeof o.forceSystemPrompt === \"string\") o.forceSystemPrompt += `\\n\\n<delegation>\\n${lireDelegation()}\\n</delegation>`; return undefined; } // mutant M-H\n    try {\n      const delegation = DELEGATION_TEXTE;"
+  },
+  {
+    "test": "L0 COUV P2-H26 — voie (a) : préfixe gardé à l'octet, délégation et guidelines ajoutées une fois, à la fin ; rien créé, rien en simple",
+    "file": "subagent-only/profil.ts",
+    "find": "  if (!prompt.includes(bloc)) ajouts.push(bloc);",
+    "replace": "  ajouts.push(bloc); // mutant M-H : complément dupliqué"
+  },
+  {
+    "test": "L0 COUV P2-H26 — voie (a) : préfixe gardé à l'octet, délégation et guidelines ajoutées une fois, à la fin ; rien créé, rien en simple",
+    "file": "extensions/subagent/index.ts",
+    "find": "        const complete = completerPromptForce(forceAvant, delegation, dues);",
+    "replace": "        const complete = completerPromptForce(forceAvant.trim(), delegation, dues); // mutant M-H : préfixe altéré"
+  },
+  {
+    "test": "L0 COUV P2-H26 — voie (a) : préfixe gardé à l'octet, délégation et guidelines ajoutées une fois, à la fin ; rien créé, rien en simple",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const dues = taskDu && reglesRendues ? guidelines : [];",
+    "replace": "      const dues = reglesRendues ? guidelines : []; void taskDu; // mutant M-H : guidelines malgré P0-C"
+  },
+  {
+    "test": "L0 COUV P2-H27 — garde de composition : refus de task tant que la composition de l'exécution n'est pas établie",
+    "file": "extensions/subagent/index.ts",
+    "find": "      if (!compositionPresente(rendu, delegation, dues)) {",
+    "replace": "      if (false) { void compositionPresente; void rendu; // mutant M-H : composition partielle admise"
+  },
+  {
+    "test": "L0 COUV P2-H27 — garde de composition : refus de task tant que la composition de l'exécution n'est pas établie",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE && !compositionEtablie()) {",
+    "replace": "    if (false) { // mutant M-H : tool_call sans garde de composition"
+  },
+  {
+    "test": "L0 COUV P2-H27 — garde de composition : refus de task tant que la composition de l'exécution n'est pas établie",
+    "file": "extensions/subagent/index.ts",
+    "find": "        // Q-P2-4, immédiatement après : la délégation de l'exécution courante doit être composée.\n        if (!compositionEtablie()) {",
+    "replace": "        // Q-P2-4, immédiatement après : la délégation de l'exécution courante doit être composée.\n        if (false) { // mutant M-H : execute sans garde de composition"
+  },
+  {
+    "test": "L0 COUV P2-H27 — garde de composition : refus de task tant que la composition de l'exécution n'est pas établie",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    EXECUTION += 1;\n    invaliderComposition(\"composition non établie pour cette exécution\");",
+        "replace": "    EXECUTION += 1; // mutant M-H : état de composition non rattaché à l'exécution"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "      invaliderComposition(`composition en échec : ${messageDe(err)}`);",
+        "replace": "      void err;"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "  return COMPOSITION.etablie && COMPOSITION.execution === EXECUTION;",
+        "replace": "  return COMPOSITION.etablie;"
+      }
+    ]
+  },
+  {
+    "test": "L0 COUV P2-H27b — garde de composition : aucun prompt forcé par repli, P0-C intact",
+    "file": "extensions/subagent/index.ts",
+    "find": "      invaliderComposition(`composition en échec : ${messageDe(err)}`);",
+    "replace": "      invaliderComposition(`composition en échec : ${messageDe(err)}`);\n      (event as unknown as { systemPromptOptions: OptionsDuPrompt }).systemPromptOptions.forceSystemPrompt = DELEGATION_TEXTE; // mutant M-H : repli"
+  },
+  {
+    "test": "L0 COUV P2-H28 — plan rendu terminal au cours d'une exécution forcée et complétée : task retiré, appel préparé refusé, rien repris",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE && !compositionEtablie()) {",
+    "replace": "    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE) PI_API?.setActiveTools?.([...(BASE_OUTILS ?? []), NOM_PRIMITIVE]); // mutant M-H\n    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE && !compositionEtablie()) {"
+  },
+  {
+    "test": "L0 COUV P2-K33 — refus de montée sur illisible : raison de l'observateur à l'octet, un seul séparateur, ponctuée ou non",
+    "file": "subagent-only/profil.ts",
+    "find": "  return texte.endsWith(\".\") ? texte : `${texte}.`;",
+    "replace": "  return `${texte}.`; // mutant K33 : le séparateur est toujours ajouté"
+  },
+  {
+    "test": "L0 COUV P2-K34 — avertissement sur illisible : raison de l'observateur à l'octet, un seul point, ponctuée ou non",
+    "file": "subagent-only/profil.ts",
+    "find": "    `Run durable ${nomClasse(c.classe)} : ${finDePhrase(designation(c))}\\n` +",
+    "replace": "    `Run durable ${nomClasse(c.classe)} : ${designation(c)}.\\n` + // mutant K34 : le point est toujours ajouté"
+  },
+  {
+    "test": "L0 COUV P2-K35 — manifeste absent, ite-p0b : seules les preuves fichiers de runs archivés sont admises",
+    "file": "subagent-only/profil.ts",
+    "find": "  if (p === undefined) return `${NOM_PREUVES_P0B} n'a pas été inspecté`;",
+    "replace": "  return undefined; // mutant M-K35 : contenu d'ite-p0b admis sans inspection\n  if (p === undefined) return `${NOM_PREUVES_P0B} n'a pas été inspecté`;"
+  },
+  {
+    "test": "L0 COUV P2-Q5-V1 — intégrations LOST après une montée admise : la porte des tentatives à trancher refuse, sans effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (INTEGRATION_CONFLICTS.length > 0) {\n          return {",
+    "replace": "        if (false) { // mutant M-Q5-1 : la porte des tentatives à trancher est retirée\n          return {"
+  },
+  {
+    "test": "L0 COUV P2-Q5-V2 — intégrations UNKNOWN (version inconnue, ligne abîmée) après une montée admise : la porte des tentatives à trancher refuse, sans effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (INTEGRATION_CONFLICTS.length > 0) {\n          return {",
+    "replace": "        if (false) { // mutant M-Q5-1 : la porte des tentatives à trancher est retirée\n          return {"
+  },
+  {
+    "test": "L0 COUV P2-Q5-V3 — lanes malformées avec une tentative ouverte, après une montée admise : la porte du registre illisible refuse, sans effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (RECOVERY_MALFORMED.length > 0) {\n          return {",
+    "replace": "        if (false) { // mutant M-Q5-2 : la porte du registre des lanes malformé est retirée\n          return {"
+  },
+  {
+    "test": "L0 COUV P2-Q5-V4 — lanes amputées après une revue approuvée, après une montée admise : la porte du registre illisible refuse, sans effet",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (RECOVERY_MALFORMED.length > 0) {\n          return {",
+    "replace": "        if (false) { // mutant M-Q5-2 : la porte du registre des lanes malformé est retirée\n          return {"
+  },
+  {
+    "test": "L0 REG PG-DELEGATION-C4-GATE — une délégation liée à une lane ne part que sur des lanes KNOWN ou EMPTY",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (isLaneBound(agent.envelopeRole ?? agent.name) && (vuDesLanes === undefined || !vuDesLanes.usable)) {",
+    "replace": "        if (false) { // mutant M-Q5 : la porte C4 des délégations liées à une lane est retirée (R11)"
+  },
+  {
+    "test": "L0 REG PG-LOST-APPEND — un registre des lanes LOST n'est ni recréé ni complété",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (isLaneBound(agent.envelopeRole ?? agent.name) && (vuDesLanes === undefined || !vuDesLanes.usable)) {",
+    "replace": "        if (false) { // mutant M-Q5 : la porte C4 des délégations liées à une lane est retirée (R11)"
+  },
+  {
+    "test": "L0 COUV P2-K35 — manifeste absent, ite-p0b : seules les preuves fichiers de runs archivés sont admises",
+    "file": "subagent-only/profil.ts",
+    "find": "const ARCHIVE = /^([0-9a-f]{16})-run\\.json$/;",
+    "replace": "const ARCHIVE = /^(.+)-run\\.json$/; // mutant M-K : grammaire d'archive relâchée (Q-P2-24)"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  let bloc = RUN_ID === \"\" ? undefined : BLOCAGES_NON_ECRITS.get(cleDeRun(RUN_ID));",
+    "replace": "  let bloc = RUN_ID === \"\" ? undefined : [...BLOCAGES_NON_ECRITS.values()][0]; // mutant M-Q9 : blocage local appliqué à un autre run, au refus (E1)"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "  let bloc = RUN_ID === \"\" ? undefined : BLOCAGES_NON_ECRITS.get(cleDeRun(RUN_ID));",
+    "replace": "  let bloc = RUN_ID === \"\" ? undefined : [...BLOCAGES_NON_ECRITS.values()][0]; // mutant M-Q9 : blocage local appliqué à un autre run, au refus (E1)"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return BLOCAGES_NON_ECRITS.has(cleDeRun(c.runId)) ? { ...c, classe: \"non-termine\" } : c;",
+    "replace": "  return BLOCAGES_NON_ECRITS.size > 0 ? { ...c, classe: \"non-termine\" } : c; // mutant M-Q9 : blocage local appliqué à un autre run, au raffinement (E2)"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return BLOCAGES_NON_ECRITS.has(cleDeRun(c.runId)) ? { ...c, classe: \"non-termine\" } : c;",
+    "replace": "  return BLOCAGES_NON_ECRITS.size > 0 ? { ...c, classe: \"non-termine\" } : c; // mutant M-Q9 : blocage local appliqué à un autre run, au raffinement (E2)"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (c.classe !== \"vide\" || c.runId === undefined || c.runId === \"\") return c;",
+    "replace": "  if ((c.classe !== \"vide\" && c.classe !== \"termine\") || c.runId === undefined || c.runId === \"\") return c; // mutant M-Q9 : raffinement étendu à terminé (E5)"
+  },
+  {
+    "test": "L0 COUV P2-H15 — cycle on/off/on dans une session : contrôleur neuf, identité relue sur le run courant",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (c.classe !== \"vide\" || c.runId === undefined || c.runId === \"\") return c;",
+    "replace": "  if ((c.classe !== \"vide\" && c.classe !== \"illisible\") || c.runId === undefined || c.runId === \"\") return c; // mutant M-Q9 : raffinement étendu à illisible (E6)"
+  },
+  {
+    "test": "L0 COUV P2-H27 — garde de composition : refus de task tant que la composition de l'exécution n'est pas établie",
+    "edits": [
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    /*\n     * Q-P2-4 : `task` n'est exécuté que si la délégation de l'exécution courante est composée.\n     * Avant tout enregistrement en vol de P0-B, et sans écriture sous les runs.\n     */\n    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE && !compositionEtablie()) {\n      return { block: true, reason: refusDeComposition() };\n    }\n",
+        "replace": "    // mutant M-H : garde de composition déplacée après P0-B (RA-P2-3)\n"
+      },
+      {
+        "file": "extensions/subagent/index.ts",
+        "find": "    const path = ecrit && typeof entree?.path === \"string\" ? entree.path : undefined;",
+        "replace": "    /*\n     * Q-P2-4 : `task` n'est exécuté que si la délégation de l'exécution courante est composée.\n     * Avant tout enregistrement en vol de P0-B, et sans écriture sous les runs.\n     */\n    if ((event as { toolName?: unknown }).toolName === NOM_PRIMITIVE && !compositionEtablie()) {\n      return { block: true, reason: refusDeComposition() };\n    }\n    const path = ecrit && typeof entree?.path === \"string\" ? entree.path : undefined;"
+      }
+    ]
+  },
+  {
+    "test": "L0 COUV P2-H21b — descente interrompue après le début de ses effets : simple, lecture seule, effets et bail restant nommés",
+    "file": "extensions/subagent/index.ts",
+    "find": "  try {\n    if (LEASE) releaseRunOwnership(RUN_DIR, LEASE);\n  } catch (err) {\n    echec = messageDe(err);\n    ARRET_MONTEE = `la descente a échoué après le début de ses effets : ${echec}`;\n    CLASSEMENT = { classe: \"illisible\", raison: ARRET_MONTEE, unitesOuvertes: [] };\n  }",
+    "replace": "  if (LEASE) releaseRunOwnership(RUN_DIR, LEASE); // mutant M-H : libération sans chemin d'erreur (RA-P2-5)"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (GENERATION_IDENTITE !== identiteDeLAppel.generation || RUN_ID !== identiteDeLAppel.runId) {",
+    "replace": "          if (false) { // mutant M-H : identité non contrôlée après la file (RA-P2-6)"
+  },
+  {
+    "test": "L0 COUV P2-H16 — new, resume, fork après une montée : ni minuterie, ni signal, ni identité de la session précédente",
+    "file": "extensions/subagent/index.ts",
+    "find": "                `[run: propriété perdue] la délégation est revenue, mais ${lease.runId} ne nous ` +",
+    "replace": "                `[run: propriété perdue] la délégation est revenue, mais ${RUN_ID} ne nous ` + // mutant M-H : barrière nommée sur l'identité courante (RA-P2-6)"
+  },
+  {
+    "test": "L0 COUV P2-H21b — descente interrompue après le début de ses effets : simple, lecture seule, effets et bail restant nommés",
+    "file": "extensions/subagent/index.ts",
+    "find": "        texteDuBail(runId, releverBail(tenu!)) +",
+    "replace": "        texteDuBail(runId, { etat: \"absent\" }) + // mutant M-H : état du bail non relevé, « absent » annoncé (RAR2-10)"
+  },
+  {
+    "test": "L0 COUV P2-H21c — descente interrompue après la disparition du bail, ou au milieu de sa suppression : l'état relevé est annoncé, jamais supposé",
+    "file": "extensions/subagent/index.ts",
+    "find": "        texteDuBail(runId, releverBail(tenu!)) +",
+    "replace": "        texteDuBail(runId, { etat: \"présent\" }) + // mutant M-H : état du bail non relevé, « présent » annoncé (RAR2-10)"
+  },
+  {
+    "test": "L0 COUV P2-H21c — descente interrompue après la disparition du bail, ou au milieu de sa suppression : l'état relevé est annoncé, jamais supposé",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (ownsRun(RUN_DIR, lease)) return { etat: \"présent\" };",
+    "replace": "  return { etat: \"présent\" }; // mutant M-H : propriétaire non contrôlé, répertoire pris pour présent (RAR2-10)"
+  },
+  {
+    "test": "L0 COUV P2-H21c — descente interrompue après la disparition du bail, ou au milieu de sa suppression : l'état relevé est annoncé, jamais supposé",
+    "file": "extensions/subagent/index.ts",
+    "find": "    if ((err as { code?: string })?.code === \"ENOENT\") return { etat: \"absent\" };",
+    "replace": "    return { etat: \"absent\" }; // mutant M-H : relevé illisible pris pour absent (RAR2-10)"
+  },
+  {
+    "test": "L0 COUV P2-H21c — descente interrompue après la disparition du bail, ou au milieu de sa suppression : l'état relevé est annoncé, jamais supposé",
+    "file": "extensions/subagent/index.ts",
+    "find": "    autre = doc?.version === 1 && typeof doc.sessionId === \"string\" && doc.sessionId !== \"\" &&",
+    "replace": "    autre = false && // mutant M-H : autre propriétaire non distingué (RAR2-10)"
+  },
+  {
+    "test": "L0 COUV P2-H21c — descente interrompue après la disparition du bail, ou au milieu de sa suppression : l'état relevé est annoncé, jamais supposé",
+    "file": "extensions/subagent/index.ts",
+    "find": "  if (!st.isDirectory()) return { etat: \"indéterminé\", raison: \"ce n'est pas un répertoire (lien ou fichier)\" };",
+    "replace": "  void st; // mutant M-H : non-répertoire non distingué (RAR2-10)"
+  },
+  {
+    "test": "L0 COUV P2-H30 — délégation en vol pendant T8 sans relâchement : au retour, rien n'agit, après T1 comme sous une instance rechargée qui garde le run",
+    "file": "extensions/subagent/index.ts",
+    "find": "        if (!identiteIntacte(identiteDeLAppel)) {\n          return refusIdentiteChangee(identiteDeLAppel, \"la délégation est revenue\",",
+    "replace": "        if (false) { // mutant M-H : identité non contrôlée au retour d'une délégation (RAR2-9)\n          return refusIdentiteChangee(identiteDeLAppel, \"la délégation est revenue\","
+  },
+  {
+    "test": "L0 COUV P2-H30 — délégation en vol pendant T8 sans relâchement : au retour, rien n'agit, après T1 comme sous une instance rechargée qui garde le run",
+    "file": "extensions/subagent/index.ts",
+    "find": "    // la libération du bail échoue et même sous une instance rechargée qui ne verra pas de T1.\n    GENERATION_IDENTITE += 1;",
+    "replace": "    // la libération du bail échoue et même sous une instance rechargée qui ne verra pas de T1.\n    void 0; // mutant M-H : génération inchangée à T8 (RAR2-9)"
+  },
+  {
+    "test": "L0 COUV P2-H30 — délégation en vol pendant T8 sans relâchement : au retour, rien n'agit, après T1 comme sous une instance rechargée qui garde le run",
+    "file": "extensions/subagent/index.ts",
+    "find": "  return GENERATION_IDENTITE === identite.generation && RUN_ID === identite.runId;",
+    "replace": "  return RUN_ID === identite.runId; // mutant M-H : run seul, génération ignorée (RAR2-9)"
+  },
+  {
+    "test": "L0 COUV P2-H31 — lot en vol pendant T8 sans relâchement : au retour, ni journal, ni violation, ni lane en file lancée ; bail relâché d'abord",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (!identiteIntacte(identiteDeLAppel)) {\n            return refusIdentiteChangee(identiteDeLAppel, \"le lot est revenu\",",
+    "replace": "          if (false) { // mutant M-H : identité non contrôlée au retour du lot (RAR2-9)\n            return refusIdentiteChangee(identiteDeLAppel, \"le lot est revenu\","
+  },
+  {
+    "test": "L0 COUV P2-H31 — lot en vol pendant T8 sans relâchement : au retour, ni journal, ni violation, ni lane en file lancée ; bail relâché d'abord",
+    "file": "extensions/subagent/index.ts",
+    "find": "                if (!identiteIntacte(identiteDeLAppel)) return result;",
+    "replace": "                void 0; // mutant M-H : identité non contrôlée dans le rappel d'un worker du lot (RAR2-9)"
+  },
+  {
+    "test": "L0 COUV P2-H31 — lot en vol pendant T8 sans relâchement : au retour, ni journal, ni violation, ni lane en file lancée ; bail relâché d'abord",
+    "file": "extensions/subagent/index.ts",
+    "find": "                if (!identiteIntacte(identiteDeLAppel)) {\n                  throw new Error(`${workUnit.id} n'est pas partie : la session a changé`);",
+    "replace": "                if (false) { // mutant M-H : identité non contrôlée au départ d'une lane en file (RAR2-9)\n                  throw new Error(`${workUnit.id} n'est pas partie : la session a changé`);"
+  },
+  {
+    "test": "L0 COUV P2-H31 — lot en vol pendant T8 sans relâchement : au retour, ni journal, ni violation, ni lane en file lancée ; bail relâché d'abord",
+    "file": "extensions/subagent/index.ts",
+    "find": "          if (!stillOwns(lease)) {\n            return {\n              content: [{\n                type: \"text\" as const,\n                text:\n                  `[run: propriété perdue] le lot est revenu, mais ${lease.runId} ne nous appartient ` +",
+    "replace": "          if (!identiteIntacte(identiteDeLAppel)) { // mutant M-H : identité contrôlée avant la capacité au retour du lot (RAR2-9)\n            return refusIdentiteChangee(identiteDeLAppel, \"le lot est revenu\", \"\");\n          }\n          if (!stillOwns(lease)) {\n            return {\n              content: [{\n                type: \"text\" as const,\n                text:\n                  `[run: propriété perdue] le lot est revenu, mais ${lease.runId} ne nous appartient ` +"
+  },
+  {
+    "test": "L0 COUV P2-H29 — prompt personnalisé non vide : aucune guideline due, délégation exigée ; chaîne vide et prompt forcé sans exemption",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const reglesRendues = !options.customPrompt;",
+    "replace": "      const reglesRendues = true; // mutant M-H : exemption du prompt personnalisé retirée (Q-P2-22)"
+  },
+  {
+    "test": "L0 COUV P2-H29 — prompt personnalisé non vide : aucune guideline due, délégation exigée ; chaîne vide et prompt forcé sans exemption",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const reglesRendues = !options.customPrompt;",
+    "replace": "      const reglesRendues = options.customPrompt === undefined; // mutant M-H : exemption par simple présence du champ (Q-P2-22)"
+  },
+  {
+    "test": "L0 COUV P2-H29 — prompt personnalisé non vide : aucune guideline due, délégation exigée ; chaîne vide et prompt forcé sans exemption",
+    "file": "extensions/subagent/index.ts",
+    "find": "      const reglesRendues = !options.customPrompt;",
+    "replace": "      const reglesRendues = !options.customPrompt?.trim(); // mutant M-H : exemption après trim (Q-P2-22)"
   }
 ]

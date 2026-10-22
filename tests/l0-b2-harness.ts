@@ -85,8 +85,18 @@ export interface Harnais {
   runDir: string;
   runId: string;
   outil: { execute: (id: string, params: unknown, ctx?: unknown) => Promise<unknown> };
-  /** Une session neuve sur le même dépôt : rien de la mémoire précédente ne traverse. */
-  recharger: () => Promise<Harnais>;
+  /**
+   * Une session neuve sur le même dépôt : rien de la mémoire précédente ne traverse.
+   *
+   * `refusAdmis` (phase 2, Q-P2-5, `142cb15d…` et `e1901916…`) : une montée refusée laisse l'outil
+   * réel en place et rend son refus dans `montee`, pour les seules reprises qui l'éprouvent. Sans
+   * l'option, le comportement est celui d'avant : l'outil est retiré et `chargement` le dit.
+   */
+  recharger: (options?: { refusAdmis?: boolean }) => Promise<Harnais>;
+  /** La montée explicite de cette instance : admise, ou refusée avec son texte et son genre. */
+  montee: { ok: true } | { ok: false; erreur: string; erreurs: number };
+  /** Une commande enregistrée par l'extension (`/subagents` pour lire le profil). */
+  commande: (nom: string) => Commande | undefined;
   /**
    * Émettre un événement pi vers le callback que l'extension a enregistré.
    *
@@ -135,24 +145,141 @@ export function outilsPiParDefaut(): void {
 }
 outilsPiParDefaut();
 
+// ------------------------------------------------------------------ la montée explicite (phase 2)
+
+/**
+ * Le profil simple est le défaut : l'extension n'ouvre plus de run à l'import. Les preuves
+ * écrites contre la base portent sur le profil sous-agents ; elles s'exécutent donc après une
+ * **montée explicite** (plan de la phase 2, H12) : `session_start`, `/subagents on`, puis
+ * `before_agent_start`, comme pi les émet. Aucune assertion n'en est retirée.
+ */
+export type Rappel = (...a: unknown[]) => unknown;
+export type Commande = (args: string, ctx: unknown) => unknown;
+
+/** Les notifications rendues par l'extension au contexte d'épreuve. */
+export interface Notification { texte: string; genre?: string }
+
+/** Le contexte qu'un handler de pi reçoit, réduit à ce que l'extension lit. */
+export function contexteDEpreuve(options: {
+  notifications?: Notification[];
+  hasUI?: boolean;
+  idle?: boolean;
+  session?: string;
+} = {}): Record<string, unknown> {
+  const notifications = options.notifications ?? [];
+  return {
+    hasUI: options.hasUI ?? true,
+    cwd: process.cwd(),
+    isIdle: () => options.idle ?? true,
+    sessionManager: { getSessionId: () => options.session ?? "session-epreuve", getSessionFile: () => undefined },
+    ui: {
+      setStatus: () => {},
+      setFooter: () => {},
+      notify: (texte: string, genre?: string) => { notifications.push({ texte, genre }); },
+    },
+  };
+}
+
+/** Les options du prompt structuré de pi 0.86.0, réduites à ce que l'extension lit et pose. */
+export interface OptionsDEpreuve {
+  /** Q-P2-22 : le prompt personnalisé (`.pi/SYSTEM.md`, `SYSTEM.md` global, `--system-prompt`). */
+  customPrompt?: string;
+  forceSystemPrompt?: string;
+  selectedTools: string[];
+  toolGuidelines: Record<string, string[]>;
+  sections: Record<string, string | undefined>;
+}
+
+/**
+ * Le prompt rendu comme pi 0.86.0 le rend (`system-prompt.js`) : un prompt forcé est opaque ;
+ * sous un prompt personnalisé non vide (`if (customPrompt)`), il tient lieu de préambule, sans
+ * outils, règles ni documentation (Q-P2-22) ; sinon le préambule et les règles — une puce par
+ * guideline des outils sélectionnés, normalisée par `trim`, sans doublon. Puis chaque section
+ * nommée, `<nom>\ncontenu\n</nom>`, jointes par une ligne vide.
+ */
+export function rendrePrompt(o: OptionsDEpreuve): string {
+  if (o.forceSystemPrompt !== undefined) return o.forceSystemPrompt;
+  if (o.customPrompt) {
+    const blocs = [o.customPrompt];
+    for (const [nom, contenu] of Object.entries(o.sections)) if (contenu) blocs.push(`<${nom}>\n${contenu}\n</${nom}>`);
+    return blocs.join("\n\n");
+  }
+  const vues = new Set<string>();
+  const regles: string[] = [];
+  for (const nom of o.selectedTools) {
+    for (const r of o.toolGuidelines[nom] ?? []) {
+      const n = r.trim();
+      if (!n || vues.has(n)) continue;
+      vues.add(n);
+      regles.push(`- ${n}`);
+    }
+  }
+  const blocs = ["You are an expert coding assistant operating inside pi."];
+  blocs.push(`<rules>\n${regles.join("\n")}\n</rules>`);
+  for (const [nom, contenu] of Object.entries(o.sections)) if (contenu) blocs.push(`<${nom}>\n${contenu}\n</${nom}>`);
+  return blocs.join("\n\n");
+}
+
+/** Un `before_agent_start`, tel que le runner de pi 0.86.0 le construit : options mutables, prompt rendu à la lecture. */
+export function evenementAvantAgent(options: OptionsDEpreuve): Record<string, unknown> {
+  return {
+    type: "before_agent_start",
+    prompt: "",
+    systemPromptOptions: options,
+    get systemPrompt() { return rendrePrompt(options); },
+  };
+}
+
+export function optionsDEpreuve(actifs: readonly string[]): OptionsDEpreuve {
+  return { selectedTools: [...actifs], toolGuidelines: {}, sections: {} };
+}
+
+/**
+ * La montée explicite : `session_start`, `/subagents on`, puis une invite.
+ *
+ * Rend l'échec de la montée comme le chargement le rendait : une erreur nommée, que la preuve
+ * peut lire, au lieu d'une précondition qui rougirait avant sa propriété.
+ */
+export async function monteeExplicite(api: {
+  evenement: (nom: string) => Rappel | undefined;
+  commande: (nom: string) => Commande | undefined;
+  actifs: () => readonly string[];
+  ctx?: Record<string, unknown>;
+}): Promise<{ ok: true; options: OptionsDEpreuve } | { ok: false; erreur: string; erreurs?: number }> {
+  const notifications: Notification[] = [];
+  const ctx = api.ctx ?? contexteDEpreuve({ notifications });
+  await api.evenement("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+  const sub = api.commande("subagents");
+  if (sub === undefined) return { ok: false, erreur: "commande /subagents absente" };
+  const avant = notifications.length;
+  await sub("on", ctx);
+  const erreurs = notifications.slice(avant).filter((n) => n.genre === "error");
+  if (erreurs.length > 0) return { ok: false, erreur: erreurs[0].texte, erreurs: erreurs.length };
+  const options = optionsDEpreuve(api.actifs());
+  await api.evenement("before_agent_start")?.(evenementAvantAgent(options), ctx);
+  return { ok: true, options };
+}
+
 let generation = 0;
 const jetables: string[] = [];
 export const aJeter = (): readonly string[] => jetables;
 
-async function instancier(root: string): Promise<Harnais> {
+async function instancier(root: string, options: { refusAdmis?: boolean } = {}): Promise<Harnais> {
   process.env.PI_AGENT_DIR = REPO;
   process.chdir(root);
   reinitialiser();
   generation += 1;
   let outil: Harnais["outil"] | undefined;
   const callbacks = new Map<string, (...a: unknown[]) => unknown>();
+  const commandes = new Map<string, Commande>();
   let chargement: Harnais["chargement"] = { ok: true };
+  let montee: Harnais["montee"] = { ok: true };
   try {
     const module = await import(`../extensions/subagent/index.ts?l0b2=${generation}`);
     module.default({
       on: (nom: string, cb: (...a: unknown[]) => unknown) => { callbacks.set(nom, cb); },
       registerTool: (t: unknown) => { outil = t as Harnais["outil"]; },
-      registerCommand: () => {},
+      registerCommand: (nom: string, c: { handler: Commande }) => { commandes.set(nom, c.handler); },
       ui: { setStatus: () => {}, setFooter: () => {} },
       getAllTools: () => OUTILS_PI.tous.map((o) => ({ ...o, sourceInfo: { ...o.sourceInfo } })),
       getActiveTools: () => [...OUTILS_PI.actifs],
@@ -162,6 +289,18 @@ async function instancier(root: string): Promise<Harnais> {
       },
     });
     if (outil === undefined) chargement = { ok: false, erreur: "aucun outil enregistré" };
+    else {
+      const vue = await monteeExplicite({
+        evenement: (nom) => callbacks.get(nom),
+        commande: (nom) => commandes.get(nom),
+        actifs: () => OUTILS_PI.actifs,
+      });
+      if (!vue.ok) {
+        montee = { ok: false, erreur: vue.erreur, erreurs: vue.erreurs ?? 0 };
+        chargement = { ok: false, erreur: vue.erreur };
+        if (!options.refusAdmis) outil = undefined;
+      }
+    }
   } catch (e) {
     chargement = { ok: false, erreur: `${(e as Error).constructor.name}: ${(e as Error).message}` };
   }
@@ -187,7 +326,8 @@ async function instancier(root: string): Promise<Harnais> {
       : [];
   };
   return {
-    root, runDir, runId, chargement,
+    root, runDir, runId, chargement, montee,
+    commande: (nom: string) => commandes.get(nom),
     outil: outil ?? { execute: refuser },
     /*
      * Une session neuve suit la mort de la précédente, qui rend son bail.
@@ -200,15 +340,29 @@ async function instancier(root: string): Promise<Harnais> {
     emettre: async (nom: string, ...args: unknown[]) => {
       const cb = callbacks.get(nom);
       precondition(cb !== undefined, `l'extension doit s'abonner à ${nom}`);
-      return cb!(...args);
+      const rendu = await cb!(...args);
+      /*
+       * Une session qui commence repart du profil simple (phase 2, T1). Les preuves qui
+       * émettent `session_start` portent sur une session du profil sous-agents : la montée
+       * explicite suit, comme après l'import, avec le contexte d'épreuve.
+       */
+      if (nom === "session_start") {
+        const notifications: Notification[] = [];
+        const ctx = contexteDEpreuve({ notifications });
+        await commandes.get("subagents")?.("on", ctx);
+        const erreur = notifications.find((n) => n.genre === "error");
+        precondition(erreur === undefined, `la montée qui suit session_start doit réussir : ${erreur?.texte ?? ""}`);
+        await callbacks.get("before_agent_start")?.(evenementAvantAgent(optionsDEpreuve(OUTILS_PI.actifs)), ctx);
+      }
+      return rendu;
     },
     abonnements: () => [...callbacks.keys()],
-    recharger: async () => {
+    recharger: async (opts?: { refusAdmis?: boolean }) => {
       const owner = join(runDir, `${runId}.lease`, "owner.json");
       if (existsSync(owner)) {
         releaseRunOwnership(runDir, JSON.parse(readFileSync(owner, "utf-8")) as Lease);
       }
-      return instancier(root);
+      return instancier(root, opts);
     },
     evenements: () => lignes("lanes"),
     journal: () => lignes("delegations"),
